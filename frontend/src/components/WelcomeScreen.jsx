@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
-import { getLockedTools, toggleToolLock } from '../services/storageService';
+import { getLockedTools, toggleToolLock, syncLockedToolsFromServer } from '../services/storageService';
 
 export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToast, lang = 'id' }) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -34,6 +34,11 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
   const [lockedTools, setLockedTools] = useState(() => getLockedTools());
 
   useEffect(() => {
+    // Sinkronisasi status kunci terbaru dari server saat halaman dimuat
+    syncLockedToolsFromServer().then((latest) => {
+      if (Array.isArray(latest)) setLockedTools(latest);
+    });
+
     const handleSync = () => {
       const isAuth = localStorage.getItem('kuro_admin_auth') === 'true' || 
                      localStorage.getItem('kaze_admin_auth') === 'true' ||
@@ -265,7 +270,7 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
               const handleCardClick = () => {
                 if (isLocked && !isAdmin) {
                   if (onShowToast) {
-                    onShowToast(`Fitur "${tool.name}" sedang dalam tahap perbaikan oleh Admin dan akan segera dibuka kembali.`);
+                    onShowToast(`⚠️ Fitur "${tool.name}" sedang dikunci oleh Admin untuk perbaikan dan tidak dapat digunakan.`);
                   }
                   return;
                 }
@@ -276,15 +281,30 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
                 <div
                   key={tool.id}
                   onClick={handleCardClick}
-                  className={`rounded-xl border-2 border-black p-3 sm:p-5 flex flex-col justify-between text-left cursor-pointer transition-all duration-150 shadow-[2px_2px_0px_#000000] sm:shadow-[3px_3px_0px_#000000] select-none min-h-[175px] sm:min-h-[185px] relative overflow-hidden ${
+                  className={`rounded-xl border-2 p-3 sm:p-5 flex flex-col justify-between text-left transition-all duration-150 select-none min-h-[180px] sm:min-h-[190px] relative overflow-hidden ${
                     isLocked && !isAdmin 
-                      ? 'bg-neutral-100 opacity-90' 
-                      : 'bg-white hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5'
+                      ? 'border-neutral-400 bg-neutral-100 shadow-none cursor-not-allowed opacity-95' 
+                      : isLocked && isAdmin
+                      ? 'border-amber-600 bg-amber-50/60 shadow-[2px_2px_0px_#d97706] sm:shadow-[3px_3px_0px_#d97706] hover:-translate-x-0.5 hover:-translate-y-0.5 cursor-pointer'
+                      : 'border-black bg-white shadow-[2px_2px_0px_#000000] sm:shadow-[3px_3px_0px_#000000] hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 cursor-pointer'
                   }`}
                 >
+                  {/* Watermark Gembok untuk Member saat Terkunci */}
+                  {isLocked && !isAdmin && (
+                    <div className="absolute -right-5 -bottom-5 pointer-events-none text-neutral-300/70 select-none">
+                      <Lock className="w-28 h-28 stroke-[1.5]" />
+                    </div>
+                  )}
+
                   {/* Header Card: Icon, Admin Lock Button, & Tag Badge */}
-                  <div className="flex items-center justify-between w-full mb-2 sm:mb-2.5 gap-1.5">
-                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-md border-2 border-black bg-white flex items-center justify-center text-black shadow-[1px_1px_0px_#000000] sm:shadow-[1.5px_1.5px_0px_#000000] shrink-0">
+                  <div className="flex items-center justify-between w-full mb-2 sm:mb-2.5 gap-1.5 relative z-10">
+                    <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-md border-2 flex items-center justify-center shrink-0 ${
+                      isLocked && !isAdmin
+                        ? 'border-neutral-400 bg-neutral-200 text-neutral-500 shadow-none'
+                        : isLocked && isAdmin
+                        ? 'border-amber-600 bg-amber-200 text-amber-900 shadow-[1px_1px_0px_#d97706]'
+                        : 'border-black bg-white text-black shadow-[1px_1px_0px_#000000] sm:shadow-[1.5px_1.5px_0px_#000000]'
+                    }`}>
                       <Icon className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.2]" />
                     </div>
 
@@ -293,9 +313,9 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
                       {isAdmin && (
                         <button
                           type="button"
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            toggleToolLock(tool.id);
+                            await toggleToolLock(tool.id);
                             setLockedTools(getLockedTools());
                             if (onShowToast) {
                               onShowToast(isLocked ? `Fitur "${tool.name}" dibuka untuk semua pengguna.` : `Fitur "${tool.name}" dikunci untuk perbaikan.`);
@@ -324,9 +344,9 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
 
                       {/* Badge Kunci untuk Member Biasa */}
                       {!isAdmin && isLocked ? (
-                        <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-amber-600 bg-amber-300 text-black flex items-center gap-1">
-                          <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
-                          <span>Perbaikan</span>
+                        <span className="text-[9px] sm:text-[10px] font-mono font-black px-1.5 sm:px-2 py-0.5 rounded border-2 border-amber-600 bg-amber-300 text-black flex items-center gap-1 shadow-[1px_1px_0px_#d97706]">
+                          <Lock className="w-2.5 h-2.5 stroke-[3]" />
+                          <span>TERKUNCI</span>
                         </span>
                       ) : (
                         <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded border border-black bg-neutral-100 text-black truncate max-w-[80px] xs:max-w-[100px] sm:max-w-none text-right">
@@ -337,25 +357,34 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
                   </div>
 
                   {/* Body Card: Judul & Deskripsi Fungsional */}
-                  <div className="my-1 sm:my-1.5 flex flex-col flex-1">
-                    <h3 className="text-xs sm:text-base font-extrabold text-black tracking-tight font-sans line-clamp-2 leading-snug">
-                      {tool.name}
+                  <div className="my-1 sm:my-1.5 flex flex-col flex-1 relative z-10">
+                    <h3 className={`text-xs sm:text-base font-extrabold tracking-tight font-sans line-clamp-2 leading-snug flex items-center gap-1.5 ${
+                      isLocked && !isAdmin ? 'text-neutral-500' : 'text-black'
+                    }`}>
+                      {isLocked && !isAdmin && (
+                        <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0 stroke-[2.5]" />
+                      )}
+                      <span>{tool.name}</span>
                     </h3>
-                    <p className="text-[10.5px] sm:text-xs text-neutral-600 mt-1 line-clamp-2 leading-tight sm:leading-relaxed">
-                      {isLocked && !isAdmin ? 'Fitur ini sedang dalam tahap perbaikan oleh Admin.' : tool.desc}
+                    <p className={`text-[10.5px] sm:text-xs mt-1 line-clamp-2 leading-tight sm:leading-relaxed ${
+                      isLocked && !isAdmin ? 'text-neutral-500 font-medium' : 'text-neutral-600'
+                    }`}>
+                      {isLocked && !isAdmin 
+                        ? 'Fitur ini sedang ditutup dan dalam tahap perbaikan oleh Admin.' 
+                        : tool.desc}
                     </p>
                   </div>
 
                   {/* Footer Card: Tombol Buka Alat */}
-                  <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-black/15">
+                  <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-black/15 relative z-10">
                     {isLocked && !isAdmin ? (
                       <button
                         type="button"
                         disabled
-                        className="w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg border-2 border-neutral-300 bg-neutral-200 text-neutral-500 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 cursor-not-allowed"
+                        className="w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg border-2 border-neutral-300 bg-neutral-200 text-neutral-500 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 cursor-not-allowed shadow-none"
                       >
                         <Lock className="w-3 h-3 stroke-[2.5]" />
-                        <span>Sedang Diperbaiki</span>
+                        <span>Akses Ditutup (Perbaikan)</span>
                       </button>
                     ) : isLocked && isAdmin ? (
                       <button

@@ -214,8 +214,29 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   }, [currentSlideIndex, activeSlideList]);
 
   useEffect(() => {
-    if (preferredFormat === '720p' && regularVideoLinks.length > 1) {
-      setSelectedQualityIndex(1);
+    if (!regularVideoLinks || regularVideoLinks.length === 0) return;
+
+    // Cari kecocokan presisi berdasarkan resolusi yang dipilih pengguna
+    const target = (preferredFormat || '').toLowerCase();
+    const matchIdx = regularVideoLinks.findIndex(l => {
+      const lid = (l.id || '').toLowerCase();
+      const lq = (l.quality || '').toLowerCase();
+      const ll = (l.label || '').toLowerCase();
+
+      if (target === '2160p') {
+        return lid === '2160p' || lq.includes('2160') || lq.includes('4k') || ll.includes('4k') || ll.includes('2160');
+      }
+      if (target === '1080p') {
+        return lid === '1080p' || lq.includes('1080') || ll.includes('1080');
+      }
+      if (target === '720p') {
+        return lid === '720p' || lq.includes('720') || ll.includes('720');
+      }
+      return lid === target || lq.includes(target);
+    });
+
+    if (matchIdx !== -1) {
+      setSelectedQualityIndex(matchIdx);
     } else {
       setSelectedQualityIndex(0);
     }

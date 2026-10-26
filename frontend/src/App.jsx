@@ -22,7 +22,7 @@ import Navbar from './components/Navbar';
 import MobileBottomNav from './components/MobileBottomNav';
 import Toast from './components/Toast';
 import Footer from './components/Footer';
-import { getSettings, saveSettings, logHistoryItem } from './services/storageService';
+import { getSettings, saveSettings, logHistoryItem, isToolLocked } from './services/storageService';
 
 // Kamus nama alat untuk logging riwayat aktivitas
 const TOOL_NAMES = {
@@ -89,6 +89,20 @@ export default function App() {
 
   // Navigasi layar & pencatatan riwayat alat
   const handleNavigate = (screenId) => {
+    // Validasi apakah fitur sedang dikunci oleh Admin untuk perbaikan
+    const isAdminUser = localStorage.getItem('kuro_admin_auth') === 'true' || 
+                        localStorage.getItem('kaze_admin_auth') === 'true' ||
+                        localStorage.getItem('kuro_user_role') === 'Admin';
+    if (!isAdminUser && isToolLocked(screenId)) {
+      handleShowToast(
+        settings.language === 'en'
+          ? 'This feature is currently locked by Admin for maintenance.'
+          : 'Fitur ini sedang dikunci oleh Admin untuk tahap perbaikan dan tidak dapat diakses.'
+      );
+      setCurrentScreen('welcome');
+      return;
+    }
+
     setCurrentScreen(screenId);
 
     // Jika masuk ke salah satu alat, catat ke riwayat

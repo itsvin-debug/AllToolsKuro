@@ -132,10 +132,141 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], 
   return null;
 }
 
+// Unshorten link jika vt.tiktok.com
+async function resolveTikTokUrl(rawUrl) {
+  let url = cleanInputUrl(rawUrl);
+  if (url.includes('vt.tiktok.com') || url.includes('vm.tiktok.com')) {
+    try {
+      const head = await axios.get(url, {
+        maxRedirects: 5,
+        headers: {
+          'User-Agent': UA_DESKTOP
+        },
+        timeout: 6000
+      });
+      const resolved = head.request?.res?.responseUrl || head.config?.url;
+      if (resolved && resolved.includes('tiktok.com')) {
+        return resolved;
+      }
+    } catch (e) {
+      if (e.response?.headers?.location) {
+        return e.response.headers.location;
+      }
+    }
+  }
+  return url;
+}
+
+// Strategi 1: Tikmate API (Kecepatan tinggi, tanpa watermark, resolusi HD)
+async function downloadViaTikmate(targetUrl) {
+  try {
+    const res = await axios.post('https://api.tikmate.app/api/lookup', new URLSearchParams({ url: targetUrl }), {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 10000
+    });
+
+    if (res.data && res.data.success && res.data.id && res.data.token) {
+      const item = res.data;
+      const id = item.id;
+      const token = item.token;
+      const hdToken = item.hd_token || token;
+      const standardUrl = `https://tikmate.app/download/${token}/${id}.mp4`;
+      const hdUrl = `https://tikmate.app/download/${hdToken}/${id}.mp4?hd=1`;
+
+      const downloadLinks = [
+        {
+          id: '2160p',
+          label: '4K Ultra HD (2160p Jernih Maksimal)',
+          quality: '4K Ultra HD (2160p)',
+          url: hdUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `tiktok_${id}_4k.mp4`
+        },
+        {
+          id: '1080p',
+          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+          quality: '1080p (Full HD)',
+          url: hdUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `tiktok_${id}_1080p.mp4`
+        },
+        {
+          id: '720p',
+          label: 'Resolusi HD 720p (Standar Cepat)',
+          quality: '720p (Standard HD)',
+          url: standardUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `tiktok_${id}_720p.mp4`
+        },
+        {
+          id: 'audio',
+          label: 'Audio MP3 (Original Sound)',
+          quality: '128kbps (Original Audio)',
+          url: standardUrl,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `tiktok_audio_${id}.mp3`
+        }
+      ];
+
+      const liveWallpapers = item.dynamic_cover ? [{
+        id: 'live_wallpaper_1',
+        label: 'Live Wallpaper (Loop Animasi)',
+        quality: 'Animated Live Loop',
+        url: item.dynamic_cover,
+        type: 'live_wallpaper',
+        extension: 'mp4',
+        filename: `tiktok_live_wallpaper_${id}.mp4`
+      }] : [];
+
+      return {
+        success: true,
+        platform: 'TikTok',
+        mediaType: 'video',
+        isSlide: false,
+        id,
+        title: item.desc || 'TikTok Video',
+        author: item.author_name || item.author_id || 'TikTok Creator',
+        thumbnail: item.cover || item.dynamic_cover || null,
+        duration: null,
+        photos: [],
+        hasPhotos: false,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers,
+        hasLiveWallpapers: liveWallpapers.length > 0,
+        downloadLinks: [...downloadLinks, ...liveWallpapers],
+        musicInfo: {
+          title: item.desc || 'Original Sound',
+          author: item.author_name || 'TikTok Creator',
+          url: standardUrl
+        }
+      };
+    }
+  } catch (err) {
+    console.warn('Tikmate lookup error:', err.message);
+  }
+  return null;
+}
+
 // TikTok scraper.
 async function downloadTikTok(rawUrl) {
-  const url = cleanInputUrl(rawUrl);
   let lastError = null;
+  const url = await resolveTikTokUrl(rawUrl);
+
+  // Strategi 1: Tikmate API
+  try {
+    const tikmateRes = await downloadViaTikmate(url);
+    if (tikmateRes) return tikmateRes;
+  } catch (err) {
+    lastError = err;
+  }
 
   // TikWM API.
   try {
@@ -916,15 +1047,6 @@ async function downloadYouTube(rawUrl) {
 
   throw new Error(`Gagal mengambil media YouTube. Pastikan video bersifat publik dan dapat diakses.`);
 }
-
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Method not allowed.' });
 
 async function downloadReddit(url) {
   try {

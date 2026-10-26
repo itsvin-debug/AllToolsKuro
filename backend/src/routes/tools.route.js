@@ -410,4 +410,67 @@ router.get('/system-battery', async (req, res) => {
   }
 });
 
+// ==========================================
+// 8. PERSISTENSI & SINKRONISASI STATUS KUNCI ALAT
+// ==========================================
+const lockedToolsFile = path.join(uploadsDir, 'locked_tools.json');
+let inMemoryLockedTools = [];
+
+function loadLockedTools() {
+  try {
+    if (fs.existsSync(lockedToolsFile)) {
+      const data = JSON.parse(fs.readFileSync(lockedToolsFile, 'utf8'));
+      if (Array.isArray(data)) inMemoryLockedTools = data;
+    }
+  } catch {}
+  return inMemoryLockedTools;
+}
+
+function saveLockedTools(list) {
+  inMemoryLockedTools = list;
+  try {
+    fs.writeFileSync(lockedToolsFile, JSON.stringify(list, null, 2));
+  } catch {}
+}
+
+loadLockedTools();
+
+router.get('/locked-tools', (req, res) => {
+  loadLockedTools();
+  return res.json({
+    success: true,
+    lockedTools: inMemoryLockedTools
+  });
+});
+
+router.post('/locked-tools', (req, res) => {
+  loadLockedTools();
+  const { toolId, action, lockedTools } = req.body || {};
+
+  if (Array.isArray(lockedTools)) {
+    saveLockedTools(lockedTools);
+  } else if (toolId) {
+    if (action === 'unlock') {
+      saveLockedTools(inMemoryLockedTools.filter(id => id !== toolId));
+    } else if (action === 'lock') {
+      if (!inMemoryLockedTools.includes(toolId)) {
+        saveLockedTools([...inMemoryLockedTools, toolId]);
+      }
+    } else {
+      // toggle
+      if (inMemoryLockedTools.includes(toolId)) {
+        saveLockedTools(inMemoryLockedTools.filter(id => id !== toolId));
+      } else {
+        saveLockedTools([...inMemoryLockedTools, toolId]);
+      }
+    }
+  }
+
+  return res.json({
+    success: true,
+    message: 'Status kunci alat berhasil diperbarui.',
+    lockedTools: inMemoryLockedTools
+  });
+});
+
 export default router;

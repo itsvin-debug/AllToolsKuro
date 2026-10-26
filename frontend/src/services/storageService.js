@@ -258,7 +258,7 @@ export function clearGallery() {
 }
 
 // ==========================================
-// MANAJEMEN STATUS KUNCI FITUR (LOCK & UNLOCK ADMIN)
+// MANAJEMEN STATUS KUNCI FITUR (LOCK & UNLOCK ADMIN DENGAN MULTI-DEVICE SYNC)
 // ==========================================
 const LOCKED_TOOLS_KEY = 'kuro_locked_tools';
 
@@ -289,14 +289,58 @@ export function isToolLocked(toolId) {
   }
 }
 
-export function toggleToolLock(toolId) {
+// Fetch dan sinkronisasi status kunci langsung dari server
+export async function syncLockedToolsFromServer() {
+  try {
+    const res = await fetch('/api/locked-tools', {
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.lockedTools)) {
+        const current = getLockedTools();
+        if (JSON.stringify(current) !== JSON.stringify(data.lockedTools)) {
+          setLockedTools(data.lockedTools);
+        }
+        return data.lockedTools;
+      }
+    }
+  } catch {}
+  return getLockedTools();
+}
+
+export async function toggleToolLock(toolId) {
   try {
     const current = getLockedTools();
     const isLocked = current.includes(toolId);
     const updated = isLocked ? current.filter(id => id !== toolId) : [...current, toolId];
+    
+    // Simpan lokal seketika (optimistic UI)
     setLockedTools(updated);
+
+    // Kirim pembaruan ke server agar langsung menyinkron ke seluruh perangkat member
+    try {
+      await fetch('/api/locked-tools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolId, action: isLocked ? 'unlock' : 'lock', lockedTools: updated })
+      });
+    } catch {}
+
     return !isLocked;
   } catch {
     return false;
   }
 }
+
+// Inisialisasi auto-sync berkala (setiap 4 detik dan saat tab aktif)
+if (typeof window !== 'undefined') {
+  syncLockedToolsFromServer();
+  setInterval(syncLockedToolsFromServer, 4000);
+  window.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      syncLockedToolsFromServer();
+    }
+  });
+}
+
