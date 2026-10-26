@@ -68,6 +68,7 @@ export default function VideoTrimmerScreen({ onBack }) {
   const [exportProgress, setExportProgress] = useState(0);
   const [trimmedResult, setTrimmedResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
 
   const videoRef = useRef(null);
   const timelineRef = useRef(null);
@@ -486,7 +487,22 @@ export default function VideoTrimmerScreen({ onBack }) {
 
       {/* ─── 2. AREA UPLOAD VIDEO JIKA BELUM ADA ─── */}
       {!videoSrc && (
-        <div className="w-full flex flex-col items-center justify-center p-8 sm:p-12 rounded-3xl border-2 border-dashed border-white/15 bg-[#0e121d]/80 backdrop-blur-xl hover:border-indigo-500/50 transition-all text-center">
+        <div 
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleFileUpload(file);
+          }}
+          className={`w-full flex flex-col items-center justify-center p-8 sm:p-12 rounded-3xl border-2 border-dashed transition-all text-center ${
+            isDragging
+              ? 'border-indigo-400 bg-indigo-950/60 scale-[0.99]'
+              : 'border-white/15 bg-[#0e121d]/80 backdrop-blur-xl hover:border-indigo-500/50'
+          }`}
+        >
           <div className="w-16 h-16 rounded-2xl bg-indigo-600/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mb-4 shadow-lg shadow-indigo-600/10">
             <Scissors className="w-8 h-8" />
           </div>

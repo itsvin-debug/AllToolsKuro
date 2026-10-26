@@ -281,20 +281,24 @@ export default function LinkToDocScreen({ onBack }) {
           firstPageRendered = true;
         }
 
+        const isLandscape = docData.source === 'canva';
+        const targetW = isLandscape ? 297 : PAGE_W;
+        const targetH = isLandscape ? 210 : PAGE_H;
+
         // Render seluruh halaman asli secara presisi
         for (let i = 0; i < pages.length; i++) {
           if (firstPageRendered) {
-            doc.addPage([PAGE_W, PAGE_H], 'portrait');
+            doc.addPage([targetW, targetH], isLandscape ? 'landscape' : 'portrait');
           } else {
             firstPageRendered = true;
           }
 
           const p = pages[i];
-          const imgSource = p.imageBase64 || (p.imageUrl ? `http://localhost:5001/api/proxy-doc-image?url=${encodeURIComponent(p.imageUrl)}` : null);
+          const imgSource = p.imageBase64 || (p.imageUrl ? `/api/proxy-doc-image?url=${encodeURIComponent(p.imageUrl)}` : null);
 
           if (imgSource) {
-            // Gambar halaman 100% Full A4 persis dokumen sumber
-            doc.addImage(imgSource, 'JPEG', 0, 0, PAGE_W, PAGE_H, undefined, 'FAST');
+            // Gambar halaman 100% Full A4 / Slide 16:9 persis dokumen sumber
+            doc.addImage(imgSource, 'JPEG', 0, 0, targetW, targetH, undefined, 'FAST');
           } else {
             // Fallback rendering teks jika gambar lembar tidak tersedia
             applyPageBackground(doc);
@@ -638,14 +642,15 @@ export default function LinkToDocScreen({ onBack }) {
           const slide = pptx.addSlide();
           slide.background = { color: 'FFFFFF' };
 
-          const imgData = p.imageBase64 || (p.imageUrl ? `http://localhost:5001/api/proxy-doc-image?url=${encodeURIComponent(p.imageUrl)}` : null);
+          const isLandscape = docData.source === 'canva';
+          const imgData = p.imageBase64 || (p.imageUrl ? `/api/proxy-doc-image?url=${encodeURIComponent(p.imageUrl)}` : null);
 
           if (imgData) {
-            // A4 Portrait (1 : 1.414) centered vertically on 16:9 Slide (10 x 5.625)
-            const slideH = 5.25;
-            const slideW = 3.71;
-            const posX = (10.0 - slideW) / 2;
-            const posY = (5.625 - slideH) / 2;
+            // Jika Canva (16:9), isi penuh slide 10.0 x 5.625; jika portrait A4, posisikan proporsional di tengah
+            const slideW = isLandscape ? 10.0 : 3.71;
+            const slideH = isLandscape ? 5.625 : 5.25;
+            const posX = isLandscape ? 0 : (10.0 - slideW) / 2;
+            const posY = isLandscape ? 0 : (5.625 - slideH) / 2;
 
             slide.addImage({
               data: imgData.startsWith('data:') ? imgData : undefined,
@@ -1123,7 +1128,7 @@ export default function LinkToDocScreen({ onBack }) {
                     {/* Frame Kertas Dokumen Asli */}
                     <div className="max-w-[620px] w-full shadow-2xl rounded-xl overflow-hidden border border-slate-700/60 bg-white">
                       <img
-                        src={docData.pages[activePageIndex].imageBase64 || `http://localhost:5001/api/proxy-doc-image?url=${encodeURIComponent(docData.pages[activePageIndex].imageUrl)}`}
+                        src={docData.pages[activePageIndex].imageBase64 || `/api/proxy-doc-image?url=${encodeURIComponent(docData.pages[activePageIndex].imageUrl)}`}
                         alt={`Halaman ${activePageIndex + 1}`}
                         className="w-full h-auto object-contain block select-none"
                       />

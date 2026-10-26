@@ -193,20 +193,44 @@ html.dark .shadow-\[1\.5px_1\.5px_0px_\#000000\] {
 }
 
 /* 2. Custom Typography Switcher */
-html[data-font="Outfit"] body {
+html[data-font="Outfit"],
+html[data-font="Outfit"] body,
+html[data-font="Outfit"] *,
+html[data-font="Outfit"] .font-sans,
+html[data-font="Outfit"] .font-display {
   font-family: 'Outfit', sans-serif !important;
 }
 
-html[data-font="JetBrains Mono"] body {
+html[data-font="JetBrains Mono"],
+html[data-font="JetBrains Mono"] body,
+html[data-font="JetBrains Mono"] *,
+html[data-font="JetBrains Mono"] .font-sans,
+html[data-font="JetBrains Mono"] .font-display {
   font-family: 'JetBrains Mono', monospace !important;
 }
 
-html[data-font="Plus Jakarta Sans"] body {
+html[data-font="Plus Jakarta Sans"],
+html[data-font="Plus Jakarta Sans"] body,
+html[data-font="Plus Jakarta Sans"] *,
+html[data-font="Plus Jakarta Sans"] .font-sans,
+html[data-font="Plus Jakarta Sans"] .font-display {
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
-html[data-font="Space Grotesk"] body {
+html[data-font="Space Grotesk"],
+html[data-font="Space Grotesk"] body,
+html[data-font="Space Grotesk"] *,
+html[data-font="Space Grotesk"] .font-sans,
+html[data-font="Space Grotesk"] .font-display {
   font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif !important;
+}
+
+html[data-font="Inter"],
+html[data-font="Inter"] body,
+html[data-font="Inter"] *,
+html[data-font="Inter"] .font-sans,
+html[data-font="Inter"] .font-display {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
 /* 3. Text Sizing */
@@ -214,18 +238,44 @@ html[data-text-size="small"] {
   font-size: 14px;
 }
 
+html[data-text-size="normal"] {
+  font-size: 16px;
+}
+
 html[data-text-size="large"] {
-  font-size: 17px;
+  font-size: 18px;
 }
 
 /* 4. Corner Style Switcher */
-html[data-corner="sharp"] * {
+html[data-corner="sharp"] div,
+html[data-corner="sharp"] button,
+html[data-corner="sharp"] input,
+html[data-corner="sharp"] a,
+html[data-corner="sharp"] .rounded,
+html[data-corner="sharp"] .rounded-md,
+html[data-corner="sharp"] .rounded-lg,
+html[data-corner="sharp"] .rounded-xl,
+html[data-corner="sharp"] .rounded-2xl,
+html[data-corner="sharp"] .rounded-3xl {
   border-radius: 0px !important;
 }
 
+html[data-corner="soft"] .rounded-lg,
 html[data-corner="soft"] .rounded-xl,
-html[data-corner="soft"] .rounded-2xl {
-  border-radius: 0.5rem !important;
+html[data-corner="soft"] .rounded-2xl,
+html[data-corner="soft"] .rounded-3xl {
+  border-radius: 6px !important;
+}
+
+/* Animation Speed Switcher */
+html[data-anim-speed="fast"] * {
+  transition-duration: 90ms !important;
+  animation-duration: 0.6s !important;
+}
+
+html[data-anim-speed="relaxed"] * {
+  transition-duration: 380ms !important;
+  animation-duration: 1.8s !important;
 }
 
 /* 5. Compact Mode */
@@ -322,22 +372,37 @@ html[data-accent="mint"] {
 /* Accent Highlights for Active Badges, Pills, and Active Highlight Targets */
 html[data-accent="yellow"] .nb-accent-active,
 html[data-accent="yellow"] .nb-pill.active,
-html[data-accent="yellow"] .btn-active-highlight {
+html[data-accent="yellow"] .btn-active-highlight,
+html[data-accent="yellow"] .active-accent-target {
   background-color: #FFE600 !important;
+  color: #000000 !important;
+  border-color: #000000 !important;
+}
+html[data-accent="yellow"] .active-accent-target * {
   color: #000000 !important;
 }
 
 html[data-accent="pink"] .nb-accent-active,
 html[data-accent="pink"] .nb-pill.active,
-html[data-accent="pink"] .btn-active-highlight {
+html[data-accent="pink"] .btn-active-highlight,
+html[data-accent="pink"] .active-accent-target {
   background-color: #FF76CE !important;
+  color: #000000 !important;
+  border-color: #000000 !important;
+}
+html[data-accent="pink"] .active-accent-target * {
   color: #000000 !important;
 }
 
 html[data-accent="mint"] .nb-accent-active,
 html[data-accent="mint"] .nb-pill.active,
-html[data-accent="mint"] .btn-active-highlight {
+html[data-accent="mint"] .btn-active-highlight,
+html[data-accent="mint"] .active-accent-target {
   background-color: #00F5D4 !important;
+  color: #000000 !important;
+  border-color: #000000 !important;
+}
+html[data-accent="mint"] .active-accent-target * {
   color: #000000 !important;
 }
 

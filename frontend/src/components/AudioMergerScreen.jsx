@@ -37,10 +37,12 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
   const [mergeResult, setMergeResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [playingTrackId, setPlayingTrackId] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const audioRefs = useRef({});
   const videoRefs = useRef({});
   const masterMediaRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Format detik ke MM:SS
   const formatTime = (seconds) => {
@@ -51,8 +53,8 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
   };
 
   // Upload file video dan audio
-  const handleFilesUpload = (e) => {
-    const files = Array.from(e.target.files || []);
+  const handleFileList = (filesList) => {
+    const files = Array.from(filesList || []);
     if (files.length === 0) return;
 
     setErrorMessage('');
@@ -130,6 +132,10 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
       };
       reader.readAsDataURL(file);
     });
+  };
+
+  const handleFilesUpload = (e) => {
+    handleFileList(e.target.files);
     e.target.value = '';
   };
 
@@ -300,6 +306,7 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>{am.addTrackBtn}</span>
               <input
+                ref={fileInputRef}
                 type="file"
                 multiple
                 accept="audio/*,video/mp4,video/webm,video/quicktime"
@@ -319,15 +326,30 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
 
           {/* Kondisi Jika Belum Ada Track */}
           {tracks.length === 0 ? (
-            <div className="border-2 border-dashed border-black rounded-xl p-8 sm:p-12 flex flex-col items-center justify-center text-center bg-neutral-50 gap-2">
-              <div className="w-12 h-12 rounded-lg border-2 border-black bg-white flex items-center justify-center text-black mb-1">
+            <div 
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(false);
+                if (e.dataTransfer.files) handleFileList(e.dataTransfer.files);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-8 sm:p-12 flex flex-col items-center justify-center text-center gap-2 cursor-pointer transition-all ${
+                isDragging
+                  ? 'border-black bg-neutral-200 scale-[0.99] shadow-[1px_1px_0px_#000000]'
+                  : 'border-black bg-neutral-50 hover:bg-neutral-100'
+              }`}
+            >
+              <div className="w-12 h-12 rounded-lg border-2 border-black bg-white flex items-center justify-center text-black mb-1 shadow-[2px_2px_0px_#000000]">
                 <Video className="w-6 h-6 stroke-[2]" />
               </div>
               <p className="text-sm font-black text-black uppercase font-display">
                 {am.emptyTracksTitle}
               </p>
               <p className="text-xs text-neutral-600 max-w-md">
-                {am.emptyTracksDesc}
+                {am.emptyTracksDesc} (Bisa Tarik & Lepaskan / Drag & Drop File Langsung ke Sini)
               </p>
             </div>
           ) : (

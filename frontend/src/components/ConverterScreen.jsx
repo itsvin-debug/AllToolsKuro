@@ -476,7 +476,8 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
                   onChange={(e) => setSelectedFormat(e.target.value)}
                   className="w-full appearance-none bg-white border-2 border-black text-black text-xs sm:text-sm rounded-lg py-3 px-3.5 pr-9 cursor-pointer font-bold focus:outline-none focus:ring-2 focus:ring-black"
                 >
-                  <option value="1080p">HD 1080p {isEn ? '(Max Quality)' : '(Kualitas Maksimal)'}</option>
+                  <option value="2160p">4K Ultra HD {isEn ? '(2160p Ultra Crisp)' : '(2160p Jernih Maksimal)'}</option>
+                  <option value="1080p">HD 1080p {isEn ? '(WhatsApp Status Anti-Burik)' : '(Rekomendasi Status WA - Anti Burik)'}</option>
                   <option value="720p">HD 720p {isEn ? '(Fast Standard)' : '(Standar Cepat)'}</option>
                   <option value="mp3">Audio MP3 {isEn ? '(Extract Sound)' : '(Ekstrak Suara)'}</option>
                 </select>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Download,
   Flame, 
@@ -13,14 +13,42 @@ import {
   ArrowRight, 
   X,
   Filter,
-  Images
+  Images,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
+import { getLockedTools, toggleToolLock } from '../services/storageService';
 
-export default function WelcomeScreen({ onSelectPlatform, onOpenTool, lang = 'id' }) {
+export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToast, lang = 'id' }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
+
+  const [isAdmin, setIsAdmin] = useState(() => {
+    return localStorage.getItem('kuro_admin_auth') === 'true' || 
+           localStorage.getItem('kaze_admin_auth') === 'true' ||
+           localStorage.getItem('kuro_user_role') === 'Admin';
+  });
+
+  const [lockedTools, setLockedTools] = useState(() => getLockedTools());
+
+  useEffect(() => {
+    const handleSync = () => {
+      const isAuth = localStorage.getItem('kuro_admin_auth') === 'true' || 
+                     localStorage.getItem('kaze_admin_auth') === 'true' ||
+                     localStorage.getItem('kuro_user_role') === 'Admin';
+      setIsAdmin(isAuth);
+      setLockedTools(getLockedTools());
+    };
+
+    window.addEventListener('kuro_locked_tools_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('kuro_locked_tools_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, []);
 
   const t = translations[lang] || translations.id;
   const wt = t.welcome;
@@ -232,21 +260,80 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, lang = 'id
           <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-4 w-full">
             {filteredTools.map((tool) => {
               const Icon = tool.icon;
+              const isLocked = lockedTools.includes(tool.id);
+
+              const handleCardClick = () => {
+                if (isLocked && !isAdmin) {
+                  if (onShowToast) {
+                    onShowToast(`Fitur "${tool.name}" sedang dalam tahap perbaikan oleh Admin dan akan segera dibuka kembali.`);
+                  }
+                  return;
+                }
+                tool.onClick();
+              };
+
               return (
                 <div
                   key={tool.id}
-                  onClick={tool.onClick}
-                  className="rounded-xl border-2 border-black p-3 sm:p-5 flex flex-col justify-between text-left cursor-pointer transition-all duration-150 bg-white shadow-[2px_2px_0px_#000000] sm:shadow-[3px_3px_0px_#000000] hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 select-none min-h-[175px] sm:min-h-[185px]"
+                  onClick={handleCardClick}
+                  className={`rounded-xl border-2 border-black p-3 sm:p-5 flex flex-col justify-between text-left cursor-pointer transition-all duration-150 shadow-[2px_2px_0px_#000000] sm:shadow-[3px_3px_0px_#000000] select-none min-h-[175px] sm:min-h-[185px] relative overflow-hidden ${
+                    isLocked && !isAdmin 
+                      ? 'bg-neutral-100 opacity-90' 
+                      : 'bg-white hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5'
+                  }`}
                 >
-                  {/* Header Card: Icon & Tag Badge */}
+                  {/* Header Card: Icon, Admin Lock Button, & Tag Badge */}
                   <div className="flex items-center justify-between w-full mb-2 sm:mb-2.5 gap-1.5">
                     <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-md border-2 border-black bg-white flex items-center justify-center text-black shadow-[1px_1px_0px_#000000] sm:shadow-[1.5px_1.5px_0px_#000000] shrink-0">
                       <Icon className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.2]" />
                     </div>
 
-                    <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded border border-black bg-neutral-100 text-black truncate max-w-[80px] xs:max-w-[100px] sm:max-w-none text-right">
-                      {tool.tag}
-                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Kontrol Kunci / Buka Kunci Khusus Admin */}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleToolLock(tool.id);
+                            setLockedTools(getLockedTools());
+                            if (onShowToast) {
+                              onShowToast(isLocked ? `Fitur "${tool.name}" dibuka untuk semua pengguna.` : `Fitur "${tool.name}" dikunci untuk perbaikan.`);
+                            }
+                          }}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer flex items-center gap-1 ${
+                            isLocked
+                              ? 'border-amber-600 bg-amber-400 text-black hover:bg-amber-500 shadow-xs'
+                              : 'border-black bg-neutral-100 text-black hover:bg-neutral-200'
+                          }`}
+                          title={isLocked ? 'Klik untuk membuka kunci fitur' : 'Klik untuk mengunci fitur'}
+                        >
+                          {isLocked ? (
+                            <>
+                              <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
+                              <span className="hidden xs:inline">Terkunci</span>
+                            </>
+                          ) : (
+                            <>
+                              <Unlock className="w-2.5 h-2.5 stroke-[2.5]" />
+                              <span className="hidden xs:inline">Kunci</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {/* Badge Kunci untuk Member Biasa */}
+                      {!isAdmin && isLocked ? (
+                        <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-amber-600 bg-amber-300 text-black flex items-center gap-1">
+                          <Lock className="w-2.5 h-2.5 stroke-[2.5]" />
+                          <span>Perbaikan</span>
+                        </span>
+                      ) : (
+                        <span className="text-[9px] sm:text-[10px] font-mono font-bold px-1.5 sm:px-2 py-0.5 rounded border border-black bg-neutral-100 text-black truncate max-w-[80px] xs:max-w-[100px] sm:max-w-none text-right">
+                          {tool.tag}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Body Card: Judul & Deskripsi Fungsional */}
@@ -255,19 +342,39 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, lang = 'id
                       {tool.name}
                     </h3>
                     <p className="text-[10.5px] sm:text-xs text-neutral-600 mt-1 line-clamp-2 leading-tight sm:leading-relaxed">
-                      {tool.desc}
+                      {isLocked && !isAdmin ? 'Fitur ini sedang dalam tahap perbaikan oleh Admin.' : tool.desc}
                     </p>
                   </div>
 
                   {/* Footer Card: Tombol Buka Alat */}
                   <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-black/15">
-                    <button
-                      type="button"
-                      className="w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg border-2 border-black bg-black text-white font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 sm:gap-1.5 hover:bg-neutral-800 transition-colors cursor-pointer"
-                    >
-                      <span>Buka Alat</span>
-                      <ArrowRight className="w-3 h-3 sm:w-3.5 sm:h-3.5 stroke-[2.5]" />
-                    </button>
+                    {isLocked && !isAdmin ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg border-2 border-neutral-300 bg-neutral-200 text-neutral-500 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 cursor-not-allowed"
+                      >
+                        <Lock className="w-3 h-3 stroke-[2.5]" />
+                        <span>Sedang Diperbaiki</span>
+                      </button>
+                    ) : isLocked && isAdmin ? (
+                      <button
+                        type="button"
+                        className="w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg border-2 border-amber-600 bg-amber-400 hover:bg-amber-500 text-black font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <Lock className="w-3 h-3 stroke-[2.5]" />
+                        <span>Buka (Admin Test)</span>
+                        <ArrowRight className="w-3 h-3 stroke-[2.5]" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="w-full py-1.5 sm:py-2 px-2 sm:px-3 rounded-lg border-2 border-black bg-black text-white font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 sm:gap-1.5 hover:bg-neutral-800 transition-colors cursor-pointer"
+                      >
+                        <span>Buka Alat</span>
+                        <ArrowRight className="w-3 h-3 sm:w-3.5 sm:h-3.5 stroke-[2.5]" />
+                      </button>
+                    )}
                   </div>
 
                 </div>

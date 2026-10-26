@@ -256,3 +256,47 @@ export function clearGallery() {
     return [];
   }
 }
+
+// ==========================================
+// MANAJEMEN STATUS KUNCI FITUR (LOCK & UNLOCK ADMIN)
+// ==========================================
+const LOCKED_TOOLS_KEY = 'kuro_locked_tools';
+
+export function getLockedTools() {
+  try {
+    const raw = localStorage.getItem(LOCKED_TOOLS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setLockedTools(lockedList) {
+  try {
+    localStorage.setItem(LOCKED_TOOLS_KEY, JSON.stringify(lockedList));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kuro_locked_tools_updated', { detail: lockedList }));
+    }
+  } catch {}
+}
+
+export function isToolLocked(toolId) {
+  try {
+    const list = getLockedTools();
+    return list.includes(toolId);
+  } catch {
+    return false;
+  }
+}
+
+export function toggleToolLock(toolId) {
+  try {
+    const current = getLockedTools();
+    const isLocked = current.includes(toolId);
+    const updated = isLocked ? current.filter(id => id !== toolId) : [...current, toolId];
+    setLockedTools(updated);
+    return !isLocked;
+  } catch {
+    return false;
+  }
+}

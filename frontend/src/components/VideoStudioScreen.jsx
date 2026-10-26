@@ -42,13 +42,13 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportedUrl, setExportedUrl] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const videoRef = useRef(null);
   const exportCanvasRef = useRef(null);
 
   // Upload video
-  const handleVideoUpload = (e) => {
-    const file = e.target.files?.[0];
+  const handleVideoFile = (file) => {
     if (!file) return;
 
     setFileName(file.name);
@@ -56,6 +56,11 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
     setVideoSrc(url);
     setIsPlaying(false);
     setExportedUrl(null);
+  };
+
+  const handleVideoUpload = (e) => {
+    const file = e.target.files?.[0];
+    handleVideoFile(file);
   };
 
   // Toggle Play / Pause
@@ -233,8 +238,21 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
       {/* Upload Box jika belum ada video */}
       {!videoSrc ? (
         <div 
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleVideoFile(file);
+          }}
           onClick={() => document.getElementById('video-upload-input').click()}
-          className="w-full p-8 sm:p-12 rounded-xl border-2 border-dashed border-black bg-white flex flex-col items-center justify-center text-center cursor-pointer hover:bg-neutral-50 shadow-[3px_3px_0px_#000000] transition-all"
+          className={`w-full p-8 sm:p-12 rounded-xl border-2 border-dashed flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
+            isDragging
+              ? 'border-black bg-neutral-200 scale-[0.99] shadow-[1px_1px_0px_#000000]'
+              : 'border-black bg-white hover:bg-neutral-50 shadow-[3px_3px_0px_#000000]'
+          }`}
         >
           <input
             type="file"

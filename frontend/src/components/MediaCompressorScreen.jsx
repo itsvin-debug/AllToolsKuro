@@ -53,6 +53,9 @@ export default function MediaCompressorScreen({ onBack }) {
 
   const imgCanvasRef = useRef(null);
 
+  const [isImgDragging, setIsImgDragging] = useState(false);
+  const [isVideoDragging, setIsVideoDragging] = useState(false);
+
   // Format bytes helper
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -65,8 +68,7 @@ export default function MediaCompressorScreen({ onBack }) {
   // ==========================================
   // LOGIKA KOMPRES FOTO (Client-Side High-Efficiency Canvas)
   // ==========================================
-  const handleImageSelect = (e) => {
-    const file = e.target.files?.[0];
+  const handleImageFile = (file) => {
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
@@ -93,6 +95,11 @@ export default function MediaCompressorScreen({ onBack }) {
       img.src = dataUrl;
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    handleImageFile(file);
   };
 
   const processImageCompression = async () => {
@@ -150,8 +157,7 @@ export default function MediaCompressorScreen({ onBack }) {
   // ==========================================
   // LOGIKA KOMPRES VIDEO (Backend FFmpeg Engine)
   // ==========================================
-  const handleVideoSelect = (e) => {
-    const file = e.target.files?.[0];
+  const handleVideoFile = (file) => {
     if (!file) return;
 
     if (!file.type.startsWith('video/')) {
@@ -169,6 +175,11 @@ export default function MediaCompressorScreen({ onBack }) {
       setVideoPreview(reader.result);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleVideoSelect = (e) => {
+    const file = e.target.files?.[0];
+    handleVideoFile(file);
   };
 
   const processVideoCompression = async () => {
@@ -273,7 +284,20 @@ export default function MediaCompressorScreen({ onBack }) {
             
             {/* Dropzone Foto */}
             <div
-              className="border-2 border-dashed border-outline-variant/50 hover:border-cyan-500/80 rounded-2xl p-6 sm:p-10 flex flex-col items-center justify-center text-center transition-all bg-surface-container/30 hover:bg-surface-container/50 cursor-pointer group"
+              className={`border-2 border-dashed rounded-2xl p-6 sm:p-10 flex flex-col items-center justify-center text-center transition-all cursor-pointer group ${
+                isImgDragging
+                  ? 'border-cyan-400 bg-cyan-500/20 scale-[0.99]'
+                  : 'border-outline-variant/50 hover:border-cyan-500/80 bg-surface-container/30 hover:bg-surface-container/50'
+              }`}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsImgDragging(true); }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsImgDragging(false); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsImgDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleImageFile(file);
+              }}
               onClick={() => document.getElementById('image-compress-input').click()}
             >
               <input
@@ -501,7 +525,20 @@ export default function MediaCompressorScreen({ onBack }) {
             
             {/* Dropzone Video */}
             <div
-              className="border-2 border-dashed border-outline-variant/50 hover:border-cyan-500/80 rounded-2xl p-6 sm:p-10 flex flex-col items-center justify-center text-center transition-all bg-surface-container/30 hover:bg-surface-container/50 cursor-pointer group"
+              className={`border-2 border-dashed rounded-2xl p-6 sm:p-10 flex flex-col items-center justify-center text-center transition-all cursor-pointer group ${
+                isVideoDragging
+                  ? 'border-cyan-400 bg-cyan-500/20 scale-[0.99]'
+                  : 'border-outline-variant/50 hover:border-cyan-500/80 bg-surface-container/30 hover:bg-surface-container/50'
+              }`}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsVideoDragging(true); }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsVideoDragging(false); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsVideoDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleVideoFile(file);
+              }}
               onClick={() => document.getElementById('video-compress-input').click()}
             >
               <input

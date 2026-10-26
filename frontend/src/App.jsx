@@ -72,6 +72,7 @@ export default function App() {
     root.setAttribute('data-border', settings.borderThickness || 'normal');
     root.setAttribute('data-shadow', settings.shadowOffset || 'hard');
     root.setAttribute('data-accent', settings.accentColor || 'monochrome');
+    root.setAttribute('data-anim-speed', settings.animationSpeed || 'normal');
   }, [settings]);
 
   // Fungsi pembaruan pengaturan
@@ -149,6 +150,7 @@ export default function App() {
                 handleNavigate('downloader');
               }}
               onOpenTool={(toolId) => handleNavigate(toolId)}
+              onShowToast={handleShowToast}
             />
           )}
 

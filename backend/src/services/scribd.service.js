@@ -524,10 +524,112 @@ export async function extractScribdDocument(url) {
  * dengan fallback Cheerio DOM Parser.
  */
 export async function extractWebDocument(url) {
-  const isCanva = url.toLowerCase().includes('canva.com');
+  const isCanva = url.toLowerCase().includes('canva.com') || url.toLowerCase().includes('canva.link');
   const sourceName = isCanva ? 'canva' : 'web';
 
-  // 1. Prioritas Utama: Jina Reader AI (Mampu mengekstrak Canva dan Single-Page Apps)
+  // 1. Ekstraksi Khusus Canva Presentation
+  if (isCanva) {
+    try {
+      let targetUrl = url.trim();
+      // Resolve redirect untuk canva.link
+      if (targetUrl.includes('canva.link') || !targetUrl.includes('/view')) {
+        try {
+          const redirectRes = await axios.get(targetUrl, {
+            maxRedirects: 10,
+            headers: BROWSER_HEADERS,
+            validateStatus: () => true,
+            timeout: 8000
+          });
+          if (redirectRes.request?.res?.responseUrl) {
+            targetUrl = redirectRes.request.res.responseUrl;
+          }
+        } catch {}
+      }
+
+      targetUrl = targetUrl.replace(/\/edit(\?.*)?$/i, '/view$1');
+      if (!targetUrl.includes('/view') && targetUrl.includes('canva.com/design/')) {
+        targetUrl = targetUrl.split('?')[0] + '/view';
+      }
+
+      const jinaUrl = `https://r.jina.ai/${encodeURI(targetUrl)}`;
+      const jinaRes = await axios.get(jinaUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        timeout: 20000
+      });
+
+      const markdown = typeof jinaRes.data === 'string' ? jinaRes.data : '';
+      if (markdown && markdown.length > 100) {
+        let title = 'Presentasi Canva';
+        const titleMatch = markdown.match(/^Title:\s*(.+)$/m);
+        if (titleMatch && titleMatch[1]) {
+          title = titleMatch[1].replace(/ - Canva$/i, '').trim();
+        }
+
+        const lines = markdown.split('\n').map(l => l.trim()).filter(Boolean);
+        const cleanBodyLines = [];
+        for (const line of lines) {
+          if (line.startsWith('Title:') || line.startsWith('URL Source:') || line.startsWith('Published Time:') || line.startsWith('Markdown Content:')) continue;
+          const lower = line.toLowerCase();
+          if (lower === '-' || lower === '*' || /^[\*\-]\s*\d+$/.test(lower)) continue;
+          if (/^(canva editor|changes will be saved|skip navigation|skip to main content|viewing|page thumbnails)/i.test(lower)) continue;
+          if (/^(skip to end of page thumbnails|back to start of page thumbnails|the main navigation contains)/i.test(lower)) continue;
+          if (lower.includes('page-navigator-start') || lower.includes('page-navigator-end') || lower.includes('ctrl+f2')) continue;
+          cleanBodyLines.push(line);
+        }
+
+        const imageRegex = /!\[Image \d+\]\((https:\/\/[^\s\)]+)\)/g;
+        const slideImages = [];
+        let match;
+        while ((match = imageRegex.exec(markdown)) !== null) {
+          const imgUrl = match[1];
+          if (imgUrl.includes('document-image') || imgUrl.includes('thumbnail') || imgUrl.includes('canva.com')) {
+            if (!slideImages.includes(imgUrl)) slideImages.push(imgUrl);
+          }
+        }
+
+        let detectedPageCount = slideImages.length;
+        const pageNumberMatches = [...markdown.matchAll(/\*\s+(\d{1,3})\b/g)].map(m => parseInt(m[1], 10));
+        if (pageNumberMatches.length > 0) {
+          const maxPage = Math.max(...pageNumberMatches);
+          if (maxPage > detectedPageCount && maxPage <= 100) detectedPageCount = maxPage;
+        }
+
+        const totalSlides = Math.max(detectedPageCount, 1);
+        const paragraphsPerSlide = Math.max(1, Math.ceil(cleanBodyLines.length / totalSlides));
+        const pages = [];
+
+        for (let i = 1; i <= totalSlides; i++) {
+          const imgUrl = slideImages[i - 1] || slideImages[0] || null;
+          const startIdx = (i - 1) * paragraphsPerSlide;
+          const slideTextLines = cleanBodyLines.slice(startIdx, startIdx + paragraphsPerSlide);
+          const slideText = slideTextLines.join('\n\n') || `Slide Presentasi ${i}`;
+
+          pages.push({
+            pageNumber: i,
+            title: i === 1 ? title : `Slide ${i}`,
+            text: slideText,
+            paragraphs: slideTextLines.length > 0 ? slideTextLines : [slideText],
+            imageUrl: imgUrl
+          });
+        }
+
+        return {
+          success: true,
+          source: 'canva',
+          title,
+          totalPages: pages.length,
+          pages,
+          hasPageImages: slideImages.length > 0,
+          sourceUrl: url,
+          extractedAt: new Date().toISOString()
+        };
+      }
+    } catch (canvaErr) {
+      console.warn('Canva extraction fallback to general parser:', canvaErr.message);
+    }
+  }
+
+  // 1.5 Prioritas Jina Reader untuk Dokumen Web Umum
   try {
     const jinaUrl = `https://r.jina.ai/${encodeURI(url)}`;
     const jinaRes = await axios.get(jinaUrl, {

@@ -37,6 +37,7 @@ export default function PhotoStudioScreen({ onBack }) {
 
   const [isComparing, setIsComparing] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const canvasRef = useRef(null);
   const originalImageRef = useRef(null);
@@ -102,8 +103,7 @@ export default function PhotoStudioScreen({ onBack }) {
   };
 
   // Pilih foto
-  const handleImageUpload = (e) => {
-    const file = e.target.files?.[0];
+  const handleImageFile = (file) => {
     if (!file) return;
 
     setFileName(file.name);
@@ -117,6 +117,11 @@ export default function PhotoStudioScreen({ onBack }) {
       img.src = reader.result;
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files?.[0];
+    handleImageFile(file);
   };
 
   // Render Canvas Real-Time saat parameter berubah
@@ -265,8 +270,21 @@ export default function PhotoStudioScreen({ onBack }) {
       {/* Upload Box jika belum ada gambar */}
       {!imageSrc ? (
         <div 
+          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); }}
+          onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) handleImageFile(file);
+          }}
           onClick={() => document.getElementById('photo-upload-input').click()}
-          className="w-full p-8 sm:p-12 rounded-xl border-2 border-dashed border-black bg-white flex flex-col items-center justify-center text-center cursor-pointer hover:bg-neutral-50 shadow-[3px_3px_0px_#000000] transition-all"
+          className={`w-full p-8 sm:p-12 rounded-xl border-2 border-dashed flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
+            isDragging
+              ? 'border-black bg-neutral-200 scale-[0.99] shadow-[1px_1px_0px_#000000]'
+              : 'border-black bg-white hover:bg-neutral-50 shadow-[3px_3px_0px_#000000]'
+          }`}
         >
           <input
             type="file"

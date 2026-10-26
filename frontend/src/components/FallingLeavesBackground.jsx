@@ -31,14 +31,13 @@ export default function FallingLeavesBackground() {
     // Kepadatan kelopak: sedikit ramai dan merata, tidak spamming
     const petalCount = isMobile ? 24 : 42;
 
-    // Palet warna kelopak bunga sakura senada dengan video wpanime.mp4
+    // Palet warna kelopak bunga sakura otentik sesuai live wallpaper wpanime.mp4
     const sakuraPalettes = [
-      { fill: 'rgba(255, 183, 197, 0.78)', stroke: 'rgba(244, 114, 182, 0.45)' }, // Sakura pink klasik
-      { fill: 'rgba(254, 205, 211, 0.82)', stroke: 'rgba(251, 113, 133, 0.40)' }, // Blush petal lembut
-      { fill: 'rgba(251, 143, 175, 0.72)', stroke: 'rgba(244, 63, 94, 0.35)' },  // Rose petal segar
-      { fill: 'rgba(255, 241, 242, 0.88)', stroke: 'rgba(251, 182, 206, 0.55)' }, // Putih semburat pink
-      { fill: 'rgba(244, 114, 182, 0.68)', stroke: 'rgba(225, 29, 72, 0.35)' },  // Sakura aksen terang
-      { fill: 'rgba(245, 208, 254, 0.68)', stroke: 'rgba(216, 70, 239, 0.30)' }, // Lavender pink lembut
+      { base: 'rgba(255, 240, 243, 0.92)', mid: 'rgba(255, 182, 193, 0.88)', tip: 'rgba(255, 160, 180, 0.85)' }, // Sakura pink klasik
+      { base: 'rgba(255, 245, 247, 0.94)', mid: 'rgba(254, 205, 211, 0.90)', tip: 'rgba(251, 143, 168, 0.82)' }, // Blush petal lembut
+      { base: 'rgba(255, 230, 238, 0.90)', mid: 'rgba(251, 143, 175, 0.85)', tip: 'rgba(244, 114, 182, 0.80)' }, // Rose petal segar
+      { base: 'rgba(255, 250, 250, 0.95)', mid: 'rgba(255, 218, 225, 0.88)', tip: 'rgba(255, 182, 199, 0.82)' }, // Putih semburat pink pastel
+      { base: 'rgba(255, 235, 245, 0.92)', mid: 'rgba(244, 155, 195, 0.86)', tip: 'rgba(236, 72, 153, 0.78)' }, // Aksen mekar cerah
     ];
 
     class SakuraPetal {
@@ -52,25 +51,25 @@ export default function FallingLeavesBackground() {
           this.x = Math.random() * width;
           this.y = Math.random() * height;
         } else {
-          // Masuk secara acak dari tepi atas atau tepi kiri terbawa angin
+          // Masuk secara acak dari tepi atas atau tepi kiri terbawa hembusan angin
           if (Math.random() > 0.35) {
             this.x = Math.random() * (width + 120) - 60;
-            this.y = -20 - Math.random() * 30;
+            this.y = -25 - Math.random() * 30;
           } else {
-            this.x = -20 - Math.random() * 20;
+            this.x = -25 - Math.random() * 20;
             this.y = Math.random() * (height * 0.75);
           }
         }
 
-        // Ukuran proporsional kelopak sakura
-        this.size = 9 + Math.random() * 11;
-        this.speedY = 0.8 + Math.random() * 1.1;
-        this.speedX = 0.6 + Math.random() * 1.0;
+        // Ukuran proporsional kelopak bunga sakura
+        this.size = 10 + Math.random() * 12;
+        this.speedY = 0.85 + Math.random() * 1.15;
+        this.speedX = 0.65 + Math.random() * 0.95;
         this.rotation = Math.random() * Math.PI * 2;
-        this.rotationSpeed = (Math.random() - 0.5) * 0.03;
+        this.rotationSpeed = (Math.random() - 0.5) * 0.028;
         this.flip = Math.random() * Math.PI;
-        this.flipSpeed = 0.018 + Math.random() * 0.025;
-        this.oscillationSpeed = 0.012 + Math.random() * 0.02;
+        this.flipSpeed = 0.016 + Math.random() * 0.024;
+        this.oscillationSpeed = 0.012 + Math.random() * 0.018;
         this.oscillationOffset = Math.random() * Math.PI * 2;
         this.palette = sakuraPalettes[Math.floor(Math.random() * sakuraPalettes.length)];
       }
@@ -82,7 +81,7 @@ export default function FallingLeavesBackground() {
         this.flip += this.flipSpeed;
 
         // Reset saat kelopak keluar dari area bawah atau kanan layar
-        if (this.y > height + 35 || this.x > width + 50) {
+        if (this.y > height + 40 || this.x > width + 60) {
           this.reset(false);
         }
       }
@@ -92,32 +91,38 @@ export default function FallingLeavesBackground() {
         context.translate(this.x, this.y);
         context.rotate(this.rotation);
 
-        // Efek kelopak berputar dan membalik secara 3D di udara
+        // Efek kelopak berputar dan melayang membalik secara 3D di udara
         const scaleX = Math.cos(this.flip);
         context.scale(scaleX, 1);
 
-        context.fillStyle = this.palette.fill;
-        context.strokeStyle = this.palette.stroke;
-        context.lineWidth = 0.8;
+        const s = this.size;
 
-        // Bentuk kelopak bunga sakura berlekuk anggun
+        // Gradient lembut dari pangkal (base) ke ujung kelopak (tip) khas anime
+        const grad = context.createLinearGradient(0, s, 0, -s);
+        grad.addColorStop(0, this.palette.base);
+        grad.addColorStop(0.6, this.palette.mid);
+        grad.addColorStop(1, this.palette.tip);
+
+        context.fillStyle = grad;
+
+        // Bentuk kelopak bunga sakura anime presisi dengan lekukan takik khas di ujung atas
         context.beginPath();
-        context.moveTo(0, -this.size);
-        context.bezierCurveTo(this.size * 0.52, -this.size * 0.65, this.size * 0.74, -this.size * 0.08, this.size * 0.38, this.size * 0.65);
-        context.bezierCurveTo(this.size * 0.18, this.size * 0.95, 0, this.size, 0, this.size);
-        context.bezierCurveTo(0, this.size, -this.size * 0.18, this.size * 0.95, -this.size * 0.38, this.size * 0.65);
-        context.bezierCurveTo(-this.size * 0.74, -this.size * 0.08, -this.size * 0.52, -this.size * 0.65, 0, -this.size);
+        context.moveTo(0, s); // Pangkal bawah kelopak
+
+        // Sisi kiri melengkung anggun ke puncak cuping kiri
+        context.bezierCurveTo(-s * 0.52, s * 0.62, -s * 0.66, -s * 0.12, -s * 0.44, -s * 0.82);
+
+        // Lekukan takik mahkota sakura di tengah atas
+        context.bezierCurveTo(-s * 0.22, -s * 0.95, -s * 0.08, -s * 0.72, 0, -s * 0.64);
+
+        // Dari lekukan takik tengah ke puncak cuping kanan
+        context.bezierCurveTo(s * 0.08, -s * 0.72, s * 0.22, -s * 0.95, s * 0.44, -s * 0.82);
+
+        // Sisi kanan melengkung anggun kembali ke pangkal bawah
+        context.bezierCurveTo(s * 0.66, -s * 0.12, s * 0.52, s * 0.62, 0, s);
+
         context.closePath();
         context.fill();
-        context.stroke();
-
-        // Garis lekuk lembut di bagian tengah kelopak
-        context.beginPath();
-        context.moveTo(0, -this.size * 0.6);
-        context.lineTo(0, this.size * 0.5);
-        context.strokeStyle = this.palette.stroke;
-        context.lineWidth = 0.6;
-        context.stroke();
 
         context.restore();
       }

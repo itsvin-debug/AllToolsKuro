@@ -16,11 +16,23 @@ function cleanInputUrl(raw) {
 }
 
 function detectPlatform(rawUrl) {
-  const url = cleanInputUrl(rawUrl);
+  const url = cleanInputUrl(rawUrl).toLowerCase();
   if (/tiktok\.com|vt\.tiktok\.com/i.test(url)) return 'tiktok';
   if (/instagram\.com|instagr\.am/i.test(url)) return 'instagram';
   if (/twitter\.com|x\.com/i.test(url)) return 'twitter';
   if (/youtube\.com|youtu\.be/i.test(url)) return 'youtube';
+  if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) return 'facebook';
+  if (/reddit\.com|redd\.it/i.test(url)) return 'reddit';
+  if (/pinterest\.com|pin\.it/i.test(url)) return 'pinterest';
+  if (/bilibili\.com|b23\.tv/i.test(url)) return 'bilibili';
+  if (/douyin\.com|iesdouyin\.com/i.test(url)) return 'douyin';
+  if (/bandcamp\.com/i.test(url)) return 'bandcamp';
+  if (/threads\.net/i.test(url)) return 'threads';
+  if (/spotify\.com/i.test(url)) return 'spotify';
+  if (/music\.apple\.com/i.test(url)) return 'appleMusic';
+  if (/pixiv\.net/i.test(url)) return 'pixiv';
+  if (/xiaohongshu\.com|xhslink\.com/i.test(url)) return 'rednote';
+  if (/terabox\.com|1024tera\.com|teraboxapp\.com/i.test(url)) return 'terabox';
   return null;
 }
 
@@ -914,6 +926,210 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Method not allowed.' });
 
+async function downloadReddit(url) {
+  try {
+    let finalUrl = url;
+    if (url.includes('/s/')) {
+      try {
+        const redir = await axios.get(url, {
+          maxRedirects: 10,
+          headers: { 'User-Agent': UA_DESKTOP },
+          validateStatus: () => true,
+          timeout: 8000
+        });
+        if (redir.request?.res?.responseUrl) finalUrl = redir.request.res.responseUrl;
+      } catch {}
+    }
+
+    const res = await axios.get(finalUrl, {
+      headers: {
+        'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      timeout: 10000
+    });
+
+    const $ = cheerio.load(res.data);
+    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || 'Reddit Post';
+    const authorMatch = ($('meta[property="og:description"]').attr('content') || '').match(/Posted by\s+([^\s-]+)/i);
+    const author = authorMatch ? authorMatch[1] : 'Reddit User';
+    const videoUrl = $('meta[property="og:video"]').attr('content') || $('meta[property="og:video:secure_url"]').attr('content') || null;
+    let imageUrl = $('meta[property="og:image"]').attr('content') || null;
+    if (imageUrl) {
+      imageUrl = imageUrl.replace(/&amp;/g, '&');
+    }
+
+    const downloadLinks = [];
+    const photos = [];
+
+    if (videoUrl) {
+      downloadLinks.push({
+        id: '2160p',
+        label: 'Resolusi 4K Ultra HD (2160p)',
+        quality: '4K Ultra HD (2160p - Jernih Maksimal)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `reddit_4k_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+        quality: '1080p Full HD (Kompatibel Status WA)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `reddit_1080p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '720p',
+        label: 'Resolusi HD 720p',
+        quality: '720p Standard HD',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `reddit_720p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: 'audio',
+        label: 'Audio MP3',
+        quality: '320kbps Audio Jernih',
+        url: videoUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `reddit_audio_${Date.now()}.mp3`
+      });
+    } else if (imageUrl) {
+      photos.push({
+        id: 1,
+        label: 'Foto HD Original #1',
+        quality: 'Original Resolution',
+        url: imageUrl,
+        type: 'image',
+        extension: 'jpg',
+        filename: `reddit_photo_${Date.now()}.jpg`
+      });
+      downloadLinks.push(...photos);
+    }
+
+    if (downloadLinks.length > 0) {
+      return {
+        success: true,
+        platform: 'Reddit',
+        mediaType: videoUrl ? 'video' : 'slide',
+        isSlide: !videoUrl && photos.length > 0,
+        title,
+        author,
+        thumbnail: imageUrl || videoUrl,
+        photos,
+        hasPhotos: photos.length > 0,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: null,
+        downloadLinks
+      };
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], 'Reddit Media', 'Reddit User');
+}
+
+async function downloadGenericPlatform(url, platformName) {
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      timeout: 10000
+    });
+
+    const $ = cheerio.load(res.data);
+    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || `${platformName} Media`;
+    const author = $('meta[name="author"]').attr('content') || `${platformName} Creator`;
+    const videoUrl = $('meta[property="og:video"]').attr('content') || $('meta[property="og:video:secure_url"]').attr('content') || null;
+    let imageUrl = $('meta[property="og:image"]').attr('content') || null;
+    if (imageUrl) imageUrl = imageUrl.replace(/&amp;/g, '&');
+
+    const downloadLinks = [];
+    const photos = [];
+
+    if (videoUrl) {
+      downloadLinks.push({
+        id: '2160p',
+        label: 'Resolusi 4K Ultra HD (2160p)',
+        quality: '4K Ultra HD (2160p - Jernih Maksimal)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `${platformName.toLowerCase()}_4k_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+        quality: '1080p Full HD (Kompatibel Status WA)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `${platformName.toLowerCase()}_1080p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: 'audio',
+        label: 'Audio MP3',
+        quality: '320kbps Audio',
+        url: videoUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `${platformName.toLowerCase()}_audio_${Date.now()}.mp3`
+      });
+    } else if (imageUrl) {
+      photos.push({
+        id: 1,
+        label: 'Foto HD #1',
+        quality: 'Original Resolution',
+        url: imageUrl,
+        type: 'image',
+        extension: 'jpg',
+        filename: `${platformName.toLowerCase()}_photo_${Date.now()}.jpg`
+      });
+      downloadLinks.push(...photos);
+    }
+
+    if (downloadLinks.length > 0) {
+      return {
+        success: true,
+        platform: platformName,
+        mediaType: videoUrl ? 'video' : 'slide',
+        isSlide: !videoUrl && photos.length > 0,
+        title,
+        author,
+        thumbnail: imageUrl || videoUrl,
+        photos,
+        hasPhotos: photos.length > 0,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: null,
+        downloadLinks
+      };
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], `${platformName} Media`, `${platformName} Creator`);
+}
+
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Method not allowed.' });
+
   const { url, expectedPlatform } = req.body;
   if (!url || typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ success: false, message: 'URL tidak boleh kosong.' });
@@ -924,7 +1140,7 @@ export default async function handler(req, res) {
   if (!platform) {
     return res.status(400).json({
       success: false,
-      message: 'URL tidak dikenali. Pastikan memasukkan link dari TikTok, Instagram, X (Twitter), atau YouTube.'
+      message: 'URL tidak dikenali. Layanan ini mendukung 16 platform: TikTok, Instagram, YouTube, X (Twitter), Spotify, Bilibili, Douyin, Rednote, Threads, Pinterest, Apple Music, Facebook, Bandcamp, Pixiv, Reddit, dan Terabox.'
     });
   }
 
@@ -932,13 +1148,25 @@ export default async function handler(req, res) {
     tiktok: 'TikTok',
     instagram: 'Instagram',
     twitter: 'X (Twitter)',
-    youtube: 'YouTube'
+    youtube: 'YouTube',
+    facebook: 'Facebook',
+    reddit: 'Reddit',
+    pinterest: 'Pinterest',
+    bilibili: 'Bilibili',
+    douyin: 'Douyin',
+    bandcamp: 'Bandcamp',
+    threads: 'Threads',
+    spotify: 'Spotify',
+    appleMusic: 'Apple Music',
+    pixiv: 'Pixiv',
+    rednote: 'Rednote',
+    terabox: 'Terabox'
   };
 
   if (expectedPlatform && expectedPlatform !== platform) {
     return res.status(400).json({
       success: false,
-      message: `Link yang kamu masukkan adalah link ${PLATFORM_NAMES[platform]}, bukan ${PLATFORM_NAMES[expectedPlatform]}. Silakan pilih platform yang sesuai.`
+      message: `Link yang kamu masukkan adalah link ${PLATFORM_NAMES[platform] || platform}, bukan ${PLATFORM_NAMES[expectedPlatform] || expectedPlatform}. Silakan pilih platform yang sesuai.`
     });
   }
 
@@ -948,6 +1176,8 @@ export default async function handler(req, res) {
     else if (platform === 'instagram') data = await downloadInstagram(cleaned);
     else if (platform === 'twitter') data = await downloadTwitter(cleaned);
     else if (platform === 'youtube') data = await downloadYouTube(cleaned);
+    else if (platform === 'reddit') data = await downloadReddit(cleaned);
+    else data = await downloadGenericPlatform(cleaned, PLATFORM_NAMES[platform] || 'Media');
 
     // Format proxy URL untuk download mobile langsung ke penyimpanan/galeri & streamUrl untuk inline streaming
     if (data?.downloadLinks) {

@@ -161,16 +161,51 @@ export default function KuroIdentityCard({
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
 
-  // Live Device Clock (Real-Time mengikuti jam perangkat lokal pengguna setiap detik)
-  const [deviceTime, setDeviceTime] = useState(() => {
-    const now = new Date();
-    return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  });
+  /**
+   * Format jam lokal dengan deteksi zona waktu Indonesia (WIB, WITA, WIT)
+   */
+  const formatIndonesianTime = (date = new Date()) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    const h = pad(date.getHours());
+    const m = pad(date.getMinutes());
+    const s = pad(date.getSeconds());
+
+    let tzCode = 'WIB';
+    try {
+      const tzName = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      const offsetHours = -date.getTimezoneOffset() / 60;
+
+      // WIT (Waktu Indonesia Timur - UTC+9: Maluku, Papua, Jayapura)
+      if (/Jayapura|East_Indonesia|Ambon|Papua/i.test(tzName) || offsetHours === 9) {
+        tzCode = 'WIT';
+      }
+      // WITA (Waktu Indonesia Tengah - UTC+8: Bali, NTB, NTT, Kalimantan Timur/Selatan, Sulawesi)
+      else if (/Makassar|Ujung_Pandang|Denpasar|Bali|Balikpapan|Banjarmasin|Manado|Mataram|Kupang/i.test(tzName) || offsetHours === 8) {
+        tzCode = 'WITA';
+      }
+      // WIB (Waktu Indonesia Barat - UTC+7: Jawa, Sumatera, Kalimantan Barat/Tengah)
+      else if (/Jakarta|Pontianak|West_Indonesia|Sumatra|Java/i.test(tzName) || offsetHours === 7) {
+        tzCode = 'WIB';
+      } else if (offsetHours > 0) {
+        tzCode = `UTC+${offsetHours}`;
+      } else if (offsetHours < 0) {
+        tzCode = `UTC${offsetHours}`;
+      } else {
+        tzCode = 'UTC';
+      }
+    } catch {
+      tzCode = 'WIB';
+    }
+
+    return `${h}.${m}.${s} ${tzCode}`;
+  };
+
+  // Live Device Clock (Real-Time mengikuti jam perangkat lokal pengguna & zona WIB/WITA/WIT)
+  const [deviceTime, setDeviceTime] = useState(() => formatIndonesianTime());
 
   useEffect(() => {
     const updateClock = () => {
-      const now = new Date();
-      setDeviceTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }));
+      setDeviceTime(formatIndonesianTime());
     };
     const timer = setInterval(updateClock, 1000);
     return () => clearInterval(timer);

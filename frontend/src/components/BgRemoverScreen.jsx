@@ -13,12 +13,16 @@ import {
   Image as ImageIcon,
   CheckCircle2,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  Paintbrush,
+  Eraser,
+  Undo2
 } from 'lucide-react';
 
 export default function BgRemoverScreen({ onBack }) {
   const [imageSrc, setImageSrc] = useState(null);
   const [fileName, setFileName] = useState('photo.png');
+  const [isDragging, setIsDragging] = useState(false);
   
   // Pengaturan Hapus Background
   const [tolerance, setTolerance] = useState(28); // 5% - 80%
@@ -27,6 +31,14 @@ export default function BgRemoverScreen({ onBack }) {
   const [invertMask, setInvertMask] = useState(false);
   const [isPickingColor, setIsPickingColor] = useState(false);
   const [mode, setMode] = useState('border'); // 'border' (flood fill dari tepi) | 'global' (seluruh warna)
+
+  // Alat Kuas Manual (Pulihkan Objek / Hapus Sisa Latar)
+  const [brushMode, setBrushMode] = useState('none'); // 'none' | 'restore' | 'erase'
+  const [brushSize, setBrushSize] = useState(28); // 5px - 100px
+  const [isBrushing, setIsBrushing] = useState(false);
+  const [brushHistory, setBrushHistory] = useState([]);
+  const [maskVersion, setMaskVersion] = useState(0);
+  const manualMaskRef = useRef(null);
 
   // Pengaturan Background Pengganti
   const [bgType, setBgType] = useState('transparent'); // 'transparent' | 'color' | 'custom_img'
@@ -37,11 +49,9 @@ export default function BgRemoverScreen({ onBack }) {
   const canvasRef = useRef(null);
   const originalImgRef = useRef(null);
 
-  // Upload Foto Utama
-  const handleUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  // Proses file gambar (Digunakan untuk file picker & drag and drop)
+  const processImageFile = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = () => {
@@ -49,11 +59,26 @@ export default function BgRemoverScreen({ onBack }) {
       img.onload = () => {
         originalImgRef.current = img;
         setImageSrc(img.src);
+
+        // Reset manual mask
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = img.naturalWidth;
+        maskCanvas.height = img.naturalHeight;
+        manualMaskRef.current = maskCanvas;
+        setBrushHistory([]);
+        setMaskVersion(v => v + 1);
+
         detectDominantBorderColor(img);
       };
       img.src = reader.result;
     };
     reader.readAsDataURL(file);
+  };
+
+  // Upload Foto Utama
+  const handleUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (file) processImageFile(file);
   };
 
   // Upload Foto Background Pengganti (Dipastikan ter-load sebelum digambar)
@@ -283,30 +308,126 @@ export default function BgRemoverScreen({ onBack }) {
       }
     }
 
+    // 2.5 Terapkan Kuas Manual Pengguna (Pulihkan Objek / Hapus Sisa Latar)
+    if (manualMaskRef.current) {
+      const maskCtx = manualMaskRef.current.getContext('2d');
+      const maskData = maskCtx.getImageData(0, 0, width, height).data;
+      const origCanvas = document.createElement('canvas');
+      origCanvas.width = width;
+      origCanvas.height = height;
+      const origCtx = origCanvas.getContext('2d');
+      origCtx.drawImage(img, 0, 0);
+      const origData = origCtx.getImageData(0, 0, width, height).data;
+
+      for (let i = 0; i < width * height; i++) {
+        const pIdx = i * 4;
+        const maskAlpha = maskData[pIdx + 3];
+        if (maskAlpha > 0) {
+          const isRestore = maskData[pIdx] > 100; // Red channel > 100 menandakan Kuas Pemulih
+          if (isRestore) {
+            // Pulihkan kembali piksel dari foto asli (seperti gagang pedang/objek yang tidak sengaja terpotong)
+            data[pIdx] = origData[pIdx];
+            data[pIdx + 1] = origData[pIdx + 1];
+            data[pIdx + 2] = origData[pIdx + 2];
+            data[pIdx + 3] = origData[pIdx + 3];
+          } else {
+            // Kuas Penghapus: bersihkan piksel sisa latar yang bandel
+            data[pIdx + 3] = 0;
+          }
+        }
+      }
+    }
+
     tempCtx.putImageData(imgData, 0, 0);
 
     // 3. Gambar subjek yang sudah bersih di atas canvas
     ctx.drawImage(tempCanvas, 0, 0);
 
-  }, [imageSrc, tolerance, feather, keyColor, invertMask, mode, bgType, solidColor, customBgImg]);
+  }, [imageSrc, tolerance, feather, keyColor, invertMask, mode, bgType, solidColor, customBgImg, maskVersion]);
+
+  // Transformasi koordinat mouse/touch ke piksel canvas
+  const getCanvasCoords = (e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: Math.floor((clientX - rect.left) * scaleX),
+      y: Math.floor((clientY - rect.top) * scaleY)
+    };
+  };
+
+  // Terapkan sapuan kuas pada mask
+  const applyBrushPoint = (x, y) => {
+    if (!manualMaskRef.current || brushMode === 'none') return;
+    const maskCtx = manualMaskRef.current.getContext('2d');
+    maskCtx.beginPath();
+    maskCtx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
+    // Restore: Red 255 | Erase: Black 0
+    maskCtx.fillStyle = brushMode === 'restore' ? 'rgb(255, 0, 0)' : 'rgb(0, 0, 0)';
+    maskCtx.fill();
+    setMaskVersion(v => v + 1);
+  };
+
+  const handleBrushStart = (e) => {
+    if (brushMode === 'none' || isPickingColor) return;
+    const coords = getCanvasCoords(e);
+    if (!coords) return;
+    setIsBrushing(true);
+
+    // Simpan snapshot untuk riwayat Undo
+    if (manualMaskRef.current) {
+      const maskCtx = manualMaskRef.current.getContext('2d');
+      const snap = maskCtx.getImageData(0, 0, manualMaskRef.current.width, manualMaskRef.current.height);
+      setBrushHistory(prev => [...prev.slice(-10), snap]);
+    }
+
+    applyBrushPoint(coords.x, coords.y);
+  };
+
+  const handleBrushMove = (e) => {
+    if (!isBrushing || brushMode === 'none') return;
+    const coords = getCanvasCoords(e);
+    if (!coords) return;
+    applyBrushPoint(coords.x, coords.y);
+  };
+
+  const handleBrushEnd = () => {
+    setIsBrushing(false);
+  };
+
+  const handleUndoBrush = () => {
+    if (!manualMaskRef.current || brushHistory.length === 0) return;
+    const prevSnap = brushHistory[brushHistory.length - 1];
+    setBrushHistory(prev => prev.slice(0, -1));
+    const maskCtx = manualMaskRef.current.getContext('2d');
+    maskCtx.putImageData(prevSnap, 0, 0);
+    setMaskVersion(v => v + 1);
+  };
+
+  const handleResetBrush = () => {
+    if (!manualMaskRef.current) return;
+    const maskCtx = manualMaskRef.current.getContext('2d');
+    maskCtx.clearRect(0, 0, manualMaskRef.current.width, manualMaskRef.current.height);
+    setBrushHistory([]);
+    setMaskVersion(v => v + 1);
+  };
 
   // Klik Pipet Warna
   const handleCanvasClick = (e) => {
     if (!isPickingColor || !canvasRef.current || !originalImgRef.current) return;
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    const x = Math.floor((e.clientX - rect.left) * scaleX);
-    const y = Math.floor((e.clientY - rect.top) * scaleY);
+    const coords = getCanvasCoords(e);
+    if (!coords) return;
 
     const off = document.createElement('canvas');
-    off.width = canvas.width;
-    off.height = canvas.height;
+    off.width = canvasRef.current.width;
+    off.height = canvasRef.current.height;
     const ctx = off.getContext('2d');
     ctx.drawImage(originalImgRef.current, 0, 0);
-    const pixel = ctx.getImageData(x, y, 1, 1).data;
+    const pixel = ctx.getImageData(coords.x, coords.y, 1, 1).data;
 
     setKeyColor({ r: pixel[0], g: pixel[1], b: pixel[2] });
     setIsPickingColor(false);
@@ -364,7 +485,22 @@ export default function BgRemoverScreen({ onBack }) {
 
       {/* Upload Box jika belum ada gambar */}
       {!imageSrc ? (
-        <div className="w-full max-w-xl rounded-xl p-8 sm:p-10 flex flex-col items-center justify-center text-center border-2 border-dashed border-black bg-white shadow-[4px_4px_0px_#000000]">
+        <div 
+          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+            const file = e.dataTransfer?.files?.[0];
+            if (file) processImageFile(file);
+          }}
+          className={`w-full max-w-xl rounded-xl p-8 sm:p-10 flex flex-col items-center justify-center text-center border-2 border-dashed transition-all duration-150 ${
+            isDragging 
+              ? 'border-black bg-neutral-100 shadow-[6px_6px_0px_#000000] scale-[1.01]' 
+              : 'border-black bg-white shadow-[4px_4px_0px_#000000]'
+          }`}
+        >
           <input
             type="file"
             accept="image/*"
@@ -373,14 +509,16 @@ export default function BgRemoverScreen({ onBack }) {
             className="hidden"
           />
           <label htmlFor="bg-upload-input" className="cursor-pointer flex flex-col items-center">
-            <div className="w-14 h-14 rounded-lg bg-neutral-100 border-2 border-black flex items-center justify-center text-black mb-3">
+            <div className={`w-14 h-14 rounded-lg border-2 border-black flex items-center justify-center text-black mb-3 transition-colors ${
+              isDragging ? 'bg-black text-white' : 'bg-neutral-100'
+            }`}>
               <Upload className="w-7 h-7 stroke-[2.2]" />
             </div>
             <h3 className="text-base sm:text-lg font-extrabold text-black mb-1 font-sans">
-              Pilih Foto atau Logo Sekolah
+              {isDragging ? 'Lepaskan Foto di Sini' : 'Pilih atau Geser (Drag & Drop) Foto'}
             </h3>
             <p className="text-xs text-neutral-600 max-w-sm mb-4">
-              Cocok untuk logo sekolah dengan background putih, foto selfie, produk, dan pas foto ijazah/KTP.
+              Tarik foto langsung dari file manager PC, atau klik tombol untuk memilih logo sekolah, foto produk, dan pas foto.
             </p>
             <span className="px-5 py-2.5 rounded-lg border-2 border-black bg-black text-white hover:bg-neutral-800 font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all">
               Pilih File Gambar
@@ -405,13 +543,141 @@ export default function BgRemoverScreen({ onBack }) {
                 </div>
               )}
 
+              {/* Petunjuk Kuas Aktif */}
+              {brushMode !== 'none' && !isPickingColor && (
+                <div className={`absolute top-4 inset-x-4 z-20 p-2.5 rounded-xl text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xl ${
+                  brushMode === 'restore' ? 'bg-emerald-600' : 'bg-rose-600'
+                }`}>
+                  <Paintbrush className="w-4 h-4" />
+                  <span>
+                    {brushMode === 'restore' 
+                      ? 'Sapukan kuas pada bagian objek asli (misal gagang pedang) yang ingin dipulihkan!'
+                      : 'Sapukan kuas pada sisa background yang ingin dihapus bersih!'}
+                  </span>
+                </div>
+              )}
+
               <canvas
                 ref={canvasRef}
                 onClick={handleCanvasClick}
+                onMouseDown={handleBrushStart}
+                onMouseMove={handleBrushMove}
+                onMouseUp={handleBrushEnd}
+                onMouseLeave={handleBrushEnd}
+                onTouchStart={handleBrushStart}
+                onTouchMove={handleBrushMove}
+                onTouchEnd={handleBrushEnd}
                 className={`max-w-full max-h-[460px] object-contain rounded-xl shadow-xl transition-all ${
-                  isPickingColor ? 'cursor-crosshair ring-2 ring-emerald-400' : ''
+                  isPickingColor 
+                    ? 'cursor-crosshair ring-2 ring-emerald-400' 
+                    : brushMode === 'restore'
+                    ? 'cursor-crosshair ring-2 ring-emerald-500'
+                    : brushMode === 'erase'
+                    ? 'cursor-crosshair ring-2 ring-rose-500'
+                    : ''
                 }`}
               />
+            </div>
+
+            {/* Panel Alat Kuas Manual (Pulihkan Objek & Hapus Sisa Latar) */}
+            <div className="w-full rounded-xl p-3 sm:p-4 border-2 border-black bg-white shadow-[3px_3px_0px_#000000] flex flex-col gap-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-1.5 font-extrabold text-xs text-black">
+                  <Paintbrush className="w-4 h-4 stroke-[2.5]" />
+                  <span>Alat Kuas (Perbaiki Bagian Objek):</span>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleUndoBrush}
+                    disabled={brushHistory.length === 0}
+                    className="px-2.5 py-1 rounded border border-black bg-neutral-100 hover:bg-neutral-200 disabled:opacity-40 text-black text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs"
+                    title="Urungkan sapuan kuas terakhir"
+                  >
+                    <Undo2 className="w-3 h-3 stroke-[2.5]" />
+                    <span>Undo</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetBrush}
+                    className="px-2.5 py-1 rounded border border-black bg-neutral-100 hover:bg-neutral-200 text-black text-[11px] font-bold transition-all cursor-pointer shadow-xs"
+                    title="Kembalikan ke potongan AI semula"
+                  >
+                    Reset Kuas
+                  </button>
+                </div>
+              </div>
+
+              {/* Mode Kuas: Nonaktif / Pulihkan / Hapus */}
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBrushMode('none')}
+                  className={`py-2 px-2 rounded-lg border-2 border-black text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    brushMode === 'none'
+                      ? 'bg-black text-white shadow-[2px_2px_0px_#000000]'
+                      : 'bg-white text-black hover:bg-neutral-100'
+                  }`}
+                >
+                  <span>Nonaktif</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBrushMode('restore')}
+                  className={`py-2 px-2 rounded-lg border-2 border-black text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    brushMode === 'restore'
+                      ? 'bg-emerald-600 text-white shadow-[2px_2px_0px_#000000]'
+                      : 'bg-white text-emerald-700 hover:bg-emerald-50'
+                  }`}
+                  title="Sapukan kuas untuk mengembalikan objek asli yang terpotong (misal gagang pedang)"
+                >
+                  <Paintbrush className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Kuas Pulihkan</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBrushMode('erase')}
+                  className={`py-2 px-2 rounded-lg border-2 border-black text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                    brushMode === 'erase'
+                      ? 'bg-rose-600 text-white shadow-[2px_2px_0px_#000000]'
+                      : 'bg-white text-rose-700 hover:bg-rose-50'
+                  }`}
+                  title="Sapukan kuas untuk menghapus noda atau sisa background yang belum bersih"
+                >
+                  <Eraser className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Kuas Hapus</span>
+                </button>
+              </div>
+
+              {/* Slider Ukuran Kuas */}
+              {brushMode !== 'none' && (
+                <div className="flex items-center gap-3 pt-2 border-t border-neutral-200">
+                  <span className="text-[11px] font-bold text-neutral-700 whitespace-nowrap">
+                    Ukuran Kuas ({brushSize}px):
+                  </span>
+                  <input
+                    type="range"
+                    min="5"
+                    max="100"
+                    value={brushSize}
+                    onChange={(e) => setBrushSize(parseInt(e.target.value, 10))}
+                    className="flex-1 accent-black cursor-pointer"
+                  />
+                  <div 
+                    className="w-6 h-6 rounded-full border border-black bg-neutral-200 flex items-center justify-center shrink-0"
+                    title={`Ukuran: ${brushSize}px`}
+                  >
+                    <span 
+                      className="rounded-full bg-black block" 
+                      style={{ width: `${Math.max(3, Math.min(18, brushSize / 4))}px`, height: `${Math.max(3, Math.min(18, brushSize / 4))}px` }} 
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Status Bar Pipet & Ukuran */}
