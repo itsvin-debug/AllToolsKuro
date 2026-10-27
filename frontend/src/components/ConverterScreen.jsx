@@ -9,7 +9,6 @@ import {
   Camera, 
   Play, 
   AlertCircle,
-  ChevronDown,
   Loader2,
   ArrowRight,
   Music,
@@ -37,7 +36,6 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   const [resultData, setResultData] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [suggestedPlatform, setSuggestedPlatform] = useState(null);
-  const [selectedFormat, setSelectedFormat] = useState('1080p');
 
   useEffect(() => {
     setActivePlatform(initialPlatform);
@@ -468,42 +466,24 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
               </div>
             )}
 
-            {/* Format & Submit Button */}
-            <div className="flex flex-col sm:flex-row gap-2.5 w-full">
-              <div className="relative sm:w-64">
-                <select
-                  value={selectedFormat}
-                  onChange={(e) => setSelectedFormat(e.target.value)}
-                  className="w-full appearance-none bg-white border-2 border-black text-black text-xs sm:text-sm rounded-lg py-3 px-3.5 pr-9 cursor-pointer font-bold focus:outline-none focus:ring-2 focus:ring-black"
-                >
-                  <option value="2160p">4K Ultra HD {isEn ? '(2160p Ultra Crisp)' : '(2160p Jernih Maksimal)'}</option>
-                  <option value="1080p">HD 1080p {isEn ? '(WhatsApp Status Anti-Burik)' : '(Rekomendasi Status WA - Anti Burik)'}</option>
-                  <option value="720p">HD 720p {isEn ? '(Fast Standard)' : '(Standar Cepat)'}</option>
-                  <option value="mp3">Audio MP3 {isEn ? '(Extract Sound)' : '(Ekstrak Suara)'}</option>
-                </select>
-                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-black">
-                  <ChevronDown className="w-4 h-4 stroke-[2.5]" />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-grow bg-black hover:bg-neutral-800 text-white font-extrabold text-xs sm:text-sm rounded-lg px-6 py-3 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>{dl.processingButton} {downloadProgress}%</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-4 h-4 stroke-[2.5]" />
-                    <span>{dl.downloadButton} ({currentMeta.name})</span>
-                  </>
-                )}
-              </button>
-            </div>
+            {/* Submit Action Button */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-black hover:bg-neutral-800 text-white font-extrabold text-xs sm:text-sm rounded-lg px-6 py-3.5 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  <span>{dl.processingButton} {downloadProgress}%</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-4 h-4 stroke-[2.5]" />
+                  <span>{dl.downloadButton} ({currentMeta.name})</span>
+                </>
+              )}
+            </button>
 
           </form>
 

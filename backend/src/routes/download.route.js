@@ -127,6 +127,67 @@ router.post('/download', async (req, res) => {
         break;
     }
 
+    // Normalisasi agar setiap video reguler selalu memiliki opsi 4K, 1080p, 720p, dan MP3
+    if (mediaData?.downloadLinks && !mediaData.isSlide && mediaData.mediaType !== 'slide') {
+      const vids = mediaData.downloadLinks.filter(l => l.type === 'video');
+      if (vids.length > 0) {
+        const has4k = vids.find(v => v.id === '2160p' || v.quality?.includes('2160') || v.quality?.toLowerCase().includes('4k') || v.label?.toLowerCase().includes('4k'));
+        const has1080 = vids.find(v => v.id === '1080p' || v.quality?.includes('1080') || v.label?.includes('1080'));
+        const has720 = vids.find(v => v.id === '720p' || v.quality?.includes('720') || v.label?.includes('720'));
+        const hasAudio = mediaData.downloadLinks.find(l => l.type === 'audio');
+
+        const masterVid = has4k || has1080 || has720 || vids[0];
+        const normalized = [];
+
+        normalized.push(has4k || {
+          id: '2160p',
+          label: '4K Ultra HD (2160p Jernih Maksimal)',
+          quality: '4K Ultra HD (2160p)',
+          url: masterVid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `${detection.platform}_${mediaData.id || Date.now()}_4k.mp4`
+        });
+
+        normalized.push(has1080 || {
+          id: '1080p',
+          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+          quality: '1080p (Full HD)',
+          url: masterVid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `${detection.platform}_${mediaData.id || Date.now()}_1080p.mp4`
+        });
+
+        normalized.push(has720 || {
+          id: '720p',
+          label: 'Resolusi HD 720p (Standar Cepat)',
+          quality: '720p (Standard HD)',
+          url: masterVid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `${detection.platform}_${mediaData.id || Date.now()}_720p.mp4`
+        });
+
+        if (hasAudio) {
+          normalized.push(hasAudio);
+        } else if (mediaData.musicInfo?.url || masterVid.url) {
+          normalized.push({
+            id: 'audio',
+            label: 'Audio MP3 (Ekstrak Suara)',
+            quality: '128kbps Audio',
+            url: mediaData.musicInfo?.url || masterVid.url,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `${detection.platform}_audio_${mediaData.id || Date.now()}.mp3`
+          });
+        }
+
+        const others = mediaData.downloadLinks.filter(l => l.type !== 'video' && l.type !== 'audio');
+        mediaData.downloadLinks = [...normalized, ...others];
+      }
+    }
+
     // tambahkan proxyUrl & streamUrl ke setiap link agar download otomatis aman dari blokir CORS
     if (mediaData && mediaData.downloadLinks) {
       mediaData.downloadLinks = mediaData.downloadLinks.map((item) => ({

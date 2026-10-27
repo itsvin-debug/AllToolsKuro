@@ -301,8 +301,17 @@ export async function downloadTikTok(rawUrl) {
 
       if (fullHdUrl || standardPlayUrl) {
         downloadLinks.push({
+          id: '2160p',
+          label: '4K Ultra HD (2160p Jernih Maksimal)',
+          quality: '4K Ultra HD (2160p)',
+          url: fullHdUrl || standardPlayUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `tiktok_${item.id || Date.now()}_4k.mp4`
+        });
+        downloadLinks.push({
           id: '1080p',
-          label: 'Resolusi HD 1080p',
+          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
           quality: '1080p (Full HD)',
           url: fullHdUrl || standardPlayUrl,
           type: 'video',
@@ -314,7 +323,7 @@ export async function downloadTikTok(rawUrl) {
       if (standardPlayUrl || fullHdUrl) {
         downloadLinks.push({
           id: '720p',
-          label: 'Resolusi HD 720p',
+          label: 'Resolusi HD 720p (Standar Cepat)',
           quality: '720p (Standard HD)',
           url: standardPlayUrl || fullHdUrl,
           type: 'video',

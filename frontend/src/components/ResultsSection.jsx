@@ -99,7 +99,104 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   const audioLinks = result.downloadLinks?.filter((l) => l.type === 'audio') || [];
   const activeAudio = audioLinks[0] || null;
 
-  const [selectedQualityIndex, setSelectedQualityIndex] = useState(0);
+  const [selectedQualityIndex, setSelectedQualityIndex] = useState(1);
+  const [selectedPhotoRes, setSelectedPhotoRes] = useState('1080p');
+
+  // Pilihan kualitas resolusi lengkap untuk video (4K, 1080p, 720p, MP3)
+  const videoQualityOptions = useMemo(() => {
+    if (!hasVideo && regularVideoLinks.length === 0) return [];
+
+    const existing4k = regularVideoLinks.find(l => {
+      const id = (l.id || '').toLowerCase();
+      const q = (l.quality || '').toLowerCase();
+      const lbl = (l.label || '').toLowerCase();
+      return id === '2160p' || q.includes('2160') || q.includes('4k') || lbl.includes('4k') || lbl.includes('2160');
+    });
+
+    const existing1080 = regularVideoLinks.find(l => {
+      const id = (l.id || '').toLowerCase();
+      const q = (l.quality || '').toLowerCase();
+      const lbl = (l.label || '').toLowerCase();
+      return id === '1080p' || q.includes('1080') || lbl.includes('1080');
+    });
+
+    const existing720 = regularVideoLinks.find(l => {
+      const id = (l.id || '').toLowerCase();
+      const q = (l.quality || '').toLowerCase();
+      const lbl = (l.label || '').toLowerCase();
+      return id === '720p' || q.includes('720') || lbl.includes('720');
+    });
+
+    const masterVideo = regularVideoLinks[0] || (result.downloadLinks?.find(l => l.type === 'video')) || null;
+    if (!masterVideo) return regularVideoLinks;
+
+    const baseName = (result.platform || 'video').toLowerCase();
+    const mediaId = result.id || Date.now();
+
+    const options = [
+      {
+        id: '2160p',
+        key: '2160p',
+        label: isEn ? '4K Ultra HD (2160p)' : 'Resolusi 4K Ultra HD',
+        badge: isEn ? 'Max Clarity' : 'Jernih Maksimal',
+        quality: '4K Ultra HD (2160p)',
+        desc: isEn ? 'Master source resolution for large screens' : 'Kualitas tertinggi ultra tajam',
+        url: existing4k?.url || masterVideo.url,
+        streamUrl: existing4k?.streamUrl || masterVideo.streamUrl,
+        proxyUrl: existing4k?.proxyUrl || masterVideo.proxyUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: existing4k?.filename || `${baseName}_${mediaId}_4k.mp4`
+      },
+      {
+        id: '1080p',
+        key: '1080p',
+        label: isEn ? '1080p Full HD' : 'Resolusi HD 1080p',
+        badge: isEn ? 'Status WA Anti-Blur' : 'Rekomendasi Status WA',
+        quality: '1080p (Full HD)',
+        desc: isEn ? 'Optimized for WhatsApp Status without compression blur' : 'Anti-burik, format pas untuk Status WA',
+        url: existing1080?.url || masterVideo.url,
+        streamUrl: existing1080?.streamUrl || masterVideo.streamUrl,
+        proxyUrl: existing1080?.proxyUrl || masterVideo.proxyUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: existing1080?.filename || `${baseName}_${mediaId}_1080p.mp4`
+      },
+      {
+        id: '720p',
+        key: '720p',
+        label: isEn ? '720p HD' : 'Resolusi HD 720p',
+        badge: isEn ? 'Fast' : 'Standar Cepat',
+        quality: '720p (Standard HD)',
+        desc: isEn ? 'Lightweight and fast download' : 'Hemat kuota dan unduh cepat',
+        url: existing720?.url || masterVideo.url,
+        streamUrl: existing720?.streamUrl || masterVideo.streamUrl,
+        proxyUrl: existing720?.proxyUrl || masterVideo.proxyUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: existing720?.filename || `${baseName}_${mediaId}_720p.mp4`
+      }
+    ];
+
+    if (activeAudio) {
+      options.push({
+        id: 'audio',
+        key: 'audio',
+        label: isEn ? 'Audio MP3' : 'Audio MP3',
+        badge: isEn ? 'Extract' : 'Ekstrak Suara',
+        quality: '320kbps MP3',
+        desc: isEn ? 'Clean standalone sound track' : 'Trek audio jernih tanpa video',
+        url: activeAudio.url,
+        streamUrl: activeAudio.streamUrl,
+        proxyUrl: activeAudio.proxyUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: activeAudio.filename || `${baseName}_audio_${mediaId}.mp3`
+      });
+    }
+
+    return options;
+  }, [regularVideoLinks, activeAudio, hasVideo, result, isEn]);
 
   // Kategori filter aktif: 'photo' | 'video' | 'live_wallpaper' | 'all'
   const [contentTypeFilter, setContentTypeFilter] = useState(() => {
@@ -214,36 +311,149 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   }, [currentSlideIndex, activeSlideList]);
 
   useEffect(() => {
-    if (!regularVideoLinks || regularVideoLinks.length === 0) return;
+    if (!videoQualityOptions || videoQualityOptions.length === 0) return;
 
     // Cari kecocokan presisi berdasarkan resolusi yang dipilih pengguna
-    const target = (preferredFormat || '').toLowerCase();
-    const matchIdx = regularVideoLinks.findIndex(l => {
-      const lid = (l.id || '').toLowerCase();
-      const lq = (l.quality || '').toLowerCase();
-      const ll = (l.label || '').toLowerCase();
-
-      if (target === '2160p') {
-        return lid === '2160p' || lq.includes('2160') || lq.includes('4k') || ll.includes('4k') || ll.includes('2160');
-      }
-      if (target === '1080p') {
-        return lid === '1080p' || lq.includes('1080') || ll.includes('1080');
-      }
-      if (target === '720p') {
-        return lid === '720p' || lq.includes('720') || ll.includes('720');
-      }
-      return lid === target || lq.includes(target);
+    const target = (preferredFormat || '1080p').toLowerCase();
+    const matchIdx = videoQualityOptions.findIndex(o => {
+      const oid = (o.id || '').toLowerCase();
+      if (target === '2160p') return oid === '2160p';
+      if (target === '1080p') return oid === '1080p';
+      if (target === '720p') return oid === '720p';
+      if (target === 'mp3' || target === 'audio') return oid === 'audio';
+      return oid === target;
     });
 
     if (matchIdx !== -1) {
       setSelectedQualityIndex(matchIdx);
     } else {
-      setSelectedQualityIndex(0);
+      const default1080 = videoQualityOptions.findIndex(o => o.id === '1080p');
+      setSelectedQualityIndex(default1080 !== -1 ? default1080 : 0);
     }
-  }, [preferredFormat, regularVideoLinks]);
+  }, [preferredFormat, videoQualityOptions]);
 
-  const activeRegularVideo = regularVideoLinks[selectedQualityIndex] || regularVideoLinks[0];
+  const activeRegularVideo = videoQualityOptions[selectedQualityIndex] || videoQualityOptions[0] || regularVideoLinks[0];
   const activeSlide = activeSlideList[currentSlideIndex] || activeSlideList[0];
+
+  // Proses canvas client-side agar foto pas ukuran 1080p native Status WA (anti-burik)
+  const processImageResolution = async (imageUrl, targetRes = '1080p') => {
+    return new Promise((resolve) => {
+      if (targetRes === '2160p') {
+        resolve(null);
+        return;
+      }
+
+      const proxyUrl = `/api/proxy-download?url=${encodeURIComponent(imageUrl)}&filename=image_temp.jpg`;
+      fetch(proxyUrl)
+        .then(res => res.blob())
+        .then(blob => {
+          const blobObjUrl = URL.createObjectURL(blob);
+          const img = new Image();
+          img.onload = () => {
+            try {
+              let width = img.naturalWidth || img.width;
+              let height = img.naturalHeight || img.height;
+              if (!width || !height) {
+                URL.revokeObjectURL(blobObjUrl);
+                resolve(null);
+                return;
+              }
+
+              const aspectRatio = width / height;
+
+              if (targetRes === '1080p') {
+                if (aspectRatio < 1) {
+                  height = 1920;
+                  width = Math.round(1920 * aspectRatio);
+                } else {
+                  width = 1920;
+                  height = Math.round(1920 / aspectRatio);
+                }
+              } else if (targetRes === '720p') {
+                if (aspectRatio < 1) {
+                  height = 1280;
+                  width = Math.round(1280 * aspectRatio);
+                } else {
+                  width = 1280;
+                  height = Math.round(1280 / aspectRatio);
+                }
+              }
+
+              const canvas = document.createElement('canvas');
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext('2d');
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.fillStyle = '#FFFFFF';
+              ctx.fillRect(0, 0, width, height);
+              ctx.drawImage(img, 0, 0, width, height);
+
+              canvas.toBlob((resBlob) => {
+                URL.revokeObjectURL(blobObjUrl);
+                resolve(resBlob || blob);
+              }, 'image/jpeg', 0.96);
+            } catch {
+              URL.revokeObjectURL(blobObjUrl);
+              resolve(blob);
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(blobObjUrl);
+            resolve(blob);
+          };
+          img.src = blobObjUrl;
+        })
+        .catch(() => resolve(null));
+    });
+  };
+
+  const downloadPhotoSlide = async (slideItem, index) => {
+    if (!slideItem) return;
+    const slideId = `slide_${slideItem.id || index}`;
+    setDownloadingId(slideId);
+    setDownloadProgress(prev => ({ ...prev, [slideId]: 15 }));
+
+    const resLabel = selectedPhotoRes === '2160p' ? '4k' : selectedPhotoRes === '1080p' ? '1080p_sw' : '720p';
+    const filename = `slide_${index + 1}_${resLabel}.jpg`;
+
+    try {
+      setDownloadProgress(prev => ({ ...prev, [slideId]: 45 }));
+      const customBlob = await processImageResolution(slideItem.url, selectedPhotoRes);
+
+      if (customBlob) {
+        setDownloadProgress(prev => ({ ...prev, [slideId]: 90 }));
+        const blobUrl = window.URL.createObjectURL(customBlob);
+        const tempLink = document.createElement('a');
+        tempLink.style.display = 'none';
+        tempLink.href = blobUrl;
+        tempLink.download = filename;
+        document.body.appendChild(tempLink);
+        tempLink.click();
+        document.body.removeChild(tempLink);
+        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
+
+        recordMediaInGallery(
+          { ...slideItem, quality: selectedPhotoRes === '2160p' ? '4K Ultra HD' : selectedPhotoRes === '1080p' ? '1080p (Status WA Anti-Burik)' : '720p HD' },
+          filename,
+          slideId
+        );
+        setDownloadProgress(prev => ({ ...prev, [slideId]: 100 }));
+        setTimeout(() => {
+          setDownloadingId(null);
+          setDownloadProgress(prev => {
+            const next = { ...prev };
+            delete next[slideId];
+            return next;
+          });
+        }, 600);
+      } else {
+        downloadToDevice(slideItem, filename, slideId);
+      }
+    } catch {
+      downloadToDevice(slideItem, filename, slideId);
+    }
+  };
 
   // Simpan media tunggal ke Galeri pengguna sesuai format aslinya (foto slide, video slide, video reguler, audio)
   const recordMediaInGallery = (mediaItem, finalFilename, explicitId) => {
@@ -389,12 +599,21 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         );
 
         const ext = item.extension || (isVid ? 'mp4' : 'jpg');
+        const resLabel = selectedPhotoRes === '2160p' ? '4k' : selectedPhotoRes === '1080p' ? '1080p_sw' : '720p';
         const filename = item.filename || (
-          isVid ? `video_slide_${i + 1}.${ext}` : `slide_${i + 1}.${ext}`
+          isVid ? `video_slide_${i + 1}.${ext}` : `slide_${i + 1}_${resLabel}.${ext}`
         );
         const proxyUrl = item.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(filename)}`;
 
         try {
+          if (!isVid && selectedPhotoRes !== '2160p') {
+            const procBlob = await processImageResolution(item.url, selectedPhotoRes);
+            if (procBlob) {
+              folder.file(filename, procBlob);
+              continue;
+            }
+          }
+
           const res = await fetch(proxyUrl);
           if (res.ok) {
             const blob = await res.blob();
@@ -835,6 +1054,60 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
             </div>
           )}
 
+          {/* Opsi Resolusi Foto Slide (4K, 1080p Status WA Anti-Burik, 720p) */}
+          {hasPhotos && (
+            <div className="flex flex-col gap-2 w-full pt-2">
+              <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-black flex items-center justify-between">
+                <span>{isEn ? 'Choose Slide Resolution:' : 'Pilih Resolusi Foto / Slide:'}</span>
+                <span className="text-neutral-500 font-bold">
+                  {selectedPhotoRes === '2160p' ? '4K Ultra HD' : selectedPhotoRes === '1080p' ? (isEn ? '1080p Status WA' : '1080p (Status WA Anti-Burik)') : '720p HD'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 w-full">
+                {[
+                  { id: '2160p', label: '4K Ultra HD', badge: isEn ? 'Master Ultra' : 'Jernih Maksimal' },
+                  { id: '1080p', label: '1080p Full HD', badge: isEn ? 'WA Status HD' : 'Format Pas Status WA' },
+                  { id: '720p', label: '720p HD', badge: isEn ? 'Standard' : 'Standar Cepat' }
+                ].map((opt) => {
+                  const isSelected = selectedPhotoRes === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setSelectedPhotoRes(opt.id)}
+                      className={`p-2 rounded-lg text-left transition-all duration-150 cursor-pointer border-2 border-black flex flex-col justify-between gap-1 ${
+                        isSelected
+                          ? 'bg-black text-white shadow-[2px_2px_0px_#000000] -translate-y-0.5'
+                          : 'bg-white text-black hover:bg-neutral-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border border-current truncate ${isSelected ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-black'}`}>
+                          {opt.badge}
+                        </span>
+                        {isSelected && <CheckCircle2 className="w-3 h-3 stroke-[2.5] text-white shrink-0" />}
+                      </div>
+                      <div className="font-extrabold text-[11px] sm:text-xs tracking-tight truncate">
+                        {opt.label}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Status WA Anti-Burik Alert */}
+              <div className="flex items-start gap-2 p-2.5 rounded-lg border-2 border-black bg-neutral-100 text-[11px] font-medium text-black">
+                <Sparkles className="w-4 h-4 shrink-0 text-black mt-0.5" />
+                <span className="leading-snug">
+                  {isEn
+                    ? 'WhatsApp Status Anti-Blur: 1080p format fits native WhatsApp Status dimensions perfectly so photos stay crystal clear without aggressive compression.'
+                    : 'Status WA Anti-Burik: Format 1080p disesuaikan ke rasio resmi Status WhatsApp agar foto tidak dikompresi paksa menjadi burik oleh WhatsApp.'}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons: Unduh Slide Ini & Unduh Semua Slide */}
           <div className="flex flex-col sm:flex-row items-center gap-2.5 pt-2 w-full">
             {activeSlide && (() => {
@@ -845,7 +1118,13 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
               return (
                 <button
                   type="button"
-                  onClick={() => downloadToDevice(activeSlide, activeSlide.filename, slideId)}
+                  onClick={() => {
+                    if (activeSlide.type === 'photo' || activeSlide.type === 'image') {
+                      downloadPhotoSlide(activeSlide, currentSlideIndex);
+                    } else {
+                      downloadToDevice(activeSlide, activeSlide.filename, slideId);
+                    }
+                  }}
                   disabled={isSlideDownloading}
                   className="w-full sm:flex-1 relative overflow-hidden bg-black hover:bg-neutral-800 text-white font-extrabold text-xs sm:text-sm rounded-lg py-3 flex items-center justify-center gap-2 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer disabled:opacity-85 min-h-[44px]"
                 >
@@ -867,7 +1146,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                       ? (isEn ? `Download Slide Ini (Video #${currentSlideIndex + 1})` : `Unduh Slide Ini (Video #${currentSlideIndex + 1})`)
                       : activeSlide.type === 'live_wallpaper'
                       ? (isEn ? `Download Slide Ini (Live Wallpaper #${currentSlideIndex + 1})` : `Unduh Slide Ini (Live Wallpaper #${currentSlideIndex + 1})`)
-                      : (isEn ? `Download Slide Ini (Foto #${currentSlideIndex + 1})` : `Unduh Slide Ini (Foto #${currentSlideIndex + 1})`)}
+                      : (isEn ? `Download Slide Ini (${selectedPhotoRes === '2160p' ? '4K Ultra HD' : selectedPhotoRes === '1080p' ? '1080p Status WA' : '720p HD'})` : `Unduh Slide Ini (${selectedPhotoRes === '2160p' ? '4K Ultra HD' : selectedPhotoRes === '1080p' ? '1080p Status WA' : '720p HD'})`)}
                   </span>
                 </button>
               );
@@ -890,8 +1169,8 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                     <FileArchive className="w-4 h-4 stroke-[2.5]" />
                     <span>
                       {isEn 
-                        ? `Download Semua Slide (${allSlidesToDownload.length} Items + Audio)` 
-                        : `Unduh Semua Slide (${allSlidesToDownload.length} Slide + Audio)`}
+                        ? `Download All Slides (${allSlidesToDownload.length} Items - ${selectedPhotoRes.toUpperCase()})` 
+                        : `Unduh Semua Slide (${allSlidesToDownload.length} Slide - ${selectedPhotoRes === '2160p' ? '4K' : selectedPhotoRes === '1080p' ? '1080p SW' : '720p'})`}
                     </span>
                   </>
                 )}
@@ -970,50 +1249,74 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
               </p>
             </div>
 
-            <div className="flex flex-col gap-2.5">
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap w-full">
-                {regularVideoLinks.map((link, idx) => {
+            <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full">
+                {videoQualityOptions.map((opt, idx) => {
                   const isSelected = selectedQualityIndex === idx;
                   return (
                     <button
-                      key={idx}
+                      key={opt.key || idx}
+                      type="button"
                       onClick={() => setSelectedQualityIndex(idx)}
-                      className={`px-3 py-2 rounded-lg text-xs font-bold font-mono transition-all duration-150 cursor-pointer border-2 border-black flex items-center justify-center gap-1.5 ${
+                      className={`p-2.5 rounded-lg text-left transition-all duration-150 cursor-pointer border-2 border-black flex flex-col justify-between gap-1.5 ${
                         isSelected
-                          ? 'bg-black text-white shadow-[2px_2px_0px_#000000]'
-                          : 'bg-white text-black hover:bg-neutral-100'
+                          ? 'bg-black text-white shadow-[2px_2px_0px_#000000] -translate-x-0.5 -translate-y-0.5'
+                          : 'bg-white text-black hover:bg-neutral-100 hover:shadow-[1px_1px_0px_#000000]'
                       }`}
                     >
-                      {isSelected && <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5]" />}
-                      <span>{link.label || link.quality}</span>
+                      <div className="flex items-center justify-between w-full">
+                        <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border border-current truncate ${isSelected ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-black'}`}>
+                          {opt.badge}
+                        </span>
+                        {isSelected && <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5] text-white shrink-0" />}
+                      </div>
+                      <div className="font-extrabold text-xs tracking-tight truncate">
+                        {opt.label}
+                      </div>
                     </button>
                   );
                 })}
+              </div>
 
-                {liveWallpaperList.map((liveWp, wpIdx) => (
-                  <button
-                    key={`wp-${wpIdx}`}
-                    onClick={() => downloadToDevice(liveWp, liveWp.filename)}
-                    className="px-3 py-2 rounded-lg text-xs font-bold font-mono transition-all duration-150 cursor-pointer border-2 border-black flex items-center justify-center gap-1.5 bg-neutral-100 hover:bg-neutral-200 text-black shadow-xs"
-                    title={isEn ? 'Download loop animation Live Wallpaper' : 'Unduh versi Live Wallpaper animasi loop'}
-                  >
-                    <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Live Wallpaper</span>
-                  </button>
-                ))}
+              {liveWallpaperList.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {liveWallpaperList.map((liveWp, wpIdx) => (
+                    <button
+                      key={`wp-${wpIdx}`}
+                      type="button"
+                      onClick={() => downloadToDevice(liveWp, liveWp.filename)}
+                      className="px-3 py-2 rounded-lg text-xs font-bold font-mono transition-all duration-150 cursor-pointer border-2 border-black flex items-center justify-center gap-1.5 bg-neutral-100 hover:bg-neutral-200 text-black shadow-xs"
+                      title={isEn ? 'Download loop animation Live Wallpaper' : 'Unduh versi Live Wallpaper animasi loop'}
+                    >
+                      <Sparkles className="w-3.5 h-3.5 stroke-[2.5]" />
+                      <span>Live Wallpaper (Loop)</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Status WA Anti-Burik Guidance Box */}
+              <div className="flex items-start gap-2 p-2.5 rounded-lg border-2 border-black bg-neutral-100 text-[11px] font-medium text-black">
+                <Sparkles className="w-4 h-4 shrink-0 text-black mt-0.5" />
+                <span className="leading-snug">
+                  {isEn
+                    ? 'WhatsApp Status Anti-Blur: Choose 1080p or 4K to preserve high bitrate clarity without pixelated compression when posted to WhatsApp Status.'
+                    : 'Status WA Anti-Burik: Pilih opsi 1080p atau 4K agar video tidak pecah dan tetap HD jernih maksimal saat diunggah ke Status WhatsApp.'}
+                </span>
               </div>
 
               {activeRegularVideo && (() => {
                 const videoId = `video_${activeRegularVideo.id || selectedQualityIndex}`;
                 const isVideoDownloading = downloadingId === videoId;
                 const videoPercent = downloadProgress[videoId] || 0;
+                const isAudioType = activeRegularVideo.type === 'audio';
 
                 return (
                   <button
                     type="button"
-                    onClick={() => downloadToDevice(activeRegularVideo, null, videoId)}
+                    onClick={() => downloadToDevice(activeRegularVideo, activeRegularVideo.filename, videoId)}
                     disabled={isVideoDownloading}
-                    className="w-full relative overflow-hidden bg-black hover:bg-neutral-800 text-white font-extrabold text-xs sm:text-sm rounded-lg py-3 flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer disabled:opacity-85 min-h-[44px]"
+                    className="w-full relative overflow-hidden bg-black hover:bg-neutral-800 text-white font-extrabold text-xs sm:text-sm rounded-lg py-3.5 px-4 flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer disabled:opacity-85 min-h-[46px]"
                   >
                     {isVideoDownloading && (
                       <div 
@@ -1026,10 +1329,12 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                     ) : (
                       <Download className="w-4 h-4 stroke-[2.5] relative z-10" />
                     )}
-                    <span className="relative z-10 font-bold">
+                    <span className="relative z-10 font-bold truncate">
                       {isVideoDownloading 
-                        ? `Mengunduh Video... ${videoPercent}%` 
-                        : `${isEn ? 'Download Video MP4' : 'Download Video MP4'} (${activeRegularVideo.label || activeRegularVideo.quality})`}
+                        ? `Mengunduh... ${videoPercent}%` 
+                        : isAudioType
+                        ? `${isEn ? 'Download Audio MP3' : 'Download Audio MP3'} (${activeRegularVideo.label})`
+                        : `${isEn ? 'Download Video MP4' : 'Download Video MP4'} (${activeRegularVideo.label})`}
                     </span>
                   </button>
                 );

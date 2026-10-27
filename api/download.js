@@ -37,7 +37,7 @@ function detectPlatform(rawUrl) {
 }
 
 // Fallback via SaveNow API.
-async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], defaultTitle = 'Media Video', fallbackAuthor = 'Creator') {
+async function scrapeViaSaveNow(targetUrl, formatList = ['2160', '1080', '720', 'mp3'], defaultTitle = 'Media Video', fallbackAuthor = 'Creator') {
   try {
     const initPromises = formatList.map(async fmt => {
       try {
@@ -83,11 +83,25 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], 
 
         const effectiveUrl = finalUrl || task.progressUrl; 
         const isAudio = task.format === 'mp3';
+        const is4k = task.format === '2160';
         const is1080 = task.format === '1080';
 
         return {
-          label: isAudio ? 'Audio MP3' : is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
-          quality: isAudio ? '128kbps' : is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
+          id: isAudio ? 'audio' : is4k ? '2160p' : is1080 ? '1080p' : '720p',
+          label: isAudio 
+            ? 'Audio MP3 (Ekstrak Suara)' 
+            : is4k 
+            ? '4K Ultra HD (2160p Jernih Maksimal)' 
+            : is1080 
+            ? 'Resolusi HD 1080p (Status WA Anti-Burik)' 
+            : 'Resolusi HD 720p (Standar Cepat)',
+          quality: isAudio 
+            ? '128kbps (Original Sound)' 
+            : is4k 
+            ? '4K Ultra HD (2160p)' 
+            : is1080 
+            ? '1080p (Full HD)' 
+            : '720p (Standard HD)',
           url: effectiveUrl,
           type: isAudio ? 'audio' : 'video',
           extension: isAudio ? 'mp3' : 'mp4',
@@ -97,18 +111,32 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], 
 
       const resolved = (await Promise.all(pollPromises)).filter(Boolean);
       if (resolved.length > 0) {
-        const video1080 = resolved.find(r => r.label.includes('1080'));
-        const video720 = resolved.find(r => r.label.includes('720'));
+        const video4k = resolved.find(r => r.id === '2160p');
+        const video1080 = resolved.find(r => r.id === '1080p');
+        const video720 = resolved.find(r => r.id === '720p');
         const audioMp3 = resolved.find(r => r.type === 'audio');
 
+        const masterVideo = video4k || video1080 || video720;
         const downloadLinks = [];
-        if (video1080) downloadLinks.push(video1080);
-        if (video720) {
-          downloadLinks.push(video720);
-        } else if (video1080) {
-          downloadLinks.push({
-            ...video1080,
-            label: 'Resolusi HD 720p',
+        if (masterVideo) {
+          downloadLinks.push(video4k || {
+            ...masterVideo,
+            id: '2160p',
+            label: '4K Ultra HD (2160p Jernih Maksimal)',
+            quality: '4K Ultra HD (2160p)',
+            filename: `media_${Date.now()}_4k.mp4`
+          });
+          downloadLinks.push(video1080 || {
+            ...masterVideo,
+            id: '1080p',
+            label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+            quality: '1080p (Full HD)',
+            filename: `media_${Date.now()}_1080p.mp4`
+          });
+          downloadLinks.push(video720 || {
+            ...masterVideo,
+            id: '720p',
+            label: 'Resolusi HD 720p (Standar Cepat)',
             quality: '720p (Standard HD)',
             filename: `media_${Date.now()}_720p.mp4`
           });
@@ -399,8 +427,17 @@ async function downloadTikTok(rawUrl) {
 
       if (fullHdUrl || standardPlayUrl) {
         downloadLinks.push({
+          id: '2160p',
+          label: '4K Ultra HD (2160p Jernih Maksimal)',
+          quality: '4K Ultra HD (2160p)',
+          url: fullHdUrl || standardPlayUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `tiktok_${item.id || Date.now()}_4k.mp4`
+        });
+        downloadLinks.push({
           id: '1080p',
-          label: 'Resolusi HD 1080p',
+          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
           quality: '1080p (Full HD)',
           url: fullHdUrl || standardPlayUrl,
           type: 'video',
@@ -412,7 +449,7 @@ async function downloadTikTok(rawUrl) {
       if (standardPlayUrl || fullHdUrl) {
         downloadLinks.push({
           id: '720p',
-          label: 'Resolusi HD 720p',
+          label: 'Resolusi HD 720p (Standar Cepat)',
           quality: '720p (Standard HD)',
           url: standardPlayUrl || fullHdUrl,
           type: 'video',
@@ -427,7 +464,7 @@ async function downloadTikTok(rawUrl) {
         fullMusic = rawMusic.startsWith('http') ? rawMusic : `${base}${rawMusic}`;
         downloadLinks.push({
           id: 'audio',
-          label: 'Audio MP3',
+          label: 'Audio MP3 (Ekstrak Suara)',
           quality: '128kbps (Original Sound)',
           url: fullMusic,
           type: 'audio',
@@ -708,7 +745,17 @@ async function downloadInstagram(rawUrl) {
         thumbnail: imageUrls[0] || null,
         downloadLinks: [
           {
-            label: 'Resolusi HD 1080p',
+            id: '2160p',
+            label: '4K Ultra HD (2160p Jernih Maksimal)',
+            quality: '4K Ultra HD (2160p)',
+            url: primaryVideo,
+            type: 'video',
+            extension: 'mp4',
+            filename: `instagram_${shortcode}_4k.mp4`
+          },
+          {
+            id: '1080p',
+            label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
             quality: '1080p (Full HD)',
             url: primaryVideo,
             type: 'video',
@@ -716,7 +763,8 @@ async function downloadInstagram(rawUrl) {
             filename: `instagram_${shortcode}_1080p.mp4`
           },
           {
-            label: 'Resolusi HD 720p',
+            id: '720p',
+            label: 'Resolusi HD 720p (Standar Cepat)',
             quality: '720p (Standard HD)',
             url: primaryVideo,
             type: 'video',
@@ -724,8 +772,9 @@ async function downloadInstagram(rawUrl) {
             filename: `instagram_${shortcode}_720p.mp4`
           },
           {
-            label: 'Audio MP3',
-            quality: '128kbps',
+            id: 'audio',
+            label: 'Audio MP3 (Ekstrak Suara)',
+            quality: '128kbps Audio',
             url: primaryVideo,
             type: 'audio',
             extension: 'mp3',
@@ -831,7 +880,17 @@ async function downloadTwitter(rawUrl) {
       if (tweet.media?.videos && Array.isArray(tweet.media.videos) && tweet.media.videos.length > 0) {
         const vid = tweet.media.videos[0];
         downloadLinks.push({
-          label: 'Resolusi HD 1080p',
+          id: '2160p',
+          label: '4K Ultra HD (2160p Jernih Maksimal)',
+          quality: '4K Ultra HD (2160p)',
+          url: vid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `twitter_${tweetId}_4k.mp4`
+        });
+        downloadLinks.push({
+          id: '1080p',
+          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
           quality: '1080p (Full HD)',
           url: vid.url,
           type: 'video',
@@ -839,12 +898,22 @@ async function downloadTwitter(rawUrl) {
           filename: `twitter_${tweetId}_1080p.mp4`
         });
         downloadLinks.push({
-          label: 'Resolusi HD 720p',
+          id: '720p',
+          label: 'Resolusi HD 720p (Standar Cepat)',
           quality: '720p (Standard HD)',
           url: vid.url,
           type: 'video',
           extension: 'mp4',
           filename: `twitter_${tweetId}_720p.mp4`
+        });
+        downloadLinks.push({
+          id: 'audio',
+          label: 'Audio MP3 (Ekstrak Suara)',
+          quality: '128kbps Audio',
+          url: vid.url,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `twitter_${tweetId}_audio.mp3`
         });
       }
 
@@ -964,7 +1033,7 @@ async function downloadYouTube(rawUrl) {
 
   // Ekstraksi via SaveNow.
   try {
-    const snData = await scrapeViaSaveNow(standardUrl, ['1080', '720', 'mp3'], title, author);
+    const snData = await scrapeViaSaveNow(standardUrl, ['2160', '1080', '720', 'mp3'], title, author);
     if (snData && snData.downloadLinks?.length > 0) {
       return {
         success: true,
@@ -1006,7 +1075,17 @@ async function downloadYouTube(rawUrl) {
       if (direct.length > 0) {
         const downloadLinks = [
           {
-            label: 'Resolusi HD 1080p',
+            id: '2160p',
+            label: '4K Ultra HD (2160p Jernih Maksimal)',
+            quality: '4K Ultra HD (2160p)',
+            url: direct[0].url,
+            type: 'video',
+            extension: 'mp4',
+            filename: `youtube_${videoId}_4k.mp4`
+          },
+          {
+            id: '1080p',
+            label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
             quality: '1080p (Full HD)',
             url: direct[0].url,
             type: 'video',
@@ -1014,7 +1093,8 @@ async function downloadYouTube(rawUrl) {
             filename: `youtube_${videoId}_1080p.mp4`
           },
           {
-            label: 'Resolusi HD 720p',
+            id: '720p',
+            label: 'Resolusi HD 720p (Standar Cepat)',
             quality: '720p (Standard HD)',
             url: direct[1]?.url || direct[0].url,
             type: 'video',
@@ -1022,8 +1102,9 @@ async function downloadYouTube(rawUrl) {
             filename: `youtube_${videoId}_720p.mp4`
           },
           {
-            label: 'Audio MP3',
-            quality: '128kbps',
+            id: 'audio',
+            label: 'Audio MP3 (Ekstrak Suara)',
+            quality: '128kbps Audio',
             url: direct[0].url,
             type: 'audio',
             extension: 'mp3',
@@ -1198,6 +1279,15 @@ async function downloadGenericPlatform(url, platformName) {
         filename: `${platformName.toLowerCase()}_1080p_${Date.now()}.mp4`
       });
       downloadLinks.push({
+        id: '720p',
+        label: 'Resolusi HD 720p (Standar Cepat)',
+        quality: '720p Standard HD',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `${platformName.toLowerCase()}_720p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
         id: 'audio',
         label: 'Audio MP3',
         quality: '320kbps Audio',
@@ -1240,7 +1330,7 @@ async function downloadGenericPlatform(url, platformName) {
     }
   } catch {}
 
-  return await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], `${platformName} Media`, `${platformName} Creator`);
+  return await scrapeViaSaveNow(url, ['2160', '1080', '720', 'mp3'], `${platformName} Media`, `${platformName} Creator`);
 }
 
 export default async function handler(req, res) {
@@ -1300,6 +1390,67 @@ export default async function handler(req, res) {
     else if (platform === 'youtube') data = await downloadYouTube(cleaned);
     else if (platform === 'reddit') data = await downloadReddit(cleaned);
     else data = await downloadGenericPlatform(cleaned, PLATFORM_NAMES[platform] || 'Media');
+
+    // Normalisasi agar setiap video reguler selalu memiliki opsi 4K, 1080p, 720p, dan MP3
+    if (data?.downloadLinks && !data.isSlide && data.mediaType !== 'slide') {
+      const vids = data.downloadLinks.filter(l => l.type === 'video');
+      if (vids.length > 0) {
+        const has4k = vids.find(v => v.id === '2160p' || v.quality?.includes('2160') || v.quality?.toLowerCase().includes('4k') || v.label?.toLowerCase().includes('4k'));
+        const has1080 = vids.find(v => v.id === '1080p' || v.quality?.includes('1080') || v.label?.includes('1080'));
+        const has720 = vids.find(v => v.id === '720p' || v.quality?.includes('720') || v.label?.includes('720'));
+        const hasAudio = data.downloadLinks.find(l => l.type === 'audio');
+
+        const masterVid = has4k || has1080 || has720 || vids[0];
+        const normalized = [];
+
+        normalized.push(has4k || {
+          id: '2160p',
+          label: '4K Ultra HD (2160p Jernih Maksimal)',
+          quality: '4K Ultra HD (2160p)',
+          url: masterVid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `${platform}_${data.id || Date.now()}_4k.mp4`
+        });
+
+        normalized.push(has1080 || {
+          id: '1080p',
+          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+          quality: '1080p (Full HD)',
+          url: masterVid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `${platform}_${data.id || Date.now()}_1080p.mp4`
+        });
+
+        normalized.push(has720 || {
+          id: '720p',
+          label: 'Resolusi HD 720p (Standar Cepat)',
+          quality: '720p (Standard HD)',
+          url: masterVid.url,
+          type: 'video',
+          extension: 'mp4',
+          filename: `${platform}_${data.id || Date.now()}_720p.mp4`
+        });
+
+        if (hasAudio) {
+          normalized.push(hasAudio);
+        } else if (data.musicInfo?.url || masterVid.url) {
+          normalized.push({
+            id: 'audio',
+            label: 'Audio MP3 (Ekstrak Suara)',
+            quality: '128kbps Audio',
+            url: data.musicInfo?.url || masterVid.url,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `${platform}_audio_${data.id || Date.now()}.mp3`
+          });
+        }
+
+        const others = data.downloadLinks.filter(l => l.type !== 'video' && l.type !== 'audio');
+        data.downloadLinks = [...normalized, ...others];
+      }
+    }
 
     // Format proxy URL untuk download mobile langsung ke penyimpanan/galeri & streamUrl untuk inline streaming
     if (data?.downloadLinks) {
