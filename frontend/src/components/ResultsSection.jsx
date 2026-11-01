@@ -27,15 +27,31 @@ import {
 
 export default function ResultsSection({ result, preferredFormat = '1080p', onReset, onBack, lang = 'id' }) {
   const isEn = lang === 'en';
-  if (!result || !result.downloadLinks || result.downloadLinks.length === 0) {
-    return null;
+  const effectiveLinks = result?.downloadLinks || [];
+  const hasDirectPhotos = Array.isArray(result?.photos) && result.photos.length > 0;
+  const hasDirectVideos = Array.isArray(result?.videoSlides) && result.videoSlides.length > 0;
+
+  if (!result || (effectiveLinks.length === 0 && !hasDirectPhotos && !hasDirectVideos)) {
+    return (
+      <div className="w-full bg-white border-2 border-black rounded-xl p-6 shadow-[4px_4px_0px_#000000] text-center my-4">
+        <p className="text-xs sm:text-sm font-extrabold text-black">
+          {isEn ? 'No downloadable media found for this link.' : 'Tautan media tidak dapat ditemukan atau telah dihapus oleh pengunggah.'}
+        </p>
+        <button
+          onClick={onReset}
+          className="mt-3 px-4 py-2 rounded-lg border-2 border-black bg-black text-white text-xs font-bold shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
+        >
+          {isEn ? 'Try Another Link' : 'Coba Tautan Lain'}
+        </button>
+      </div>
+    );
   }
 
   // 1. Ekstraksi Photo Slides
   const photoSlides = useMemo(() => {
     const rawPhotos = (result.photos && result.photos.length > 0)
       ? result.photos
-      : (result.downloadLinks?.filter((l) => l.type === 'image') || []);
+      : (result.downloadLinks?.filter((l) => l.type === 'image' || l.type === 'photo') || []);
 
     return rawPhotos.map((p, idx) => ({
       ...p,
@@ -89,7 +105,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   const hasPhotos = photoSlides.length > 0;
   const hasVideoSlides = videoSlidesList.length > 0;
   const hasLiveWallpapers = liveWallpaperList.length > 0;
-  const isMultiContentPost = hasPhotos || hasVideoSlides || hasLiveWallpapers || result.isSlide || result.mediaType === 'slide';
+  const isMultiContentPost = hasPhotos || hasVideoSlides || hasLiveWallpapers || ((result.isSlide || result.mediaType === 'slide') && (photoSlides.length > 0 || videoSlidesList.length > 0));
 
   const regularVideoLinks = !isMultiContentPost
     ? (result.downloadLinks?.filter((l) => l.type === 'video') || [])

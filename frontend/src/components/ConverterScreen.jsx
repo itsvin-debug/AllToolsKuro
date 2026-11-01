@@ -36,6 +36,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   const [resultData, setResultData] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [suggestedPlatform, setSuggestedPlatform] = useState(null);
+  const [selectedFormat, setSelectedFormat] = useState('1080p');
 
   useEffect(() => {
     setActivePlatform(initialPlatform);
@@ -337,6 +338,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
     setErrorMsg('');
     setSuggestedPlatform(null);
     setDownloadProgress(0);
+    setSelectedFormat('1080p');
   };
 
   return (

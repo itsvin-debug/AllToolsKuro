@@ -22,7 +22,8 @@ import Navbar from './components/Navbar';
 import MobileBottomNav from './components/MobileBottomNav';
 import Toast from './components/Toast';
 import Footer from './components/Footer';
-import { getSettings, saveSettings, logHistoryItem, isToolLocked } from './services/storageService';
+import ErrorBoundary from './components/ErrorBoundary';
+import { getSettings, saveSettings, logHistoryItem, isToolLocked, isAdminAuthenticated } from './services/storageService';
 
 // Kamus nama alat untuk logging riwayat aktivitas
 const TOOL_NAMES = {
@@ -90,9 +91,7 @@ export default function App() {
   // Navigasi layar & pencatatan riwayat alat
   const handleNavigate = (screenId) => {
     // Validasi apakah fitur sedang dikunci oleh Admin untuk perbaikan
-    const isAdminUser = localStorage.getItem('kuro_admin_auth') === 'true' || 
-                        localStorage.getItem('kaze_admin_auth') === 'true' ||
-                        localStorage.getItem('kuro_user_role') === 'Admin';
+    const isAdminUser = isAdminAuthenticated();
     if (!isAdminUser && isToolLocked(screenId)) {
       handleShowToast(
         settings.language === 'en'
@@ -153,8 +152,8 @@ export default function App() {
 
         {/* Screen Routing */}
         <div className="flex-1 flex flex-col">
-          
-          {/* 1. Halaman Utama (Welcome) */}
+          <ErrorBoundary lang={settings.language || 'id'} onReset={() => handleNavigate('welcome')}>
+            {/* 1. Halaman Utama (Welcome) */}
           {currentScreen === 'welcome' && (
             <WelcomeScreen
               theme={settings.darkMode ? 'dark' : 'light'}
@@ -291,6 +290,7 @@ export default function App() {
               lang={settings.language || 'id'}
             />
           )}
+          </ErrorBoundary>
         </div>
 
         {/* Footer */}

@@ -261,6 +261,23 @@ export function clearGallery() {
 // MANAJEMEN STATUS KUNCI FITUR (LOCK & UNLOCK ADMIN DENGAN MULTI-DEVICE SYNC)
 // ==========================================
 const LOCKED_TOOLS_KEY = 'kuro_locked_tools';
+const LOCKED_TOOLS_META_KEY = 'kuro_locked_tools_meta';
+
+export function getLockedToolsMeta() {
+  try {
+    const raw = localStorage.getItem(LOCKED_TOOLS_META_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          lockedTools: Array.isArray(parsed.lockedTools) ? parsed.lockedTools : [],
+          updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0
+        };
+      }
+    }
+  } catch {}
+  return { lockedTools: getLockedTools(), updatedAt: 0 };
+}
 
 export function getLockedTools() {
   try {
@@ -271,11 +288,19 @@ export function getLockedTools() {
   }
 }
 
-export function setLockedTools(lockedList) {
+export function setLockedTools(lockedList, updatedAt = Date.now()) {
   try {
-    localStorage.setItem(LOCKED_TOOLS_KEY, JSON.stringify(lockedList));
+    const safeList = Array.isArray(lockedList) ? lockedList : [];
+    localStorage.setItem(LOCKED_TOOLS_KEY, JSON.stringify(safeList));
+    localStorage.setItem(LOCKED_TOOLS_META_KEY, JSON.stringify({
+      lockedTools: safeList,
+      updatedAt
+    }));
+
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('kuro_locked_tools_updated', { detail: lockedList }));
+      window.dispatchEvent(new CustomEvent('kuro_locked_tools_updated', { 
+        detail: { lockedTools: safeList, updatedAt } 
+      }));
     }
   } catch {}
 }
@@ -290,6 +315,7 @@ export function isToolLocked(toolId) {
 }
 
 // Fetch dan sinkronisasi status kunci langsung dari server
+// Mencegah status kunci terhapus saat server dingin/restart
 export async function syncLockedToolsFromServer() {
   try {
     const res = await fetch('/api/locked-tools', {
@@ -297,12 +323,54 @@ export async function syncLockedToolsFromServer() {
     });
     if (res.ok) {
       const data = await res.json();
-      if (data && data.success && Array.isArray(data.lockedTools)) {
-        const current = getLockedTools();
-        if (JSON.stringify(current) !== JSON.stringify(data.lockedTools)) {
-          setLockedTools(data.lockedTools);
+      if (data && data.success) {
+        const localMeta = getLockedToolsMeta();
+        const serverUpdated = typeof data.updatedAt === 'number' ? data.updatedAt : 0;
+        const localUpdated = localMeta.updatedAt || 0;
+        const currentLocal = getLockedTools();
+
+        // Server dingin / baru menyala ulang tanpa data (serverUpdated === 0),
+        // sedangkan perangkat memiliki kunci tersimpan:
+        // jangan hapus data lokal, melainkan re-sinkronkan ke server.
+        if (serverUpdated === 0 && localUpdated > 0 && currentLocal.length > 0) {
+          try {
+            await fetch('/api/locked-tools', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lockedTools: currentLocal,
+                updatedAt: localUpdated,
+                isRehydrate: true
+              })
+            });
+          } catch {}
+          return currentLocal;
         }
-        return data.lockedTools;
+
+        // Jika server memiliki timestamp lebih baru atau valid
+        if (serverUpdated >= localUpdated && Array.isArray(data.lockedTools)) {
+          if (JSON.stringify(currentLocal) !== JSON.stringify(data.lockedTools)) {
+            setLockedTools(data.lockedTools, serverUpdated);
+          }
+          return data.lockedTools;
+        }
+
+        // Jika lokal lebih baru daripada server, perbarui server
+        if (localUpdated > serverUpdated && currentLocal.length > 0) {
+          try {
+            await fetch('/api/locked-tools', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                lockedTools: currentLocal,
+                updatedAt: localUpdated
+              })
+            });
+          } catch {}
+          return currentLocal;
+        }
+
+        return Array.isArray(data.lockedTools) ? data.lockedTools : currentLocal;
       }
     }
   } catch {}
@@ -314,16 +382,22 @@ export async function toggleToolLock(toolId) {
     const current = getLockedTools();
     const isLocked = current.includes(toolId);
     const updated = isLocked ? current.filter(id => id !== toolId) : [...current, toolId];
+    const timestamp = Date.now();
     
-    // Simpan lokal seketika (optimistic UI)
-    setLockedTools(updated);
+    // Simpan lokal seketika dengan timestamp baru
+    setLockedTools(updated, timestamp);
 
-    // Kirim pembaruan ke server agar langsung menyinkron ke seluruh perangkat member
+    // Kirim pembaruan ke server agar langsung menyinkron ke seluruh pengguna
     try {
       await fetch('/api/locked-tools', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toolId, action: isLocked ? 'unlock' : 'lock', lockedTools: updated })
+        body: JSON.stringify({ 
+          toolId, 
+          action: isLocked ? 'unlock' : 'lock', 
+          lockedTools: updated,
+          updatedAt: timestamp 
+        })
       });
     } catch {}
 
@@ -331,6 +405,35 @@ export async function toggleToolLock(toolId) {
   } catch {
     return false;
   }
+}
+
+// --- MANAJEMEN AUTENTIKASI ADMIN ---
+export function isAdminAuthenticated() {
+  if (typeof window === 'undefined') return false;
+  return (
+    localStorage.getItem('kuro_admin_auth') === 'true' ||
+    localStorage.getItem('kaze_admin_auth') === 'true' ||
+    localStorage.getItem('kuro_user_role') === 'Admin'
+  );
+}
+
+export function setAdminAuth(isAuth) {
+  if (typeof window === 'undefined') return;
+  const active = Boolean(isAuth);
+  if (active) {
+    localStorage.setItem('kuro_user_role', 'Admin');
+    localStorage.setItem('kuro_admin_auth', 'true');
+  } else {
+    localStorage.setItem('kuro_user_role', 'Member');
+    localStorage.removeItem('kuro_admin_auth');
+    localStorage.removeItem('kaze_admin_auth');
+  }
+
+  // Siarkan event untuk memperbarui UI seketika tanpa perlu refresh halaman
+  window.dispatchEvent(new CustomEvent('kuro_admin_auth_updated', { 
+    detail: { isAdmin: active } 
+  }));
+  window.dispatchEvent(new Event('storage'));
 }
 
 // Inisialisasi auto-sync berkala (setiap 4 detik dan saat tab aktif)

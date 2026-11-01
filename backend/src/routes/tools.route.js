@@ -415,21 +415,35 @@ router.get('/system-battery', async (req, res) => {
 // ==========================================
 const lockedToolsFile = path.join(uploadsDir, 'locked_tools.json');
 let inMemoryLockedTools = [];
+let inMemoryUpdatedAt = 0;
 
 function loadLockedTools() {
   try {
     if (fs.existsSync(lockedToolsFile)) {
-      const data = JSON.parse(fs.readFileSync(lockedToolsFile, 'utf8'));
-      if (Array.isArray(data)) inMemoryLockedTools = data;
+      const raw = fs.readFileSync(lockedToolsFile, 'utf8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data)) {
+        inMemoryLockedTools = data;
+        inMemoryUpdatedAt = inMemoryUpdatedAt || Date.now();
+      } else if (data && typeof data === 'object') {
+        if (Array.isArray(data.lockedTools)) {
+          inMemoryLockedTools = data.lockedTools;
+          inMemoryUpdatedAt = typeof data.updatedAt === 'number' ? data.updatedAt : (inMemoryUpdatedAt || Date.now());
+        }
+      }
     }
   } catch {}
-  return inMemoryLockedTools;
+  return { lockedTools: inMemoryLockedTools, updatedAt: inMemoryUpdatedAt };
 }
 
-function saveLockedTools(list) {
-  inMemoryLockedTools = list;
+function saveLockedTools(list, timestamp = Date.now()) {
+  inMemoryLockedTools = Array.isArray(list) ? list : [];
+  inMemoryUpdatedAt = timestamp;
   try {
-    fs.writeFileSync(lockedToolsFile, JSON.stringify(list, null, 2));
+    fs.writeFileSync(lockedToolsFile, JSON.stringify({
+      lockedTools: inMemoryLockedTools,
+      updatedAt: inMemoryUpdatedAt
+    }, null, 2));
   } catch {}
 }
 
@@ -439,29 +453,41 @@ router.get('/locked-tools', (req, res) => {
   loadLockedTools();
   return res.json({
     success: true,
-    lockedTools: inMemoryLockedTools
+    lockedTools: inMemoryLockedTools,
+    updatedAt: inMemoryUpdatedAt
   });
 });
 
 router.post('/locked-tools', (req, res) => {
   loadLockedTools();
-  const { toolId, action, lockedTools } = req.body || {};
+  const { toolId, action, lockedTools, updatedAt, isRehydrate } = req.body || {};
+  const newTimestamp = typeof updatedAt === 'number' ? updatedAt : Date.now();
+
+  if (isRehydrate && Array.isArray(lockedTools)) {
+    saveLockedTools(lockedTools, newTimestamp);
+    return res.json({
+      success: true,
+      message: 'Status kunci alat berhasil dipulihkan dari sinkronisasi klien.',
+      lockedTools: inMemoryLockedTools,
+      updatedAt: inMemoryUpdatedAt
+    });
+  }
 
   if (Array.isArray(lockedTools)) {
-    saveLockedTools(lockedTools);
+    saveLockedTools(lockedTools, newTimestamp);
   } else if (toolId) {
     if (action === 'unlock') {
-      saveLockedTools(inMemoryLockedTools.filter(id => id !== toolId));
+      saveLockedTools(inMemoryLockedTools.filter(id => id !== toolId), newTimestamp);
     } else if (action === 'lock') {
       if (!inMemoryLockedTools.includes(toolId)) {
-        saveLockedTools([...inMemoryLockedTools, toolId]);
+        saveLockedTools([...inMemoryLockedTools, toolId], newTimestamp);
       }
     } else {
       // toggle
       if (inMemoryLockedTools.includes(toolId)) {
-        saveLockedTools(inMemoryLockedTools.filter(id => id !== toolId));
+        saveLockedTools(inMemoryLockedTools.filter(id => id !== toolId), newTimestamp);
       } else {
-        saveLockedTools([...inMemoryLockedTools, toolId]);
+        saveLockedTools([...inMemoryLockedTools, toolId], newTimestamp);
       }
     }
   }
@@ -469,8 +495,18 @@ router.post('/locked-tools', (req, res) => {
   return res.json({
     success: true,
     message: 'Status kunci alat berhasil diperbarui.',
-    lockedTools: inMemoryLockedTools
+    lockedTools: inMemoryLockedTools,
+    updatedAt: inMemoryUpdatedAt
   });
+});
+
+router.post('/verify-admin', (req, res) => {
+  const { password } = req.body || {};
+  const expectedPassword = (process.env.ADMIN_PASSWORD || 'VINZ6767').trim();
+  if (password && String(password).trim() === expectedPassword) {
+    return res.json({ success: true, message: 'Autentikasi admin berhasil.' });
+  }
+  return res.status(401).json({ success: false, message: 'Kata sandi admin tidak valid.' });
 });
 
 export default router;

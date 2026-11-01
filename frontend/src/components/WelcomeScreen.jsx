@@ -19,17 +19,13 @@ import {
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
-import { getLockedTools, toggleToolLock, syncLockedToolsFromServer } from '../services/storageService';
+import { getLockedTools, toggleToolLock, syncLockedToolsFromServer, isAdminAuthenticated } from '../services/storageService';
 
 export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToast, lang = 'id' }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
 
-  const [isAdmin, setIsAdmin] = useState(() => {
-    return localStorage.getItem('kuro_admin_auth') === 'true' || 
-           localStorage.getItem('kaze_admin_auth') === 'true' ||
-           localStorage.getItem('kuro_user_role') === 'Admin';
-  });
+  const [isAdmin, setIsAdmin] = useState(() => isAdminAuthenticated());
 
   const [lockedTools, setLockedTools] = useState(() => getLockedTools());
 
@@ -40,17 +36,21 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
     });
 
     const handleSync = () => {
-      const isAuth = localStorage.getItem('kuro_admin_auth') === 'true' || 
-                     localStorage.getItem('kaze_admin_auth') === 'true' ||
-                     localStorage.getItem('kuro_user_role') === 'Admin';
-      setIsAdmin(isAuth);
+      setIsAdmin(isAdminAuthenticated());
       setLockedTools(getLockedTools());
     };
 
+    const handleAuthEvent = (e) => {
+      const active = e?.detail?.isAdmin !== undefined ? e.detail.isAdmin : isAdminAuthenticated();
+      setIsAdmin(active);
+    };
+
     window.addEventListener('kuro_locked_tools_updated', handleSync);
+    window.addEventListener('kuro_admin_auth_updated', handleAuthEvent);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('kuro_locked_tools_updated', handleSync);
+      window.removeEventListener('kuro_admin_auth_updated', handleAuthEvent);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
@@ -198,6 +198,8 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
         onSearchSubmit={(q) => setSearchQuery(q)}
+        onAuthChange={(auth) => setIsAdmin(auth)}
+        onShowToast={onShowToast}
         lang={lang}
       />
 

@@ -22,7 +22,7 @@ import {
   GitBranch,
   Clock
 } from 'lucide-react';
-import { getDeviceUserName, setDeviceUserName } from '../services/storageService';
+import { getDeviceUserName, setDeviceUserName, setAdminAuth, isAdminAuthenticated } from '../services/storageService';
 import { translations } from '../utils/translations';
 
 /**
@@ -135,15 +135,28 @@ export default function KuroIdentityCard({
   searchQuery, 
   setSearchQuery, 
   onSearchSubmit,
+  onAuthChange,
+  onShowToast,
+  onNavigateStudio,
+  theme = 'light',
   lang = 'id'
 }) {
   const t = translations[lang] || translations.id;
 
   const [role, setRole] = useState(() => {
-    const isAuth = localStorage.getItem('kuro_admin_auth') === 'true' || 
-                   localStorage.getItem('kaze_admin_auth') === 'true';
-    return isAuth ? 'Admin' : 'Member';
+    return isAdminAuthenticated() ? 'Admin' : 'Member';
   });
+
+  useEffect(() => {
+    const handleAuthEvent = (e) => {
+      const active = e?.detail?.isAdmin ?? isAdminAuthenticated();
+      setRole(active ? 'Admin' : 'Member');
+    };
+    window.addEventListener('kuro_admin_auth_updated', handleAuthEvent);
+    return () => {
+      window.removeEventListener('kuro_admin_auth_updated', handleAuthEvent);
+    };
+  }, []);
 
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
@@ -461,12 +474,15 @@ export default function KuroIdentityCard({
 
     if (pass === envPassword) {
       setRole('Admin');
-      localStorage.setItem('kuro_user_role', 'Admin');
-      localStorage.setItem('kuro_admin_auth', 'true');
+      setAdminAuth(true);
+      if (onAuthChange) onAuthChange(true);
       setShowLoginModal(false);
       setAdminPassword('');
       setLoginError('');
       setIsLoggingIn(false);
+      if (onShowToast) {
+        onShowToast(lang === 'en' ? 'Logged in as Admin. Control features active.' : 'Berhasil masuk sebagai Admin. Panel kontrol fitur aktif.');
+      }
       return;
     }
 
@@ -479,12 +495,15 @@ export default function KuroIdentityCard({
       const data = await res.json();
       if (res.ok && data.success) {
         setRole('Admin');
-        localStorage.setItem('kuro_user_role', 'Admin');
-        localStorage.setItem('kuro_admin_auth', 'true');
+        setAdminAuth(true);
+        if (onAuthChange) onAuthChange(true);
         setShowLoginModal(false);
         setAdminPassword('');
         setLoginError('');
         setIsLoggingIn(false);
+        if (onShowToast) {
+          onShowToast(lang === 'en' ? 'Logged in as Admin. Control features active.' : 'Berhasil masuk sebagai Admin. Panel kontrol fitur aktif.');
+        }
         return;
       }
     } catch {
@@ -497,9 +516,11 @@ export default function KuroIdentityCard({
 
   const handleAdminLogout = () => {
     setRole('Member');
-    localStorage.setItem('kuro_user_role', 'Member');
-    localStorage.removeItem('kuro_admin_auth');
-    localStorage.removeItem('kaze_admin_auth');
+    setAdminAuth(false);
+    if (onAuthChange) onAuthChange(false);
+    if (onShowToast) {
+      onShowToast(lang === 'en' ? 'Logged out from Admin.' : 'Berhasil keluar dari mode Admin.');
+    }
   };
 
   return (

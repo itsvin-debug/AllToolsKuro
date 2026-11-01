@@ -22,16 +22,28 @@ import {
   Eye,
   EyeOff
 } from 'lucide-react';
+import { setAdminAuth, isAdminAuthenticated } from '../services/storageService';
 
 export default function KazeIdentityCard({ 
   searchQuery, 
   setSearchQuery, 
-  onSearchSubmit 
+  onSearchSubmit,
+  onAuthChange
 }) {
   const [role, setRole] = useState(() => {
-    const isAuth = localStorage.getItem('kaze_admin_auth') === 'true';
-    return isAuth ? 'Admin' : 'Member';
+    return isAdminAuthenticated() ? 'Admin' : 'Member';
   });
+
+  useEffect(() => {
+    const handleAuthEvent = (e) => {
+      const active = e?.detail?.isAdmin ?? isAdminAuthenticated();
+      setRole(active ? 'Admin' : 'Member');
+    };
+    window.addEventListener('kuro_admin_auth_updated', handleAuthEvent);
+    return () => {
+      window.removeEventListener('kuro_admin_auth_updated', handleAuthEvent);
+    };
+  }, []);
 
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
@@ -260,8 +272,8 @@ function detectUserDevice() {
 
     if (pass === envPassword) {
       setRole('Admin');
-      localStorage.setItem('kaze_user_role', 'Admin');
-      localStorage.setItem('kaze_admin_auth', 'true');
+      setAdminAuth(true);
+      if (onAuthChange) onAuthChange(true);
       setShowLoginModal(false);
       setAdminPassword('');
       setLoginError('');
@@ -270,7 +282,7 @@ function detectUserDevice() {
     }
 
     try {
-      const res = await fetch('http://localhost:5001/api/verify-admin', {
+      const res = await fetch('/api/verify-admin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: pass })
@@ -278,8 +290,8 @@ function detectUserDevice() {
       const data = await res.json();
       if (res.ok && data.success) {
         setRole('Admin');
-        localStorage.setItem('kaze_user_role', 'Admin');
-        localStorage.setItem('kaze_admin_auth', 'true');
+        setAdminAuth(true);
+        if (onAuthChange) onAuthChange(true);
         setShowLoginModal(false);
         setAdminPassword('');
         setLoginError('');
@@ -296,8 +308,8 @@ function detectUserDevice() {
 
   const handleAdminLogout = () => {
     setRole('Member');
-    localStorage.setItem('kaze_user_role', 'Member');
-    localStorage.removeItem('kaze_admin_auth');
+    setAdminAuth(false);
+    if (onAuthChange) onAuthChange(false);
   };
 
   return (
