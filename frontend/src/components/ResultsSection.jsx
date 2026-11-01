@@ -105,12 +105,19 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   const hasPhotos = photoSlides.length > 0;
   const hasVideoSlides = videoSlidesList.length > 0;
   const hasLiveWallpapers = liveWallpaperList.length > 0;
-  const isMultiContentPost = hasPhotos || hasVideoSlides || hasLiveWallpapers || ((result.isSlide || result.mediaType === 'slide') && (photoSlides.length > 0 || videoSlidesList.length > 0));
 
-  const regularVideoLinks = !isMultiContentPost
-    ? (result.downloadLinks?.filter((l) => l.type === 'video') || [])
-    : [];
-  const hasVideo = regularVideoLinks.length > 0;
+  // 1. Deteksi apakah konten adalah Album Foto Slide
+  const isPhotoSlidePost = hasPhotos || (Array.isArray(result.photos) && result.photos.length > 0) || (result.mediaType === 'slide' && hasPhotos);
+
+  // 2. Deteksi video reguler: HANYA jika bukan album foto slide
+  const regularVideoLinks = result.downloadLinks?.filter((l) => l.type === 'video') || [];
+  const hasVideo = regularVideoLinks.length > 0 && !isPhotoSlidePost;
+
+  // 3. Carousel slide hanya aktif jika memang ada kumpulan foto slide atau video slide album
+  const isMultiContentPost = isPhotoSlidePost && (hasPhotos || hasVideoSlides);
+
+  // 4. Live wallpaper khusus jika tidak ada video reguler maupun album foto
+  const isLiveWallpaperOnly = !isPhotoSlidePost && !hasVideo && hasLiveWallpapers;
 
   const audioLinks = result.downloadLinks?.filter((l) => l.type === 'audio') || [];
   const activeAudio = audioLinks[0] || null;
@@ -176,7 +183,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         proxyUrl: existing1080?.proxyUrl || masterVideo.proxyUrl,
         type: 'video',
         extension: 'mp4',
-        filename: existing1080?.filename || `${baseName}_${mediaId}_1080p.mp4`
+        filename: existing1080?.filename || `${baseName}_${mediaId}_1080p_status_wa.mp4`
       },
       {
         id: '720p',
@@ -193,6 +200,25 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         filename: existing720?.filename || `${baseName}_${mediaId}_720p.mp4`
       }
     ];
+
+    const existingWallpaper = regularVideoLinks.find(l => l.type === 'live_wallpaper' || l.id === 'wallpaper') ||
+                              result.downloadLinks?.find(l => l.type === 'live_wallpaper' || l.id === 'wallpaper');
+    if (existingWallpaper) {
+      options.push({
+        id: 'wallpaper',
+        key: 'wallpaper',
+        label: isEn ? 'Live Wallpaper Loop' : 'Live Wallpaper (Animasi Loop)',
+        badge: isEn ? 'Motion Loop' : 'Animasi HP',
+        quality: 'Live Wallpaper Dynamic Loop',
+        desc: isEn ? 'Animated loop for phone live wallpaper' : 'Format loop animasi bergerak untuk wallpaper layar HP',
+        url: existingWallpaper.url,
+        streamUrl: existingWallpaper.streamUrl,
+        proxyUrl: existingWallpaper.proxyUrl,
+        type: 'live_wallpaper',
+        extension: existingWallpaper.extension || 'mp4',
+        filename: existingWallpaper.filename || `${baseName}_wallpaper_${mediaId}.${existingWallpaper.extension || 'mp4'}`
+      });
+    }
 
     if (activeAudio) {
       options.push({
@@ -349,6 +375,8 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   }, [preferredFormat, videoQualityOptions]);
 
   const activeRegularVideo = videoQualityOptions[selectedQualityIndex] || videoQualityOptions[0] || regularVideoLinks[0];
+  const primaryVideoSource = regularVideoLinks.find(v => v.type === 'video') || videoQualityOptions.find(v => v.type === 'video') || activeRegularVideo;
+  const videoPreviewUrl = primaryVideoSource?.streamUrl || primaryVideoSource?.url;
   const activeSlide = activeSlideList[currentSlideIndex] || activeSlideList[0];
 
   // Proses canvas client-side agar foto pas ukuran 1080p native Status WA (anti-burik)
@@ -815,7 +843,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     <div className="w-full flex flex-col gap-5 mt-2">
 
       {/* ─── 1. MULTI-CONTENT SLIDE CAROUSEL (FOTO, VIDEO SLIDE, & LIVE WALLPAPER) ─── */}
-      {isMultiContentPost && activeSlideList.length > 0 && (
+      {(isMultiContentPost || isLiveWallpaperOnly) && activeSlideList.length > 0 && (
         <div className="w-full bg-white border-2 border-black rounded-xl p-5 sm:p-6 shadow-[4px_4px_0px_#000000] flex flex-col gap-4 text-black">
           
           {/* Header & Smart Switcher Tabs */}
@@ -949,7 +977,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                   className="w-full h-full object-contain"
                 />
               ) : activeSlide.type === 'live_wallpaper' ? (
-                activeSlide.extension === 'webp' || activeSlide.url?.endsWith('.webp') ? (
+                (activeSlide.extension === 'webp' || activeSlide.url?.includes('webp') || activeSlide.url?.includes('cover') || !activeSlide.url?.includes('.mp4')) ? (
                   <img
                     key={`wallpaper-img-${activeSlide.url}`}
                     src={activeSlide.url}
@@ -1202,11 +1230,11 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         <div className="w-full bg-white border-2 border-black rounded-xl p-5 sm:p-6 shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row gap-5 items-start text-black">
           
           <div className="w-full md:w-72 aspect-[9/16] sm:aspect-[3/4] max-h-[380px] rounded-lg bg-black border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[2px_2px_0px_#000000]">
-            {activeRegularVideo?.url ? (
+            {videoPreviewUrl ? (
               <video
                 ref={videoRef}
-                key={activeRegularVideo.streamUrl || activeRegularVideo.url}
-                src={activeRegularVideo.streamUrl || activeRegularVideo.url}
+                key={videoPreviewUrl}
+                src={videoPreviewUrl}
                 poster={result.thumbnail || undefined}
                 controls
                 playsInline

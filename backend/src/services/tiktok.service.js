@@ -85,19 +85,24 @@ async function downloadViaTikmate(targetUrl) {
         }
       ];
 
-      const liveWallpapers = item.dynamic_cover ? [{
-        id: 'live_wallpaper_1',
-        label: 'Live Wallpaper (Loop Animasi)',
-        quality: 'Animated Live Loop',
-        url: item.dynamic_cover,
-        type: 'live_wallpaper',
-        extension: 'mp4',
-        filename: `tiktok_live_wallpaper_${id}.mp4`
-      }] : [];
+      // Opsi live wallpaper tambahan untuk video jika tersedia dynamic cover
+      if (item.dynamic_cover) {
+        const isMp4 = item.dynamic_cover.includes('.mp4');
+        downloadLinks.push({
+          id: 'wallpaper',
+          label: 'Live Wallpaper (Animasi Loop)',
+          quality: 'Animasi Dynamic Loop',
+          url: item.dynamic_cover,
+          type: 'live_wallpaper',
+          extension: isMp4 ? 'mp4' : 'webp',
+          filename: `tiktok_${id}_wallpaper.${isMp4 ? 'mp4' : 'webp'}`
+        });
+      }
 
       return {
         success: true,
         platform: 'TikTok',
+        contentType: 'video',
         mediaType: 'video',
         isSlide: false,
         id,
@@ -109,9 +114,9 @@ async function downloadViaTikmate(targetUrl) {
         hasPhotos: false,
         videoSlides: [],
         hasVideoSlides: false,
-        liveWallpapers,
-        hasLiveWallpapers: liveWallpapers.length > 0,
-        downloadLinks: [...downloadLinks, ...liveWallpapers],
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        downloadLinks,
         musicInfo: {
           title: item.desc || 'Original Sound',
           author: item.author_name || 'TikTok Creator',
@@ -268,6 +273,7 @@ export async function downloadTikTok(rawUrl) {
         return {
           success: true,
           platform: 'TikTok',
+          contentType: 'photo_slide',
           mediaType: 'slide',
           isSlide: true,
           id: item.id || '',
@@ -332,35 +338,20 @@ export async function downloadTikTok(rawUrl) {
         });
       }
 
-      // Live wallpaper untuk video biasa
+      // Opsi live wallpaper tambahan untuk video biasa jika tersedia
       const rawDynamicCover = item.dynamic_cover || null;
-      let fullDynamicCover = null;
-      const liveWallpapers = [];
       if (rawDynamicCover) {
-        fullDynamicCover = rawDynamicCover.startsWith('http') ? rawDynamicCover : `${base}${rawDynamicCover}`;
-        liveWallpapers.push({
-          id: 'live_wallpaper_1',
-          label: 'Live Wallpaper (Loop Animasi)',
-          quality: 'Animated Live Loop',
+        const fullDynamicCover = rawDynamicCover.startsWith('http') ? rawDynamicCover : `${base}${rawDynamicCover}`;
+        const isMp4 = fullDynamicCover.endsWith('.mp4');
+        downloadLinks.push({
+          id: 'wallpaper',
+          label: 'Live Wallpaper (Animasi Loop)',
+          quality: 'Animasi Dynamic Loop',
           url: fullDynamicCover,
           type: 'live_wallpaper',
-          extension: fullDynamicCover.endsWith('.mp4') ? 'mp4' : 'webp',
-          filename: `tiktok_live_wallpaper_${item.id || Date.now()}.${fullDynamicCover.endsWith('.mp4') ? 'mp4' : 'webp'}`
+          extension: isMp4 ? 'mp4' : 'webp',
+          filename: `tiktok_${item.id || Date.now()}_wallpaper.${isMp4 ? 'mp4' : 'webp'}`
         });
-      } else if (fullHdUrl || standardPlayUrl) {
-        liveWallpapers.push({
-          id: 'live_wallpaper_1',
-          label: 'Live Wallpaper HD (Video Loop)',
-          quality: 'Dynamic Motion Loop',
-          url: fullHdUrl || standardPlayUrl,
-          type: 'live_wallpaper',
-          extension: 'mp4',
-          filename: `tiktok_live_wallpaper_${item.id || Date.now()}.mp4`
-        });
-      }
-
-      if (liveWallpapers.length > 0) {
-        downloadLinks.push(...liveWallpapers);
       }
 
       const rawMusicUrl = item.music_info?.play || item.music || standardPlayUrl || fullHdUrl;
@@ -382,6 +373,7 @@ export async function downloadTikTok(rawUrl) {
         return {
           success: true,
           platform: 'TikTok',
+          contentType: 'video',
           mediaType: 'video',
           isSlide: false,
           id: item.id || '',
@@ -393,14 +385,14 @@ export async function downloadTikTok(rawUrl) {
           hasPhotos: false,
           videoSlides: [],
           hasVideoSlides: false,
-          liveWallpapers,
-          hasLiveWallpapers: liveWallpapers.length > 0,
+          liveWallpapers: [],
+          hasLiveWallpapers: false,
+          downloadLinks,
           musicInfo: {
             title: item.music_info?.title || item.title || 'Original Sound',
             author: item.music_info?.author || item.author?.nickname || 'TikTok Creator',
             url: fullMusicUrl || null
           },
-          downloadLinks,
           anchors: item.anchors || (item.anchor ? [item.anchor] : []),
           rawItem: item
         };
@@ -532,6 +524,7 @@ export async function downloadTikTok(rawUrl) {
       return {
         success: true,
         platform: 'TikTok',
+        contentType: photos.length > 0 ? 'photo_slide' : 'video',
         mediaType: photos.length > 0 ? 'slide' : 'video',
         title,
         author,
@@ -539,6 +532,8 @@ export async function downloadTikTok(rawUrl) {
         duration: null,
         videoSlides: [],
         hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
         photos,
         hasPhotos: photos.length > 0,
         isSlide: photos.length > 0,
