@@ -132,7 +132,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   }, [messages, displayedReply, mode]);
 
   // Efek mengetik bertahap karakter per karakter (Typewriter Effect + Lip-Sync)
-  const streamText = useCallback((fullText, onComplete) => {
+  const streamText = useCallback((fullText, onComplete, finalAnim = 'idle') => {
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
     }
@@ -152,7 +152,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         clearInterval(typingTimerRef.current);
         typingTimerRef.current = null;
         setIsTyping(false);
-        setAnimState('idle');
+        setAnimState(finalAnim);
         if (onComplete) onComplete();
       } else {
         setDisplayedReply(clean.slice(0, currentIndex));
@@ -208,6 +208,9 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       clearTimeout(tourSequenceRef.current);
       tourSequenceRef.current = null;
     }
+    document.querySelectorAll('.ring-purple-600').forEach(el => {
+      el.classList.remove('ring-4', 'ring-purple-600', 'ring-offset-2');
+    });
     setIsTourActive(false);
     setHighlightedToolId(null);
     setIsTyping(false);
@@ -330,9 +333,10 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
       const data = await res.json();
       const reply = cleanSpeechText(data.reply || 'Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?');
-      const anim = data.animation || 'talking';
+      const isValidContext = data.is_valid_context !== undefined ? data.is_valid_context : (data.isValidContext !== undefined ? data.isValidContext : true);
+      const anim = (!isValidContext || data.animation === 'confused') ? 'confused' : (data.animation || 'talking');
       const action = data.action || 'none';
-      const targetTool = data.targetTool || null;
+      const targetTool = data.target_tool || data.targetTool || null;
 
       setAnimState(anim);
 
@@ -343,7 +347,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       } else {
         streamText(reply, () => {
           setMessages(prev => [...prev, { sender: 'ai', text: reply, animation: anim }]);
-        });
+        }, anim);
       }
     } catch (err) {
       console.warn('[AI Kuro] Request fallback:', err);
@@ -359,7 +363,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       setAnimState(anim);
       streamText(fallbackMsg, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: anim }]);
-      });
+      }, anim);
     }
   };
 

@@ -1,4 +1,4 @@
-/* Neobrutalist Kuro Theme - Clean, High Contrast, Responsive */
+/* Neobrutalist Kuro Theme - Clean, High Contrast, Responsive, Anti-Slop */
 :root {
   --bg-page: #fbfbfa;
   --bg-card: #ffffff;
@@ -22,7 +22,7 @@ body {
   background-color: var(--bg-page);
   color: var(--text-main);
   line-height: 1.5;
-  padding: 24px 16px 100px;
+  padding: 24px 16px 120px;
 }
 
 .mock-container {
@@ -99,20 +99,21 @@ body {
 }
 
 .tool-badge {
-  display: inline-block;
+  position: absolute;
+  top: 14px;
+  right: 14px;
   background: #f3f4f6;
   border: 1px solid var(--border-color);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 4px;
-  margin-bottom: 12px;
 }
 
 .tool-icon {
   font-size: 28px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .tool-card h3 {
@@ -127,69 +128,161 @@ body {
   line-height: 1.4;
 }
 
-/* Highlight class saat tour berjalan */
-.tool-card.tour-highlight {
-  outline: 4px solid var(--accent-purple);
-  outline-offset: 3px;
-  background-color: #faf5ff;
+/* Sorotan Auto-Scroll (High Contrast Ring) */
+.tool-highlighted {
+  border-color: var(--accent-purple) !important;
+  box-shadow: 0 0 0 4px #a855f7, var(--shadow-neo-lg) !important;
+  transform: translate(-2px, -2px);
 }
 
-/* ─── WIDGET AI KURO FLOATING ─── */
-.kuro-trigger-btn {
+/* ─── ANIMASI KEYFRAMES SVG MASKOT ─── */
+@keyframes kuro-float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-3px) rotate(0.5deg); }
+}
+@keyframes kuro-wave-hand {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-22deg); }
+  75% { transform: rotate(18deg); }
+}
+@keyframes kuro-mouth-talk {
+  0%, 100% { d: path("M 112 147 Q 120 149 128 147"); }
+  50% { d: path("M 112 147 Q 120 156 128 147"); }
+}
+@keyframes kuro-blink {
+  0%, 94%, 98%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+@keyframes kuro-sweat {
+  0% { opacity: 0; transform: translateY(-4px) scale(0.6); }
+  50% { opacity: 1; transform: translateY(0px) scale(1); }
+  100% { opacity: 0; transform: translateY(6px) scale(0.8); }
+}
+@keyframes kuro-sparkle {
+  0%, 100% { opacity: 0.2; transform: scale(0.7) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.15) rotate(180deg); }
+}
+@keyframes kuro-question {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-3px) scale(1.08); }
+}
+
+.anim-kuro-body {
+  animation: kuro-float 3.5s ease-in-out infinite;
+  transform-origin: center bottom;
+}
+.anim-kuro-wave {
+  animation: kuro-wave-hand 0.75s ease-in-out infinite;
+  transform-origin: 168px 150px;
+}
+.anim-kuro-talking-mouth {
+  animation: kuro-mouth-talk 0.22s ease-in-out infinite;
+}
+.anim-kuro-eyes {
+  animation: kuro-blink 4.2s infinite;
+  transform-origin: 120px 132px;
+}
+.anim-kuro-sweat {
+  animation: kuro-sweat 1.4s ease-in-out infinite;
+}
+.anim-kuro-sparkle {
+  animation: kuro-sparkle 1.8s ease-in-out infinite;
+  transform-origin: center;
+}
+.anim-kuro-question {
+  animation: kuro-question 1.5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.kuro-svg-element {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ─── WIDGET FLOATING TRIGGER ─── */
+.kuro-trigger-wrapper {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  width: 64px;
-  height: 64px;
-  border-radius: 20px;
-  border: 2px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 1000;
+}
+
+.trigger-label {
+  display: none;
   background: #ffffff;
+  border: 2px solid var(--border-color);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 2px 2px 0px #000000;
+}
+
+@media (min-width: 640px) {
+  .trigger-label { display: block; }
+}
+
+.kuro-trigger-circle {
+  width: 62px;
+  height: 62px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #f3e8ff 0%, #ffffff 100%);
+  border: 2px solid var(--border-color);
   box-shadow: var(--shadow-neo);
   cursor: pointer;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  z-index: 999;
+  padding: 4px;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.kuro-trigger-btn:hover {
-  transform: translate(-2px, -2px) scale(1.05);
+.kuro-trigger-circle:hover {
+  transform: translate(-2px, -2px);
   box-shadow: var(--shadow-neo-lg);
 }
 
-.kuro-trigger-btn:active {
-  transform: translate(1px, 1px);
-  box-shadow: none;
+.avatar-svg-box {
+  width: 52px;
+  height: 52px;
+}
+.avatar-svg-box-sm {
+  width: 40px;
+  height: 40px;
+}
+.avatar-svg-box-md {
+  width: 72px;
+  height: 72px;
 }
 
-.kuro-avatar-img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.trigger-sparkle {
+.trigger-online-dot {
   position: absolute;
   top: 4px;
-  right: 6px;
-  color: var(--accent-purple);
-  font-size: 14px;
-  animation: pulse 1.5s infinite;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  background: var(--accent-purple);
+  border: 1.5px solid #000000;
+  border-radius: 50%;
 }
 
-/* Modal Popup Chat */
+/* ─── POPUP CHAT BOX ─── */
 .kuro-popup-box {
   position: fixed;
   bottom: 24px;
   right: 24px;
   width: 380px;
   max-width: calc(100vw - 32px);
-  max-height: 560px;
+  max-height: 580px;
   background: #ffffff;
   border: 2px solid var(--border-color);
-  border-radius: 18px;
+  border-radius: 20px;
   box-shadow: var(--shadow-neo-lg);
   display: flex;
   flex-direction: column;
@@ -198,15 +291,11 @@ body {
   animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.hidden {
-  display: none !important;
-}
-
 .kuro-header {
   background: var(--accent-purple);
   color: #ffffff;
-  padding: 12px 16px;
   border-bottom: 2px solid var(--border-color);
+  padding: 12px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -219,21 +308,22 @@ body {
 }
 
 .avatar-frame {
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   background: #ffffff;
   border: 2px solid var(--border-color);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 1.5px 1.5px 0px #000000;
 }
 
-.avatar-frame img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.kuro-meta .name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .kuro-name {
@@ -245,28 +335,28 @@ body {
   background: var(--accent-gold);
   color: #000000;
   font-family: 'JetBrains Mono', monospace;
-  font-weight: 800;
   font-size: 9px;
+  font-weight: 800;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: 3px;
   border: 1px solid var(--border-color);
-  margin-left: 4px;
 }
 
 .kuro-status {
-  display: block;
   font-size: 10px;
   color: #e9d5ff;
-  font-family: 'JetBrains Mono', monospace;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
 }
 
 .dot-online {
-  display: inline-block;
   width: 6px;
   height: 6px;
-  background: #10b981;
+  background: #34d399;
   border-radius: 50%;
-  margin-right: 3px;
+  display: inline-block;
 }
 
 .kuro-controls {
@@ -278,137 +368,174 @@ body {
 .btn-pill-tour {
   background: var(--accent-gold);
   color: #000000;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 4px 8px;
   border: 2px solid var(--border-color);
-  border-radius: 6px;
-  box-shadow: 1px 1px 0px #000000;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 8px;
   cursor: pointer;
+  box-shadow: 1.5px 1.5px 0px #000000;
 }
 
 .btn-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   background: #ffffff;
   color: #000000;
   border: 2px solid var(--border-color);
-  border-radius: 6px;
-  width: 28px;
-  height: 28px;
-  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  box-shadow: 1px 1px 0px #000000;
+  font-weight: 800;
+  box-shadow: 1.5px 1.5px 0px #000000;
 }
 
+/* Chat Logs */
 .kuro-logs {
   flex: 1;
-  padding: 16px;
+  padding: 14px;
   overflow-y: auto;
-  max-height: 320px;
-  background: #fafafa;
+  max-height: 340px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: #fafaf9;
+}
+
+.chat-bubble-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.chat-bubble-row.user-row {
+  justify-content: flex-end;
+}
+.chat-bubble-row.ai-row {
+  justify-content: flex-start;
+}
+
+.chat-mini-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #f3e8ff;
+  border: 1.5px solid var(--border-color);
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .chat-bubble {
+  max-width: 82%;
   padding: 10px 14px;
   border-radius: 12px;
   border: 2px solid var(--border-color);
   font-size: 12px;
-  line-height: 1.45;
-  max-width: 85%;
-  word-wrap: break-word;
+  line-height: 1.5;
 }
 
-.chat-bubble.ai {
-  background: #ffffff;
-  color: #000000;
-  box-shadow: var(--shadow-neo);
-  align-self: flex-start;
-}
-
-.chat-bubble.user {
+.user-bubble {
   background: #000000;
   color: #ffffff;
-  box-shadow: 2px 2px 0px var(--accent-purple);
-  align-self: flex-end;
+  box-shadow: 2px 2px 0px #7c3aed;
 }
 
+.ai-bubble {
+  background: #ffffff;
+  color: #000000;
+  box-shadow: 2px 2px 0px #000000;
+}
+
+/* Chips Saran Cepat */
 .kuro-chips {
+  display: flex;
+  gap: 6px;
   padding: 8px 12px;
   background: #f3f4f6;
   border-top: 2px solid var(--border-color);
-  display: flex;
-  gap: 6px;
   overflow-x: auto;
-  scrollbar-width: none;
+  white-space: nowrap;
 }
 
 .chip-item {
   background: #ffffff;
-  border: 1px solid var(--border-color);
-  padding: 4px 8px;
+  border: 1.5px solid var(--border-color);
   border-radius: 6px;
+  padding: 4px 8px;
   font-size: 11px;
   font-weight: 700;
   font-family: 'JetBrains Mono', monospace;
-  white-space: nowrap;
   cursor: pointer;
+  box-shadow: 1px 1px 0px #000000;
 }
 
 .chip-item:hover {
-  background: #e5e7eb;
+  background: #f3e8ff;
 }
 
+/* Form Input */
 .kuro-form {
-  padding: 12px;
+  display: flex;
+  padding: 10px 12px;
   background: #ffffff;
   border-top: 2px solid var(--border-color);
-  display: flex;
   gap: 8px;
 }
 
 .kuro-form input {
   flex: 1;
-  padding: 8px 12px;
-  font-size: 12px;
+  background: #f3f4f6;
   border: 2px solid var(--border-color);
   border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: inherit;
   outline: none;
-  background: #f9fafb;
-}
-
-.kuro-form input:focus {
-  background: #ffffff;
 }
 
 .kuro-form button {
+  width: 36px;
+  height: 36px;
   background: #000000;
   color: #ffffff;
   border: 2px solid var(--border-color);
   border-radius: 8px;
-  width: 36px;
-  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  box-shadow: 1.5px 1.5px 0px #000000;
 }
 
-/* Floating Helper (Guided Tour Mode) */
+/* ─── FLOATING HELPER COMPANION (TOUR & GUIDE MODE) ─── */
 .kuro-helper-card {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  width: 380px;
+  width: 440px;
   max-width: calc(100vw - 32px);
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 1000;
+  animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.helper-bubble {
+  flex: 1;
   background: #ffffff;
   border: 2px solid var(--border-color);
   border-radius: 16px;
-  padding: 16px;
+  padding: 14px 16px;
   box-shadow: var(--shadow-neo-lg);
-  z-index: 1000;
-  animation: slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .helper-top {
@@ -416,8 +543,21 @@ body {
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid #e5e7eb;
-  padding-bottom: 8px;
-  margin-bottom: 10px;
+  padding-bottom: 6px;
+}
+
+.helper-tag-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pulse-indicator {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-purple);
+  border-radius: 50%;
+  animation: pulse 1.2s infinite;
 }
 
 .helper-tag {
@@ -433,8 +573,9 @@ body {
   border: 2px solid var(--border-color);
   border-radius: 6px;
   font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 8px;
   cursor: pointer;
   box-shadow: 1px 1px 0px #000000;
 }
@@ -447,13 +588,14 @@ body {
   font-size: 13px;
   line-height: 1.5;
   color: #1f2937;
-  margin-bottom: 12px;
-  min-height: 48px;
+  min-height: 44px;
 }
 
 .helper-footer {
   display: flex;
   justify-content: flex-end;
+  border-top: 1px solid #f3f4f6;
+  padding-top: 6px;
 }
 
 .btn-next-step {
@@ -465,27 +607,55 @@ body {
   font-weight: 800;
   padding: 6px 12px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   box-shadow: 1.5px 1.5px 0px #000000;
 }
 
-.helper-chibi-badge {
-  position: absolute;
-  top: -24px;
-  right: -10px;
-  width: 52px;
-  height: 52px;
-  background: #ffffff;
-  border: 2px solid var(--border-color);
-  border-radius: 14px;
-  padding: 3px;
-  box-shadow: var(--shadow-neo);
-  cursor: pointer;
+/* Kolom Karakter Kanan + Tombol Cancel Langsung pada Avatar */
+.helper-character-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.helper-chibi-badge img {
+.helper-avatar-frame {
+  width: 82px;
+  height: 82px;
+  background: linear-gradient(180deg, #f3e8ff 0%, #ffffff 100%);
+  border: 2px solid var(--border-color);
+  border-radius: 18px;
+  padding: 4px;
+  box-shadow: var(--shadow-neo);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-cancel-avatar {
   width: 100%;
-  height: 100%;
-  object-fit: contain;
+  background: var(--accent-rose);
+  color: #ffffff;
+  border: 2px solid var(--border-color);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 3px 6px;
+  cursor: pointer;
+  box-shadow: 1px 1px 0px #000000;
+  text-align: center;
+}
+
+.btn-cancel-avatar:hover {
+  background: #e11d48;
+}
+
+.hidden {
+  display: none !important;
 }
 
 @keyframes slideUp {
@@ -500,6 +670,6 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.2); }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.6; }
 }

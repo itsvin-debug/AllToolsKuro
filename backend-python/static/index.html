@@ -11,18 +11,18 @@
 </head>
 <body>
 
-  <!-- Mockup Konten Web Kuro Studio untuk Uji Coba Navigasi & Auto-Scroll -->
+  <!-- Mockup Konten Web Kuro Studio untuk Navigasi & Auto-Scroll -->
   <div class="mock-container">
     <header class="mock-header">
       <div class="brand">
-        <span class="badge-brand">KURO</span>
-        <h1>Kuro Studio — Demo Integrasi Chatbot</h1>
+        <span class="badge-brand">KURO STUDIO</span>
+        <h1>AllToolsKuro — Demo Asisten AI Kuro</h1>
       </div>
       <p class="subtitle">Platform serbaguna untuk pengunduhan media, konversi dokumen, dan studio kreatif digital.</p>
     </header>
 
     <div class="section-title">
-      <h2>Daftar Fitur Kuro Studio</h2>
+      <h2>Daftar 12 Fitur Kuro Studio</h2>
       <p>Klik tombol tour di widget AI Kuro untuk melihat auto-scroll dan panduan suara secara mulus.</p>
     </div>
 
@@ -117,11 +117,14 @@
   <!-- ─── WIDGET AI KURO (STANDALONE HTML/CSS/JS) ─── -->
   <div id="aiKuroWidget">
     
-    <!-- Tombol Mengambang (Collapsed Button) -->
-    <button id="kuroTriggerBtn" class="kuro-trigger-btn" aria-label="Buka Asisten AI Kuro" title="Tanya AI Kuro">
-      <img id="kuroTriggerAvatar" src="/static/kuro_wave.png" alt="AI Kuro Chibi Elaina" class="kuro-avatar-img">
-      <span class="trigger-sparkle">✦</span>
-    </button>
+    <!-- Tombol Mengambang (Collapsed Trigger Button) -->
+    <div id="kuroTriggerBtn" class="kuro-trigger-wrapper" title="Tanya AI Kuro">
+      <span class="trigger-label">Tanya AI Kuro</span>
+      <button class="kuro-trigger-circle" aria-label="Buka Asisten AI Kuro">
+        <div id="kuroTriggerAvatarContainer" class="avatar-svg-box"></div>
+        <span class="trigger-online-dot"></span>
+      </button>
+    </div>
 
     <!-- Modal Popup Chat Standar -->
     <div id="kuroChatPopup" class="kuro-popup-box hidden">
@@ -129,14 +132,14 @@
       <div class="kuro-header">
         <div class="kuro-profile">
           <div class="avatar-frame">
-            <img id="kuroHeaderAvatar" src="/static/kuro_idle.png" alt="AI Kuro">
+            <div id="kuroHeaderAvatarContainer" class="avatar-svg-box-sm"></div>
           </div>
           <div class="kuro-meta">
             <div class="name-row">
               <span class="kuro-name">AI Kuro</span>
               <span class="kuro-tag">ELAINA</span>
             </div>
-            <span class="kuro-status"><span class="dot-online"></span> Asisten Panduan Web</span>
+            <span class="kuro-status"><span class="dot-online"></span> Penyihir Penjelajah Web</span>
           </div>
         </div>
         <div class="kuro-controls">
@@ -168,20 +171,40 @@
       </form>
     </div>
 
-    <!-- Floating Helper Bar (Tour & Single Feature Guide Mode) -->
+    <!-- Floating Helper Companion (Guided Tour & Single Feature Guide Mode) -->
     <div id="kuroFloatingHelper" class="kuro-helper-card hidden">
-      <div class="helper-top">
-        <span class="helper-tag" id="helperTourTag">GUIDED TOUR</span>
-        <button id="btnCancelTour" class="btn-cancel-tour" title="Batalkan Tour">✕ Cancel Tour</button>
+      <!-- Balon Penjelasan -->
+      <div class="helper-bubble">
+        <div class="helper-top">
+          <div class="helper-tag-row">
+            <span class="pulse-indicator"></span>
+            <span class="helper-tag" id="helperTourTag">GUIDED TOUR (1/12)</span>
+          </div>
+          <button id="btnCancelTour" class="btn-cancel-tour" title="Batalkan Tour dan Kembalikan Kontrol">
+            ✕ Cancel
+          </button>
+        </div>
+
+        <div class="helper-content" id="helperText">
+          Memuat panduan fitur...
+        </div>
+
+        <div class="helper-footer">
+          <button id="btnNextStep" class="btn-next-step">
+            <span>Fitur Berikutnya</span>
+            <span>➔</span>
+          </button>
+        </div>
       </div>
-      <div class="helper-content" id="helperText">
-        Memuat panduan...
-      </div>
-      <div class="helper-footer">
-        <button id="btnNextStep" class="btn-next-step">Fitur Berikutnya ➔</button>
-      </div>
-      <div class="helper-chibi-badge">
-        <img id="kuroHelperAvatar" src="/static/kuro_talking.png" alt="AI Kuro">
+
+      <!-- Karakter Avatar Vektor + Tombol Cancel Langsung pada Sisi Kanan -->
+      <div class="helper-character-col">
+        <div class="helper-avatar-frame">
+          <div id="kuroHelperAvatarContainer" class="avatar-svg-box-md"></div>
+        </div>
+        <button id="btnCancelAvatar" class="btn-cancel-avatar" title="Batalkan Tour">
+          Cancel
+        </button>
       </div>
     </div>
 
