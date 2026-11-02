@@ -96,8 +96,50 @@ function lockedToolsDevMiddleware() {
   }
 }
 
+function chatDevMiddleware() {
+  return {
+    name: 'chat-dev-middleware',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        if (req.url && (req.url === '/api/chat' || req.url.startsWith('/api/chat?'))) {
+          try {
+            const chatModule = await import('../api/chat.js');
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', async () => {
+              try {
+                req.body = body ? JSON.parse(body) : {};
+              } catch {
+                req.body = {};
+              }
+              const mockRes = {
+                setHeader: (k, v) => res.setHeader(k, v),
+                status: (code) => {
+                  res.statusCode = code;
+                  return {
+                    json: (data) => {
+                      res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify(data));
+                    },
+                    end: () => res.end()
+                  };
+                }
+              };
+              await chatModule.default(req, mockRes);
+            });
+            return;
+          } catch (err) {
+            console.warn('chatDevMiddleware error:', err);
+          }
+        }
+        next();
+      });
+    }
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), pingDevMiddleware(), lockedToolsDevMiddleware()],
+  plugins: [react(), pingDevMiddleware(), lockedToolsDevMiddleware(), chatDevMiddleware()],
   clearScreen: false,
   resolve: {
     preserveSymlinks: true,

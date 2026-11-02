@@ -11,79 +11,93 @@ import {
 } from 'lucide-react';
 import KuroCharacter from './KuroCharacter';
 
+// Fungsi utilitas pembersih teks agar ucapan Kuro tampil natural tanpa simbol markdown mentah (** atau #)
+function cleanSpeechText(text) {
+  if (!text) return '';
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1') // Buang format tebal bintang ganda
+    .replace(/\*(.*?)\*/g, '$1')     // Buang format miring
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/_(.*?)_/g, '$1')
+    .replace(/#{1,6}\s+/g, '')        // Buang tag heading
+    .replace(/`([^`]+)`/g, '$1')      // Buang backtick inline code
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Ambil teks label link saja
+    .trim();
+}
+
 // Data resmi 12 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
 const KURO_TOOLS_CATALOG = [
   {
     id: 'downloader',
     name: 'Media Downloader',
     tag: 'All-in-One HD',
-    desc: 'Pengunduh video, foto slide, dan audio tanpa watermark dari TikTok, IG, YT, dan platform lainnya dengan pilihan 4K serta 1080p Status WA Anti-Burik.'
+    desc: 'Pengunduh serbaguna untuk mengunduh video, foto slide album, dan audio MP3 tanpa watermark dari TikTok, Instagram, YouTube, dan medsos lainnya dengan kualitas jernih hingga 4K serta opsi 1080p Status WA Anti-Burik agar tidak pecah saat di-upload.'
   },
   {
     id: 'jjFinder',
     name: 'Cari Link JJ',
     tag: 'Jedag-Jedug Viral',
-    desc: 'Temukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung siap pakai.'
+    desc: 'Temukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung siap pakai untuk konten kreatifmu.'
   },
   {
     id: 'pngToPdf',
     name: 'PNG to PDF',
     tag: 'Konversi Dokumen',
-    desc: 'Satukan banyak file gambar dan foto (PNG/JPG) menjadi satu berkas PDF rapi dengan kualitas visual maksimal.'
+    desc: 'Satukan banyak file gambar atau foto PNG dan JPG menjadi satu berkas PDF rapi dengan tata letak proporsional dan kualitas visual tajam.'
   },
   {
     id: 'linkToDoc',
     name: 'Link to PDF/PPT',
     tag: 'Ekstraktor Materi',
-    desc: 'Ekstrak dokumen dan materi presentasi dari Scribd atau SlideShare menjadi file PDF atau PPT utuh tanpa ribet.'
+    desc: 'Ekstrak dokumen kuliah dan materi presentasi dari Scribd atau SlideShare menjadi berkas PDF atau PPT utuh langsung dari tautan web.'
   },
   {
     id: 'imageToLink',
     name: 'File ke Link',
     tag: 'Hosting Instan',
-    desc: 'Unggah file gambar dari perangkatmu dan dapatkan tautan URL publik instan untuk dibagikan ke mana saja.'
+    desc: 'Unggah foto dari perangkatmu dan dapatkan tautan URL publik instan berkecepatan tinggi untuk dibagikan ke mana saja.'
   },
   {
     id: 'compressor',
     name: 'Kompres Media HD',
     tag: 'Hemat Memori',
-    desc: 'Perkecil ukuran file video dan foto secara drastis dengan tetap mempertahankan ketajaman visual anti-burik.'
+    desc: 'Kecilkan ukuran file video dan gambar secara drastis tanpa membuat visual pecah atau burik, sangat hemat kuota dan memori.'
   },
   {
     id: 'qrStudio',
     name: 'QR Code Studio',
     tag: 'Desain Kustom',
-    desc: 'Studio pembuat kode QR estetik dengan logo kustom, pewarnaan fleksibel, dan resolusi tinggi siap cetak.'
+    desc: 'Studio pembuat kode QR estetik dengan logo kustom, pewarnaan neobrutalist fleksibel, dan resolusi tinggi yang siap dipindai.'
   },
   {
     id: 'audioMerger',
     name: 'Audio Merger',
     tag: 'Kombinasi Suara',
-    desc: 'Gabungkan beberapa file musik atau audio menjadi satu trek utuh dengan transisi alunan yang rapi.'
+    desc: 'Gabungkan beberapa trek audio atau musik menjadi satu kesatuan alunan utuh dengan perpindahan lagu yang mulus dan jernih.'
   },
   {
     id: 'photoStudio',
     name: 'Photo Studio',
     tag: 'Filter & Efek',
-    desc: 'Editor foto cepat dengan ragam filter neobrutalist, pemotongan, penyesuaian kontras, dan efek grafis modern.'
+    desc: 'Editor foto instan dengan ragam filter neobrutalist, rotasi, penyesuaian kontras, serta efek grafis artistik untuk mempercantik gambarmu.'
   },
   {
     id: 'videoStudio',
     name: 'Video Studio',
     tag: 'Studio Kreatif',
-    desc: 'Editor video praktis untuk mengubah kecepatan, menyesuaikan rasio layar (9:16, 16:9), dan menerapkan filter video.'
+    desc: 'Editor video praktis untuk mengatur kecepatan pemutaran, mengubah rasio layar 9:16 untuk story dan 16:9 untuk layar lebar, serta filter visual.'
   },
   {
     id: 'videoTrimmer',
     name: 'Video Trimmer',
     tag: 'Pemotong Presisi',
-    desc: 'Pangkas detik awal atau akhir klip videomu secara presisi tanpa menurunkan bitrate atau kualitas audio-video.'
+    desc: 'Pangkas detik awal atau akhir klip videomu secara akurat tanpa menurunkan bitrate asli atau merusak kualitas audionya.'
   },
   {
     id: 'bgRemover',
     name: 'Hapus Background',
     tag: 'AI Background Remover',
-    desc: 'Hapus latar belakang foto dalam 1 kali klik menggunakan kecerdasan AI untuk hasil PNG transparan yang rapi.'
+    desc: 'Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi.'
   }
 ];
 
@@ -91,7 +105,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   // Mode tampilan: 'collapsed' | 'chat_popup' | 'floating_helper'
   const [mode, setMode] = useState('collapsed');
   
-  // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused'
+  // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking'
   const [animState, setAnimState] = useState('idle');
 
   // Obrolan
@@ -108,6 +122,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   const messagesEndRef = useRef(null);
   const typingTimerRef = useRef(null);
   const tourSequenceRef = useRef(null);
+  const hasGreetedRef = useRef(false);
 
   // Auto-scroll riwayat obrolan ke bawah
   useEffect(() => {
@@ -122,43 +137,68 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       clearInterval(typingTimerRef.current);
     }
 
+    const clean = cleanSpeechText(fullText);
     setAnimState('talking');
     setIsTyping(true);
     setDisplayedReply('');
 
     let currentIndex = 0;
-    const speed = 20; // 20ms per karakter agar typewriter natural dan lip-sync sinkron
+    const speed = 18; // 18ms per karakter agar typewriter mengalir mulus dan sinkron dengan bibir
 
     typingTimerRef.current = setInterval(() => {
       currentIndex += 1;
-      if (currentIndex >= fullText.length) {
-        setDisplayedReply(fullText);
+      if (currentIndex >= clean.length) {
+        setDisplayedReply(clean);
         clearInterval(typingTimerRef.current);
         typingTimerRef.current = null;
         setIsTyping(false);
         setAnimState('idle');
         if (onComplete) onComplete();
       } else {
-        setDisplayedReply(fullText.slice(0, currentIndex));
+        setDisplayedReply(clean.slice(0, currentIndex));
       }
     }, speed);
   }, []);
 
-  // Buka widget untuk pertama kali: sapaan dan lambaian tangan (Wave)
+  // Sapaan otomatis saat pengguna pertama kali membuka web
+  useEffect(() => {
+    if (hasGreetedRef.current) return;
+    hasGreetedRef.current = true;
+
+    // Beri jeda 800ms agar halaman utama termuat stabil terlebih dahulu
+    const greetTimer = setTimeout(() => {
+      setMode('chat_popup');
+      setAnimState('wave');
+
+      const greetingText = 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu menjelaskan seluruh fitur keren di web ini.';
+      
+      // Tunggu animasi melambaikan tangan sejenak lalu mulai berbicara
+      setTimeout(() => {
+        streamText(greetingText, () => {
+          setMessages([{ sender: 'ai', text: greetingText, animation: 'idle' }]);
+        });
+      }, 700);
+    }, 800);
+
+    return () => clearTimeout(greetTimer);
+  }, [streamText]);
+
+  // Buka widget secara manual saat tombol collapsed diklik
   const handleOpenWidget = () => {
     setMode('chat_popup');
     setAnimState('wave');
 
-    // Jika belum ada riwayat pesan, tampilkan kalimat pembuka resmi
     if (messages.length === 0) {
-      const greeting = 'Halo! Aku AI Kuro, siap membantumu menjelajahi dan memahami fitur-fitur di website ini!';
+      const greeting = 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu menjelaskan seluruh fitur keren di web ini.';
       streamText(greeting, () => {
-        setMessages([{ sender: 'ai', text: greeting, animation: 'wave' }]);
+        setMessages([{ sender: 'ai', text: greeting, animation: 'idle' }]);
       });
+    } else {
+      setTimeout(() => setAnimState('idle'), 1200);
     }
   };
 
-  // Batalkan seluruh timer tour dan streaming teks
+  // Batalkan seluruh timer tour, streaming teks, dan kembalikan kontrol penuh kepada pengguna
   const handleCancelTour = () => {
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
@@ -172,7 +212,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setHighlightedToolId(null);
     setIsTyping(false);
     setAnimState('idle');
-    setMode('chat_popup');
+    setMode('collapsed');
   };
 
   // Tutup widget sepenuhnya
@@ -187,7 +227,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setIsTyping(false);
   };
 
-  // Auto-scroll halus ke kartu alat tertentu
+  // Auto-scroll halus ke posisi kartu alat tertentu di layar
   const scrollToToolElement = (toolId) => {
     if (currentScreen !== 'welcome' && onNavigateScreen) {
       onNavigateScreen('welcome');
@@ -200,20 +240,20 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         
-        // Efek sorotan ring neobrutalist
+        // Efek sorotan ring neobrutalist kontras tinggi
         el.classList.add('ring-4', 'ring-purple-600', 'ring-offset-2', 'transition-all');
         setTimeout(() => {
           el.classList.remove('ring-4', 'ring-purple-600', 'ring-offset-2');
-        }, 3500);
+        }, 4500);
       }
     }, 280);
   };
 
-  // Eksekusi langkah tour berurutan
+  // Eksekusi tour 12 fitur secara berurutan satu per satu
   const executeTourStep = useCallback((index) => {
     if (index >= KURO_TOOLS_CATALOG.length) {
       setAnimState('wave');
-      const completionText = 'Fufufu~ Selesai! Itu dia seluruh 12 fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi secara maksimal!';
+      const completionText = 'Fufufu~ Selesai! Itu dia seluruh 12 fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi dan mencoba setiap fiturnya!';
       streamText(completionText, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: completionText, animation: 'wave' }]);
         setIsTourActive(false);
@@ -225,11 +265,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setTourIndex(index);
     scrollToToolElement(currentTool.id);
 
-    const stepText = `[Fitur ${index + 1}/12] **${currentTool.name}** (${currentTool.tag}): ${currentTool.desc}`;
+    const stepText = `Fitur ${index + 1} dari 12: ${currentTool.name} (${currentTool.tag}). ${currentTool.desc}`;
     streamText(stepText, () => {
       setMessages(prev => [...prev, { sender: 'ai', text: stepText, animation: 'talking', toolId: currentTool.id }]);
       
-      // Auto-progress ke fitur berikutnya dengan jeda ramah pembaca
+      // Auto-progress ke fitur berikutnya setelah penjelasan selesai
       if (tourSequenceRef.current) clearTimeout(tourSequenceRef.current);
       tourSequenceRef.current = setTimeout(() => {
         executeTourStep(index + 1);
@@ -252,8 +292,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     scrollToToolElement(toolId);
 
     const tool = KURO_TOOLS_CATALOG.find(t => t.id === toolId);
-    const explanation = customText || (tool 
-      ? `Ini dia **${tool.name}**! ${tool.desc} Klik tombol 'Buka Fitur' untuk langsung menggunakannya!`
+    const explanation = cleanSpeechText(customText) || (tool 
+      ? `Ini dia fitur ${tool.name}! ${tool.desc} Klik tombol Buka Fitur untuk langsung menggunakannya.`
       : 'Fitur siap digunakan!');
 
     streamText(explanation, () => {
@@ -272,7 +312,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const newHistory = [...messages, { sender: 'user', text: textToSend }];
     setMessages(newHistory);
     setIsTyping(true);
-    setAnimState('talking');
+    setAnimState('thinking');
 
     try {
       const res = await fetch('/api/chat', {
@@ -289,7 +329,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       }
 
       const data = await res.json();
-      const reply = data.reply || 'Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?';
+      const reply = cleanSpeechText(data.reply || 'Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?');
       const anim = data.animation || 'talking';
       const action = data.action || 'none';
       const targetTool = data.targetTool || null;
@@ -307,10 +347,18 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       }
     } catch (err) {
       console.warn('[AI Kuro] Request fallback:', err);
-      const fallbackMsg = 'Maaf ya, Kuro hanya bisa membantu menjelaskan seputar fitur-fitur dan cara penggunaan website ini! Ada fitur Kuro Studio yang ingin kamu ketahui?';
-      setAnimState('confused');
+      // Fallback ramah jika koneksi terputus atau pertanyaan di luar topik
+      const lower = textToSend.toLowerCase();
+      const isOut = ['resep', 'masak', 'politik', 'presiden', 'matematika', 'rumus', 'sejarah', 'cuaca', 'ramalan', 'zodiak'].some(k => lower.includes(k));
+      
+      const fallbackMsg = isOut
+        ? 'Maaf ya, Kuro hanya bisa membantu menjelaskan seputar fitur-fitur dan cara penggunaan website ini! Fufufu~ Coba tanyakan salah satu dari 12 fitur hebat kami.'
+        : 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu. Mau tahu penjelasan seputar 12 fitur Kuro Studio?';
+      
+      const anim = isOut ? 'confused' : 'talking';
+      setAnimState(anim);
       streamText(fallbackMsg, () => {
-        setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: 'confused' }]);
+        setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: anim }]);
       });
     }
   };
@@ -360,7 +408,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 </div>
                 <span className="text-[10px] text-purple-100 font-mono font-medium flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-ping" />
-                  Asisten Panduan Web
+                  Penyihir Penjelajah Web
                 </span>
               </div>
             </div>
@@ -405,7 +453,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                       : 'bg-white text-black shadow-[2px_2px_0px_#000000]'
                   }`}
                 >
-                  <p className="whitespace-pre-line">{m.text}</p>
+                  <p className="whitespace-pre-line">{cleanSpeechText(m.text)}</p>
 
                   {/* Tombol Pintasan Buka Fitur */}
                   {m.toolId && onOpenTool && (
@@ -445,28 +493,28 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               onClick={handleStartTour}
               className="px-2.5 py-1 rounded-md bg-purple-100 hover:bg-purple-200 text-purple-900 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
             >
-              🚀 Jelaskan Semua Fitur
+              Jelaskan Semua Fitur
             </button>
             <button
               type="button"
               onClick={() => handleSendMessage('Jelaskan fitur media downloader')}
               className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
             >
-              📥 Media Downloader
+              Media Downloader
             </button>
             <button
               type="button"
               onClick={() => handleSendMessage('Jelaskan fitur cari link jj')}
               className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
             >
-              🔥 Cari Link JJ
+              Cari Link JJ
             </button>
             <button
               type="button"
               onClick={() => handleSendMessage('Jelaskan fitur hapus background')}
               className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
             >
-              ✂️ Hapus Background
+              Hapus Background
             </button>
           </div>
 
@@ -515,20 +563,21 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 </span>
               </div>
 
+              {/* Tombol Cancel / Batal yang Mudah Diakses */}
               <button
                 type="button"
                 onClick={handleCancelTour}
-                className="px-2 py-0.8 rounded-md bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold font-mono border-2 border-black shadow-[1px_1px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
-                title="Batalkan Tour dan Kembali"
+                className="px-2.5 py-1 rounded-md bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold font-mono border-2 border-black shadow-[1px_1px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
+                title="Batalkan Tour dan Kembalikan Kontrol Penuh"
               >
                 <StopCircle className="w-3.5 h-3.5" />
                 <span>Cancel</span>
               </button>
             </div>
 
-            {/* Isi Teks Typewriter */}
+            {/* Isi Teks Typewriter Streaming Bersih */}
             <div className="text-xs font-medium leading-relaxed font-sans min-h-[48px] text-neutral-800">
-              <p className="whitespace-pre-line">{displayedReply || messages[messages.length - 1]?.text}</p>
+              <p className="whitespace-pre-line">{displayedReply || cleanSpeechText(messages[messages.length - 1]?.text)}</p>
               {isTyping && <span className="inline-block w-1.5 h-3 ml-1 bg-purple-600 animate-pulse" />}
             </div>
 
@@ -587,7 +636,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               type="button"
               onClick={handleCancelTour}
               className="w-full px-2 py-1 rounded-md bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-black font-mono border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center gap-1 transition-all cursor-pointer"
-              title="Batalkan Tour dan Kembalikan Kontrol"
+              title="Batalkan Tour dan Kembalikan Kontrol Penuh"
             >
               <StopCircle className="w-3.5 h-3.5" />
               <span>Cancel</span>

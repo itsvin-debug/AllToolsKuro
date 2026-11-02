@@ -1,497 +1,424 @@
-import React, { useId } from 'react';
+import React from 'react';
 
 /**
- * Komponen Grafis Vektor SVG & Animasi CSS Kuro (Persona Elaina - Majo no Tabitabi)
- * Dirender 100% menggunakan scalable vector paths & CSS keyframe animation (tanpa gambar PNG statis).
+ * KuroCharacter - Komponen Vektor Dinamis SVG Maskot AI Kuro (Persona Chibi Elaina)
  * 
- * Props:
- * - state: 'idle' | 'wave' | 'talking' | 'confused'
- * - size: number (default: 80)
- * - className: string
+ * Dirender 100% menggunakan SVG murni dan CSS keyframes tingkat lanjut.
+ * Mendukung status ekspresi & gerak dinamis:
+ * - 'idle'     : Animasi bernapas lembut & melayang perlahan
+ * - 'wave'     : Tangan kanan melambaikan tangan menyapa pengguna
+ * - 'talking'  : Animasi bibir terbuka-tutup tersinkronisasi dengan typewriter streaming
+ * - 'confused' : Topi miring, alis melengkung heran, tetesan keringat & tanda tanya
+ * - 'thinking' : Mata terpejam merenung dengan kilauan bintang sihir
  */
 export default function KuroCharacter({ state = 'idle', size = 80, className = '' }) {
-  const uid = useId().replace(/:/g, '');
-
   const isTalking = state === 'talking';
   const isWaving = state === 'wave';
   const isConfused = state === 'confused';
+  const isThinking = state === 'thinking';
 
   return (
     <div 
-      className={`inline-flex items-center justify-center relative select-none pointer-events-none ${className}`}
+      className={`relative inline-flex items-center justify-center select-none ${className}`}
       style={{ width: size, height: size }}
-      aria-label={`AI Kuro Elaina - ${state}`}
+      aria-label={`AI Kuro - Ekspresi ${state}`}
     >
       <style>{`
-        /* Animasi mengambang / bernapas halus (Floating Bob) */
-        @keyframes kuro-float-${uid} {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-3px); }
+        @keyframes kuro-float {
+          0%, 100% { transform: translateY(0px) rotate(0deg); }
+          50% { transform: translateY(-3px) rotate(0.5deg); }
         }
-
-        /* Animasi lambaian tangan kanan (Waving Hand) */
-        @keyframes kuro-wave-hand-${uid} {
+        @keyframes kuro-wave-hand {
           0%, 100% { transform: rotate(0deg); }
           25% { transform: rotate(-22deg); }
-          75% { transform: rotate(14deg); }
+          75% { transform: rotate(18deg); }
         }
-
-        /* Animasi mulut buka-tutup sinkron saat berbicara (Lip-Sync) */
-        @keyframes kuro-mouth-sync-${uid} {
-          0%, 100% { transform: scaleY(0.3); }
-          30% { transform: scaleY(1.2); }
-          60% { transform: scaleY(0.7); }
-          80% { transform: scaleY(1.4); }
+        @keyframes kuro-mouth-talk {
+          0%, 100% { d: path("M 112 147 Q 120 149 128 147"); }
+          50% { d: path("M 112 147 Q 120 156 128 147"); }
         }
-
-        /* Animasi anggukan antusias saat menjelaskan (Talking Bob) */
-        @keyframes kuro-talk-head-${uid} {
-          0%, 100% { transform: translateY(0px) rotate(0deg); }
-          50% { transform: translateY(-1.5px) rotate(0.8deg); }
+        @keyframes kuro-blink {
+          0%, 94%, 98%, 100% { transform: scaleY(1); }
+          96% { transform: scaleY(0.1); }
         }
-
-        /* Animasi kedipan mata natural (Eye Blink) */
-        @keyframes kuro-blink-${uid} {
-          0%, 92%, 100% { transform: scaleY(1); }
-          95% { transform: scaleY(0.08); }
+        @keyframes kuro-sweat {
+          0% { opacity: 0; transform: translateY(-4px) scale(0.6); }
+          50% { opacity: 1; transform: translateY(0px) scale(1); }
+          100% { opacity: 0; transform: translateY(6px) scale(0.8); }
         }
-
-        /* Animasi tanda tanya / sweatdrop saat bingung */
-        @keyframes kuro-confused-float-${uid} {
-          0%, 100% { transform: translateY(0) scale(1); opacity: 0.9; }
-          50% { transform: translateY(-4px) scale(1.1); opacity: 1; }
+        @keyframes kuro-sparkle {
+          0%, 100% { opacity: 0.2; transform: scale(0.7) rotate(0deg); }
+          50% { opacity: 1; transform: scale(1.15) rotate(180deg); }
         }
-
-        .kuro-base-${uid} {
+        @keyframes kuro-question {
+          0%, 100% { transform: translateY(0px) scale(1); }
+          50% { transform: translateY(-3px) scale(1.08); }
+        }
+        .anim-kuro-body {
+          animation: kuro-float 3.5s ease-in-out infinite;
           transform-origin: center bottom;
-          animation: kuro-float-${uid} 3.2s ease-in-out infinite;
         }
-
-        .kuro-head-${uid} {
-          transform-origin: 100px 95px;
-          transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        .anim-kuro-wave {
+          animation: kuro-wave-hand 0.75s ease-in-out infinite;
+          transform-origin: 168px 150px;
         }
-
-        .kuro-head-talking-${uid} {
-          animation: kuro-talk-head-${uid} 0.45s ease-in-out infinite;
+        .anim-kuro-talking-mouth {
+          animation: kuro-mouth-talk 0.22s ease-in-out infinite;
         }
-
-        .kuro-head-confused-${uid} {
-          transform: rotate(12deg) translateY(-1px);
+        .anim-kuro-eyes {
+          animation: kuro-blink 4.2s infinite;
+          transform-origin: 120px 132px;
         }
-
-        .kuro-eye-group-${uid} {
-          transform-origin: 100px 85px;
-          animation: kuro-blink-${uid} 4.2s infinite;
+        .anim-kuro-sweat {
+          animation: kuro-sweat 1.4s ease-in-out infinite;
         }
-
-        .kuro-arm-right-wave-${uid} {
-          transform-origin: 135px 125px;
-          animation: kuro-wave-hand-${uid} 0.65s ease-in-out infinite;
+        .anim-kuro-sparkle {
+          animation: kuro-sparkle 1.8s ease-in-out infinite;
+          transform-origin: center;
         }
-
-        .kuro-mouth-talking-${uid} {
-          transform-origin: 100px 99px;
-          animation: kuro-mouth-sync-${uid} 0.22s ease-in-out infinite;
+        .anim-kuro-question {
+          animation: kuro-question 1.5s ease-in-out infinite;
+          transform-origin: center;
         }
       `}</style>
 
       <svg
-        viewBox="0 0 200 200"
+        viewBox="0 0 240 240"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        className={`w-full h-full overflow-visible kuro-base-${uid}`}
+        className="w-full h-full drop-shadow-sm overflow-visible"
       >
         <defs>
-          {/* Gradien Rambut Perak-Lavender Elaina */}
-          <linearGradient id={`hair-grad-${uid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#E6DFF6" />
-            <stop offset="60%" stopColor="#D5C5EE" />
-            <stop offset="100%" stopColor="#B39DD8" />
+          {/* Gradien Rambut Silver Elaina */}
+          <linearGradient id="hairGrad" x1="120" y1="80" x2="120" y2="190" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#f1f3f9" />
+            <stop offset="60%" stopColor="#d8dce8" />
+            <stop offset="100%" stopColor="#b4b9cb" />
           </linearGradient>
 
-          {/* Gradien Topi & Jubah Ungu Tua Penyihir */}
-          <linearGradient id={`witch-hat-grad-${uid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#4A286D" />
-            <stop offset="50%" stopColor="#3B1C5B" />
-            <stop offset="100%" stopColor="#281140" />
+          {/* Gradien Topi & Jubah Ungu Tua */}
+          <linearGradient id="robeGrad" x1="120" y1="40" x2="120" y2="210" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#4c3b60" />
+            <stop offset="100%" stopColor="#312242" />
           </linearGradient>
 
-          {/* Gradien Pita Lavender Lembut */}
-          <linearGradient id={`ribbon-grad-${uid}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#D8BFD8" />
-            <stop offset="50%" stopColor="#C4A1D8" />
-            <stop offset="100%" stopColor="#A678C6" />
+          {/* Gradien Pita Topi Lavender */}
+          <linearGradient id="ribbonGrad" x1="120" y1="95" x2="120" y2="115" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stopColor="#e3d6f0" />
+            <stop offset="100%" stopColor="#bfa9d8" />
           </linearGradient>
 
-          {/* Gradien Mata Biru Anime Menawan */}
-          <linearGradient id={`eye-grad-${uid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#1E3A8A" />
-            <stop offset="45%" stopColor="#2563EB" />
-            <stop offset="100%" stopColor="#38BDF8" />
+          {/* Gradien Mata Sapphire Biru */}
+          <linearGradient id="eyeGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#1d4ed8" />
+            <stop offset="60%" stopColor="#3b82f6" />
+            <stop offset="100%" stopColor="#60a5fa" />
           </linearGradient>
 
-          {/* Gradien Bintang & Aksesoris Emas */}
-          <linearGradient id={`gold-grad-${uid}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#FDE047" />
-            <stop offset="60%" stopColor="#EAB308" />
-            <stop offset="100%" stopColor="#CA8A04" />
+          {/* Gradien Bros Emas Bintang */}
+          <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#fde047" />
+            <stop offset="50%" stopColor="#eab308" />
+            <stop offset="100%" stopColor="#ca8a04" />
           </linearGradient>
-
-          {/* Bayangan Halus */}
-          <filter id={`shadow-${uid}`} x="-10%" y="-10%" width="120%" height="120%">
-            <feDropShadow dx="0" dy="2" stdDeviation="1.5" floodColor="#1E0B36" floodOpacity="0.25" />
-          </filter>
         </defs>
 
-        {/* ─── 1. RAMBUT BELAKANG (BACK HAIR MANTLE) ─── */}
-        <g id="back-hair">
+        <g className="anim-kuro-body">
+          {/* ─── 1. RAMBUT BELAKANG & KEPANGAN ─── */}
           <path
-            d="M 62 85 C 50 110, 52 148, 65 170 C 72 165, 80 162, 88 165 C 96 160, 104 160, 112 165 C 120 162, 128 165, 135 170 C 148 148, 150 110, 138 85 Z"
-            fill={`url(#hair-grad-${uid})`}
-            stroke="#281140"
+            d="M 68 135 C 55 170 72 205 105 212 C 120 215 135 212 172 205 C 185 170 172 135 168 135 Z"
+            fill="url(#hairGrad)"
+            stroke="#1e1826"
             strokeWidth="2.5"
             strokeLinejoin="round"
           />
-          {/* Helai rambut samping menjuntai */}
-          <path d="M 58 115 Q 52 145 62 165" stroke="#9A82C4" strokeWidth="1.5" strokeLinecap="round" />
-          <path d="M 142 115 Q 148 145 138 165" stroke="#9A82C4" strokeWidth="1.5" strokeLinecap="round" />
-        </g>
+          {/* Aksen Tekstur Rambut Belakang */}
+          <path d="M 98 170 Q 120 195 142 170" stroke="#9da4bc" strokeWidth="1.5" strokeLinecap="round" />
+          <path d="M 108 185 Q 120 202 132 185" stroke="#9da4bc" strokeWidth="1.5" strokeLinecap="round" />
 
-        {/* ─── 2. BADAN & JUBAH PENYIHIR (CAPELET & DRESS) ─── */}
-        <g id="body-and-cape">
-          {/* Kerah Baju Putih di Dalam */}
+          {/* ─── 2. JUBAH PENYIHIR & GAUN (ROBE) ─── */}
           <path
-            d="M 85 118 L 100 134 L 115 118 L 108 112 L 92 112 Z"
-            fill="#FFFFFF"
-            stroke="#281140"
-            strokeWidth="2"
+            d="M 72 165 Q 52 195 48 215 C 65 218 85 216 120 216 C 155 216 175 218 192 215 Q 188 195 168 165 Z"
+            fill="url(#robeGrad)"
+            stroke="#1e1826"
+            strokeWidth="3"
             strokeLinejoin="round"
           />
-          {/* Dasi / Pita Dada Lavender */}
-          <path d="M 96 122 L 100 138 L 104 122 Z" fill={`url(#ribbon-grad-${uid})`} />
-
-          {/* Jubah Bahu Ungu Penyihir (Capelet) */}
-          <path
-            d="M 64 120 C 58 135, 54 158, 62 168 C 76 164, 88 162, 100 164 C 112 162, 124 164, 138 168 C 146 158, 142 135, 136 120 C 122 115, 78 115, 64 120 Z"
-            fill={`url(#witch-hat-grad-${uid})`}
-            stroke="#281140"
-            strokeWidth="2.5"
-            strokeLinejoin="round"
-          />
-
-          {/* Hiasan Bintang Emas pada Pinggiran Jubah Bawah */}
-          <g fill={`url(#gold-grad-${uid})`} stroke="#854D0E" strokeWidth="0.6">
-            {/* Bintang kiri */}
-            <polygon points="76,161 78,157 80,161 84,162 80,164 78,168 76,164 72,162" />
-            {/* Bintang tengah */}
-            <polygon points="100,157 101.5,153 103,157 107,158 103,160 101.5,164 100,160 96,158" />
-            {/* Bintang kanan */}
-            <polygon points="124,161 126,157 128,161 132,162 128,164 126,168 124,164 120,162" />
+          
+          {/* Bintang Emas Hiasan di Ujung Bawah Jubah (Sesuai Referensi) */}
+          <g fill="#fde047" stroke="#1e1826" strokeWidth="1">
+            <path d="M 78 206 L 80 202 L 82 206 L 86 208 L 82 210 L 80 214 L 78 210 L 74 208 Z" />
+            <path d="M 118 206 L 120 202 L 122 206 L 126 208 L 122 210 L 120 214 L 118 210 L 114 208 Z" />
+            <path d="M 158 206 L 160 202 L 162 206 L 166 208 L 162 210 L 160 214 L 158 210 L 154 208 Z" />
           </g>
 
-          {/* Bros Bintang Emas Khas Elaina di Kerah Dada */}
-          <g transform="translate(100, 122)" filter={`url(#shadow-${uid})`}>
-            {/* Pita belakang bros */}
-            <path d="M -10 -2 L -16 6 L -9 5 Z" fill={`url(#ribbon-grad-${uid})`} stroke="#281140" strokeWidth="1" />
-            <path d="M 10 -2 L 16 6 L 9 5 Z" fill={`url(#ribbon-grad-${uid})`} stroke="#281140" strokeWidth="1" />
-            {/* Bintang emas 5-sudut berdimensi */}
-            <polygon
-              points="0,-8 2.5,-2.5 8,-2.5 3.5,1.5 5.5,7 0,3.5 -5.5,7 -3.5,1.5 -8,-2.5 -2.5,-2.5"
-              fill={`url(#gold-grad-${uid})`}
-              stroke="#281140"
+          {/* Kerah Kemeja Putih & Dasi Ungu */}
+          <path d="M 102 162 L 120 178 L 138 162 L 128 156 L 112 156 Z" fill="#ffffff" stroke="#1e1826" strokeWidth="2" />
+          <path d="M 114 163 L 120 180 L 126 163 Z" fill="#7c5295" />
+
+          {/* BROS BINTANG EMAS KHAS ELAINA */}
+          <g transform="translate(120, 168) scale(1.1)">
+            <path
+              d="M 0 -8 L 2.4 -2.5 L 8 -2.4 L 3.8 1.6 L 5.2 7.2 L 0 4.2 L -5.2 7.2 L -3.8 1.6 L -8 -2.4 L -2.4 -2.5 Z"
+              fill="url(#goldGrad)"
+              stroke="#1e1826"
               strokeWidth="1.2"
               strokeLinejoin="round"
             />
-            {/* Titik kilau tengah */}
-            <circle cx="0" cy="0" r="1.5" fill="#FEF08A" />
           </g>
 
-          {/* Tangan Kiri (Posisi Istirahat Santai) */}
-          <g id="arm-left">
-            <path
-              d="M 64 122 C 58 132, 59 144, 66 150 C 69 146, 70 138, 70 128 Z"
-              fill={`url(#witch-hat-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="2"
-            />
-            {/* Manset Lengan & Tangan Mungil */}
-            <ellipse cx="67" cy="151" rx="4.5" ry="3.5" fill="#FFE4D6" stroke="#281140" strokeWidth="1.5" />
-          </g>
-
-          {/* Tangan Kanan: Dinamis Bergelombang / Melambai */}
-          <g 
-            id="arm-right" 
-            className={isWaving ? `kuro-arm-right-wave-${uid}` : ''}
-          >
-            {isWaving ? (
-              // Tangan kanan terangkat melambai menyapa pengguna
-              <g>
-                <path
-                  d="M 136 122 C 145 120, 154 112, 158 98 C 151 98, 142 108, 134 116 Z"
-                  fill={`url(#witch-hat-grad-${uid})`}
-                  stroke="#281140"
-                  strokeWidth="2"
-                  strokeLinejoin="round"
-                />
-                {/* Manset Pita Emas */}
-                <ellipse cx="157" cy="98" rx="4.5" ry="3" fill={`url(#gold-grad-${uid})`} stroke="#281140" strokeWidth="1" />
-                {/* Telapak Tangan Mungil Melambai */}
-                <g transform="translate(159, 93)">
-                  <circle cx="0" cy="0" r="5" fill="#FFE4D6" stroke="#281140" strokeWidth="1.5" />
-                  <path d="M 0 -5 L 1 -7" stroke="#281140" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M 3 -4 L 4.5 -6" stroke="#281140" strokeWidth="1.2" strokeLinecap="round" />
-                  <path d="M -3 -3 L -5 -4" stroke="#281140" strokeWidth="1.2" strokeLinecap="round" />
-                </g>
-              </g>
-            ) : (
-              // Tangan kanan posisi santai
-              <g>
-                <path
-                  d="M 136 122 C 142 132, 141 144, 134 150 C 131 146, 130 138, 130 128 Z"
-                  fill={`url(#witch-hat-grad-${uid})`}
-                  stroke="#281140"
-                  strokeWidth="2"
-                />
-                <ellipse cx="133" cy="151" rx="4.5" ry="3.5" fill="#FFE4D6" stroke="#281140" strokeWidth="1.5" />
-              </g>
-            )}
-          </g>
-        </g>
-
-        {/* ─── 3. KEPALA, WAJAH, & EKSPRESI (HEAD, FACE & EMOTIONS) ─── */}
-        <g 
-          id="head-group" 
-          className={`kuro-head-${uid} ${isTalking ? `kuro-head-talking-${uid}` : ''} ${isConfused ? `kuro-head-confused-${uid}` : ''}`}
-        >
-          {/* Kontur Wajah Chibi */}
+          {/* ─── 3. KEPALA & WAJAH (CHIBI PROPORTION) ─── */}
           <path
-            d="M 68 84 C 68 62, 132 62, 132 84 C 132 108, 118 122, 100 122 C 82 122, 68 108, 68 84 Z"
-            fill="#FFF2E8"
-            stroke="#281140"
+            d="M 80 128 C 78 155 94 168 120 168 C 146 168 162 155 160 128 C 160 102 146 95 120 95 C 94 95 80 102 80 128 Z"
+            fill="#fff3ec"
+            stroke="#1e1826"
             strokeWidth="2.5"
             strokeLinejoin="round"
           />
 
-          {/* Rona Merah Pipi Imut (Blush) */}
-          <ellipse cx="78" cy="98" rx="6" ry="3" fill="#FCA5A5" opacity="0.65" />
-          <ellipse cx="122" cy="98" rx="6" ry="3" fill="#FCA5A5" opacity="0.65" />
-          {/* Garis aksen blush anime */}
-          <path d="M 76 97 L 80 99" stroke="#E11D48" strokeWidth="1" strokeLinecap="round" opacity="0.7" />
-          <path d="M 120 97 L 124 99" stroke="#E11D48" strokeWidth="1" strokeLinecap="round" opacity="0.7" />
+          {/* Rona Pipi Merah Muda (Blush) */}
+          <ellipse cx="94" cy="144" rx="7" ry="4" fill="#fca5a5" opacity="0.65" />
+          <ellipse cx="146" cy="144" rx="7" ry="4" fill="#fca5a5" opacity="0.65" />
 
-          {/* Mata Anime Indah (Kiri & Kanan) */}
-          <g className={`kuro-eye-group-${uid}`}>
-            {/* Mata Kiri */}
-            <g transform="translate(82, 88)">
-              {/* Bulu Mata Atas */}
-              <path d="M -10 -6 Q 0 -10 9 -5" stroke="#281140" strokeWidth="2.8" strokeLinecap="round" fill="none" />
-              {/* Iris Biru Bergradien */}
-              <ellipse cx="0" cy="0" rx="7.5" ry="9" fill={`url(#eye-grad-${uid})`} />
-              {/* Pupil Gelap */}
-              <ellipse cx="0" cy="-1" rx="4.5" ry="5.5" fill="#0F172A" />
-              {/* Kilau Specular Utama (Highlight) */}
-              <circle cx="-2.5" cy="-3.5" r="3" fill="#FFFFFF" />
-              {/* Kilau Cahaya Kecil di Bawah */}
-              <circle cx="2.5" cy="3" r="1.5" fill="#BAE6FD" />
-            </g>
+          {/* ─── 4. MATA BIRU ANIME (ANIMATED & EXPRESSIVE) ─── */}
+          {!isThinking ? (
+            <g className="anim-kuro-eyes">
+              {/* Mata Kiri */}
+              <g transform="translate(98, 134)">
+                {isConfused ? (
+                  /* Mata Bingung: Bentuk sedikit bergelombang / ragu */
+                  <>
+                    <ellipse cx="0" cy="0" rx="6" ry="6.5" fill="url(#eyeGrad)" stroke="#1e1826" strokeWidth="2" />
+                    <circle cx="-1.5" cy="-2" r="2.2" fill="#ffffff" />
+                    <path d="M -7 -9 Q 0 -5 6 -7" stroke="#4a3b5c" strokeWidth="2.2" strokeLinecap="round" />
+                  </>
+                ) : (
+                  /* Mata Normal Indah & Tajam */
+                  <>
+                    <ellipse cx="0" cy="0" rx="6.5" ry="8" fill="url(#eyeGrad)" stroke="#1e1826" strokeWidth="2" />
+                    <circle cx="-1.5" cy="-2.5" r="2.8" fill="#ffffff" />
+                    <circle cx="2" cy="2.5" r="1.3" fill="#ffffff" opacity="0.9" />
+                    {/* Bulu Mata Atas */}
+                    <path d="M -8 -8 Q 0 -11 8 -7" stroke="#1e1826" strokeWidth="2.8" strokeLinecap="round" />
+                    <path d="M 6 -9 L 9 -11" stroke="#1e1826" strokeWidth="2" strokeLinecap="round" />
+                    {/* Alis Lembut */}
+                    <path d="M -7 -13 Q 0 -15 6 -12" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" />
+                  </>
+                )}
+              </g>
 
-            {/* Mata Kanan */}
-            <g transform="translate(118, 88)">
-              {/* Bulu Mata Atas */}
-              <path d="M -9 -5 Q 0 -10 10 -6" stroke="#281140" strokeWidth="2.8" strokeLinecap="round" fill="none" />
-              {/* Iris Biru Bergradien */}
-              <ellipse cx="0" cy="0" rx="7.5" ry="9" fill={`url(#eye-grad-${uid})`} />
-              {/* Pupil Gelap */}
-              <ellipse cx="0" cy="-1" rx="4.5" ry="5.5" fill="#0F172A" />
-              {/* Kilau Specular Utama (Highlight) */}
-              <circle cx="-2.5" cy="-3.5" r="3" fill="#FFFFFF" />
-              {/* Kilau Cahaya Kecil di Bawah */}
-              <circle cx="2.5" cy="3" r="1.5" fill="#BAE6FD" />
-            </g>
-          </g>
-
-          {/* Alis Ekspresif (Berubah saat Confused / Normal) */}
-          {isConfused ? (
-            <g stroke="#6D28D9" strokeWidth="1.8" strokeLinecap="round" fill="none">
-              {/* Alis kiri miring naik heran */}
-              <path d="M 74 74 Q 82 72 88 77" />
-              {/* Alis kanan turun heran */}
-              <path d="M 112 77 Q 118 72 126 74" />
+              {/* Mata Kanan */}
+              <g transform="translate(142, 134)">
+                {isConfused ? (
+                  <>
+                    <ellipse cx="0" cy="0" rx="6" ry="6.5" fill="url(#eyeGrad)" stroke="#1e1826" strokeWidth="2" />
+                    <circle cx="-1.5" cy="-2" r="2.2" fill="#ffffff" />
+                    <path d="M -6 -7 Q 0 -9 7 -5" stroke="#4a3b5c" strokeWidth="2.2" strokeLinecap="round" />
+                  </>
+                ) : (
+                  <>
+                    <ellipse cx="0" cy="0" rx="6.5" ry="8" fill="url(#eyeGrad)" stroke="#1e1826" strokeWidth="2" />
+                    <circle cx="-1.5" cy="-2.5" r="2.8" fill="#ffffff" />
+                    <circle cx="2" cy="2.5" r="1.3" fill="#ffffff" opacity="0.9" />
+                    <path d="M -8 -7 Q 0 -11 8 -8" stroke="#1e1826" strokeWidth="2.8" strokeLinecap="round" />
+                    <path d="M -9 -11 L -6 -9" stroke="#1e1826" strokeWidth="2" strokeLinecap="round" />
+                    <path d="M -6 -12 Q 0 -15 7 -13" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" />
+                  </>
+                )}
+              </g>
             </g>
           ) : (
-            <g stroke="#6D28D9" strokeWidth="1.8" strokeLinecap="round" fill="none">
-              <path d="M 75 75 Q 82 72 89 74" />
-              <path d="M 111 74 Q 118 72 125 75" />
+            /* Mata Terpejam Merenung (Thinking Expression) */
+            <g>
+              <path d="M 92 133 Q 98 139 104 133" stroke="#1e1826" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+              <path d="M 136 133 Q 142 139 148 133" stroke="#1e1826" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+              <path d="M 92 124 Q 98 122 104 125" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" />
+              <path d="M 136 125 Q 142 122 148 124" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" />
             </g>
           )}
 
-          {/* Hidung Imut Titik Kecil */}
-          <circle cx="100" cy="94" r="0.9" fill="#D97706" opacity="0.6" />
+          {/* Hidung Imut */}
+          <circle cx="120" cy="141" r="1" fill="#e09f87" />
 
-          {/* Mulut Dinamis (Lip-Sync / Smile / Confused) */}
-          <g transform="translate(100, 102)">
-            {isTalking ? (
-              // Mulut buka-tutup animasi sinkron dengan pengetikan teks
-              <g className={`kuro-mouth-talking-${uid}`}>
-                <ellipse cx="0" cy="0" rx="4" ry="4" fill="#BE185D" stroke="#281140" strokeWidth="1.4" />
-                <path d="M -2.5 1 Q 0 3 2.5 1" fill="#FDA4AF" />
-              </g>
-            ) : isConfused ? (
-              // Mulut bingung bergelombang kecil
-              <path
-                d="M -4.5 1 Q -2 -1.5 0 0 Q 2 -1.5 4.5 1"
-                stroke="#281140"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                fill="none"
-              />
-            ) : (
-              // Senyum manis default khas Elaina
-              <path
-                d="M -4.5 -0.5 Q 0 3.5 4.5 -0.5"
-                stroke="#281140"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                fill="none"
-              />
-            )}
-          </g>
-
-          {/* ─── 4. PONI RAMBUT DEPAN (FRONT BANGS) ─── */}
-          <g id="front-hair">
-            {/* Poni Tengah Khas Elaina Membelah Lembut */}
+          {/* ─── 5. MULUT DINAMIS (TALKING / SMILE / CONFUSED) ─── */}
+          {isTalking ? (
+            /* Mulut Berbicara dengan Keyframe CSS */
             <path
-              d="M 68 76 C 72 88, 76 96, 80 100 C 82 92, 85 86, 90 78 C 94 92, 98 102, 101 104 C 104 98, 108 90, 114 78 C 118 88, 122 96, 125 99 C 128 92, 130 84, 132 76 Z"
-              fill={`url(#hair-grad-${uid})`}
-              stroke="#281140"
+              d="M 112 147 Q 120 155 128 147"
+              fill="#be123c"
+              stroke="#1e1826"
               strokeWidth="2"
-              strokeLinejoin="round"
+              strokeLinecap="round"
+              className="anim-kuro-talking-mouth"
             />
-            {/* Helai Rambut Samping Panjang Menjuntai di Dada */}
+          ) : isConfused ? (
+            /* Mulut Bingung / Ragu */
             <path
-              d="M 66 84 C 60 98, 58 118, 64 135 C 67 130, 68 118, 70 102 Z"
-              fill={`url(#hair-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="1.8"
-              strokeLinejoin="round"
+              d="M 114 150 Q 120 146 126 149"
+              fill="none"
+              stroke="#1e1826"
+              strokeWidth="2"
+              strokeLinecap="round"
             />
+          ) : isThinking ? (
+            /* Mulut Sedikit Terbuka Memikirkan Jawaban */
+            <ellipse cx="120" cy="149" rx="2.5" ry="3.5" fill="#be123c" stroke="#1e1826" strokeWidth="1.5" />
+          ) : (
+            /* Senyum Manis Default */
             <path
-              d="M 134 84 C 140 98, 142 118, 136 135 C 133 130, 132 118, 130 102 Z"
-              fill={`url(#hair-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="1.8"
-              strokeLinejoin="round"
+              d="M 113 146 Q 120 152 127 146"
+              fill="none"
+              stroke="#1e1826"
+              strokeWidth="2"
+              strokeLinecap="round"
             />
-            {/* Jepitan Belah Ketupat Emas pada Ikatan Rambut */}
-            <polygon points="65,130 67,133 65,136 63,133" fill={`url(#gold-grad-${uid})`} stroke="#281140" strokeWidth="0.8" />
-            <polygon points="135,130 137,133 135,136 133,133" fill={`url(#gold-grad-${uid})`} stroke="#281140" strokeWidth="0.8" />
-          </g>
+          )}
 
-          {/* ─── 5. TOPI BESAR PENYIHIR ELAINA (WITCH HAT) ─── */}
-          <g id="witch-hat" filter={`url(#shadow-${uid})`}>
-            {/* Lingkar Tepi Daun Topi Bawah (Brim) */}
+          {/* ─── 6. RAMBUT DEPAN (BANGS & SIDE LOCKS) ─── */}
+          {/* Poni depan berlapis */}
+          <path
+            d="M 80 112 Q 95 136 100 126 Q 110 138 120 120 Q 130 138 140 126 Q 148 136 160 112 Z"
+            fill="url(#hairGrad)"
+            stroke="#1e1826"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+          {/* Rambut Samping Kiri */}
+          <path
+            d="M 80 115 C 72 135 68 165 78 180 C 82 170 85 145 88 128 Z"
+            fill="url(#hairGrad)"
+            stroke="#1e1826"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+          {/* Rambut Samping Kanan */}
+          <path
+            d="M 160 115 C 168 135 172 165 162 180 C 158 170 155 145 152 128 Z"
+            fill="url(#hairGrad)"
+            stroke="#1e1826"
+            strokeWidth="2.2"
+            strokeLinejoin="round"
+          />
+
+          {/* ─── 7. TOPI PENYIHIR KHAS ELAINA (WITCH HAT) ─── */}
+          <g transform={isConfused ? "rotate(-7, 120, 95)" : "rotate(0, 120, 95)"} className="transition-transform duration-300">
+            {/* Pinggiran Topi Melengkung Lebar (Wide Brim) */}
             <path
-              d="M 28 80 C 26 73, 55 64, 100 64 C 145 64, 174 73, 172 80 C 170 87, 142 88, 100 88 C 58 88, 30 87, 28 80 Z"
-              fill={`url(#witch-hat-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="2.8"
+              d="M 32 108 C 45 92 195 92 208 108 C 190 120 50 120 32 108 Z"
+              fill="url(#robeGrad)"
+              stroke="#1e1826"
+              strokeWidth="3"
+              strokeLinejoin="round"
+            />
+            
+            {/* Kerucut Topi Melengkung ke Kanan (Cone Body) */}
+            <path
+              d="M 72 98 Q 112 50 130 38 Q 155 24 182 32 Q 170 48 152 64 Q 162 82 168 98 Z"
+              fill="url(#robeGrad)"
+              stroke="#1e1826"
+              strokeWidth="3"
               strokeLinejoin="round"
             />
 
-            {/* Kerucut Puncak Topi Melengkung ke Kiri */}
+            {/* Ujung Topi Lipatan Khas dengan Bintang Emas Gantung */}
+            <path d="M 182 32 Q 192 38 188 44 Q 180 44 175 40 Z" fill="#312242" stroke="#1e1826" strokeWidth="2" />
+            <polygon points="188,44 190,48 194,49 191,52 192,56 188,54 184,56 185,52 182,49 186,48" fill="#fde047" stroke="#1e1826" strokeWidth="1" />
+
+            {/* Pita Topi Lavender Lembut */}
             <path
-              d="M 66 67 C 68 45, 80 26, 92 18 C 96 15, 84 10, 72 16 C 62 21, 55 30, 56 36 C 58 45, 59 58, 66 67 Z"
-              fill={`url(#witch-hat-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="2.5"
-              strokeLinejoin="round"
-            />
-            {/* Kubah Kerucut Utama Topi */}
-            <path
-              d="M 65 67 C 68 48, 86 28, 106 20 C 122 28, 132 46, 135 67 Z"
-              fill={`url(#witch-hat-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="2.5"
-              strokeLinejoin="round"
+              d="M 72 98 Q 120 90 168 98 L 166 86 Q 120 78 74 86 Z"
+              fill="url(#ribbonGrad)"
+              stroke="#1e1826"
+              strokeWidth="2"
             />
 
-            {/* Ornamen Daun / Bulu Emas Tergantung di Ujung Kerucut Topi */}
-            <g transform="translate(62, 22)">
-              <line x1="0" y1="0" x2="-4" y2="7" stroke="#CA8A04" strokeWidth="1.2" />
-              <path
-                d="M -4 7 C -7 8, -8 13, -5 16 C -2 13, -1 10, -4 7 Z"
-                fill={`url(#gold-grad-${uid})`}
-                stroke="#281140"
-                strokeWidth="1"
-              />
-            </g>
-
-            {/* Sabuk Pita Lavender di Pangkal Topi */}
-            <path
-              d="M 65 65 C 76 61, 124 61, 135 65 L 134 71 C 122 67, 78 67, 66 71 Z"
-              fill={`url(#ribbon-grad-${uid})`}
-              stroke="#281140"
-              strokeWidth="1.8"
-            />
-
-            {/* Busur Pita Besar di Sisi Kiri Topi */}
-            <g transform="translate(74, 62)">
+            {/* Pita Kupu-Kupu Besar di Samping Kanan (Large Bow) */}
+            <g transform="translate(155, 88)">
               {/* Sayap Pita Kiri */}
-              <path
-                d="M 0 0 C -12 -8, -18 2, -4 6 Z"
-                fill={`url(#ribbon-grad-${uid})`}
-                stroke="#281140"
-                strokeWidth="1.8"
-                strokeLinejoin="round"
-              />
+              <ellipse cx="-8" cy="-2" rx="9" ry="7" fill="#eddff6" stroke="#1e1826" strokeWidth="2" transform="rotate(-15)" />
               {/* Sayap Pita Kanan */}
-              <path
-                d="M 0 0 C 12 -8, 18 2, 4 6 Z"
-                fill={`url(#ribbon-grad-${uid})`}
-                stroke="#281140"
-                strokeWidth="1.8"
-                strokeLinejoin="round"
-              />
-              {/* Ikatan Tengah Pita */}
-              <ellipse cx="0" cy="1" rx="3.5" ry="4" fill="#9333EA" stroke="#281140" strokeWidth="1.5" />
-              {/* Bintang Emas Mini di Tengah Pita */}
-              <polygon
-                points="0,-2 1,-0.5 2.5,-0.5 1.2,0.8 1.8,2.2 0,1.2 -1.8,2.2 -1.2,0.8 -2.5,-0.5 -1,-0.5"
-                fill={`url(#gold-grad-${uid})`}
-              />
+              <ellipse cx="8" cy="-2" rx="9" ry="7" fill="#eddff6" stroke="#1e1826" strokeWidth="2" transform="rotate(15)" />
+              {/* Simpul Tengah Pita */}
+              <circle cx="0" cy="-2" r="5" fill="#c3a8df" stroke="#1e1826" strokeWidth="2" />
+              {/* Ekor Pita Menggantung */}
+              <path d="M -3 3 L -7 16 L -1 13 L 2 16 L 1 3 Z" fill="#d9c3ee" stroke="#1e1826" strokeWidth="1.5" />
             </g>
           </g>
 
-          {/* ─── 6. AKSSESORIS EFEK EMOSI (SWEATDROP & QUESTION MARK) ─── */}
-          {isConfused && (
-            <g className={`kuro-confused-fx-${uid}`} style={{ animation: `kuro-confused-float-${uid} 1.6s ease-in-out infinite` }}>
-              {/* Balon Tanda Tanya Kuning Terang di Atas Topi */}
-              <g transform="translate(142, 28)">
-                <circle cx="0" cy="0" r="10" fill="#FDE047" stroke="#281140" strokeWidth="2" />
-                <text
-                  x="0"
-                  y="4.5"
-                  textAnchor="middle"
-                  fontFamily="system-ui, -apple-system, sans-serif"
-                  fontWeight="900"
-                  fontSize="13"
-                  fill="#1E0B36"
-                >
-                  ?
-                </text>
-              </g>
-              {/* Tetesan Keringat Kartun Anime (Sweatdrop) */}
+          {/* ─── 8. TANGAN KANAN (WAVING ANIMATION) ─── */}
+          {isWaving ? (
+            <g className="anim-kuro-wave">
+              {/* Lengan Baju Jubah */}
+              <path d="M 166 160 Q 182 148 190 134 Q 180 128 166 148 Z" fill="url(#robeGrad)" stroke="#1e1826" strokeWidth="2.5" />
+              {/* Manset Putih */}
+              <ellipse cx="187" cy="133" rx="5" ry="3" fill="#ffffff" stroke="#1e1826" strokeWidth="1.5" transform="rotate(-35, 187, 133)" />
+              {/* Telapak Tangan Melambai (Chibi Mitt) */}
               <path
-                d="M 52 56 C 50 62, 54 66, 57 65 C 60 64, 60 59, 56 54 Z"
-                fill="#38BDF8"
-                stroke="#281140"
-                strokeWidth="1.2"
-                opacity="0.9"
+                d="M 186 130 C 188 122 195 118 200 123 C 203 126 201 133 194 136 Z"
+                fill="#fff3ec"
+                stroke="#1e1826"
+                strokeWidth="2"
               />
+              {/* Jempol */}
+              <path d="M 187 127 C 185 125 186 122 189 123" stroke="#1e1826" strokeWidth="1.5" />
+            </g>
+          ) : (
+            /* Tangan Normal Memegang Jubah atau Santai */
+            <g>
+              <path d="M 162 165 Q 172 178 175 188 Q 168 192 158 178 Z" fill="url(#robeGrad)" stroke="#1e1826" strokeWidth="2" />
+              <circle cx="174" cy="190" r="4.5" fill="#fff3ec" stroke="#1e1826" strokeWidth="1.8" />
             </g>
           )}
+
+          {/* Tangan Kiri */}
+          <g>
+            <path d="M 78 165 Q 68 178 65 188 Q 72 192 82 178 Z" fill="url(#robeGrad)" stroke="#1e1826" strokeWidth="2" />
+            <circle cx="66" cy="190" r="4.5" fill="#fff3ec" stroke="#1e1826" strokeWidth="1.8" />
+          </g>
+
+          {/* Sepatu Bot Penyihir Cokelat (Boots) */}
+          <g>
+            <path d="M 98 214 L 98 226 C 98 229 90 231 86 229 C 83 227 88 220 92 215 Z" fill="#543729" stroke="#1e1826" strokeWidth="2" />
+            <path d="M 142 214 L 142 226 C 142 229 150 231 154 229 C 157 227 152 220 148 215 Z" fill="#543729" stroke="#1e1826" strokeWidth="2" />
+            {/* Gesper Emas */}
+            <rect x="94" y="219" width="6" height="3" fill="#fde047" stroke="#1e1826" strokeWidth="1" />
+            <rect x="140" y="219" width="6" height="3" fill="#fde047" stroke="#1e1826" strokeWidth="1" />
+          </g>
         </g>
+
+        {/* ─── 9. EFEK VISUAL EKSPRESI: BINGUNG (CONFUSED) ─── */}
+        {isConfused && (
+          <>
+            {/* Tetesan Keringat Anime (Sweat Drop) */}
+            <g transform="translate(62, 102)" className="anim-kuro-sweat">
+              <path
+                d="M 0 -6 C 4 -2 5 3 2 6 C -1 8 -5 6 -5 2 C -5 -2 0 -6 0 -6 Z"
+                fill="#38bdf8"
+                stroke="#0284c7"
+                strokeWidth="1.5"
+              />
+            </g>
+
+            {/* Balon Tanda Tanya Melayang */}
+            <g transform="translate(182, 70)" className="anim-kuro-question">
+              <rect x="-3" y="-3" width="26" height="26" rx="6" fill="#fef08a" stroke="#1e1826" strokeWidth="2" />
+              <text x="10" y="16" textAnchor="middle" fontSize="16" fontWeight="900" fill="#1e1826" fontFamily="monospace">?</text>
+            </g>
+          </>
+        )}
+
+        {/* ─── 10. EFEK VISUAL EKSPRESI: MERENUNG / MEMIKIRKAN (THINKING) ─── */}
+        {isThinking && (
+          <g>
+            {/* Bintang Sihir Berputar di Atas Kepala */}
+            <g transform="translate(180, 68)" className="anim-kuro-sparkle">
+              <polygon points="0,-7 2,-2 7,0 2,2 0,7 -2,2 -7,0 -2,-2" fill="#fde047" stroke="#ca8a04" strokeWidth="1" />
+            </g>
+            <g transform="translate(56, 80)" className="anim-kuro-sparkle" style={{ animationDelay: '0.6s' }}>
+              <polygon points="0,-5 1.5,-1.5 5,0 1.5,1.5 0,5 -1.5,1.5 -5,0 -1.5,-1.5" fill="#f472b6" stroke="#db2777" strokeWidth="1" />
+            </g>
+          </g>
+        )}
       </svg>
     </div>
   );

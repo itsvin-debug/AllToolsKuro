@@ -147,6 +147,16 @@ Kamu WAJIB mengembalikan respon dalam format JSON murni:
 }
 """
 
+def clean_speech_text(text: str) -> str:
+    """Membersihkan format markdown mentah seperti bintang ganda agar ucapan terdengar alami."""
+    if not text:
+        return ""
+    clean = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    clean = re.sub(r'\*(.*?)\*', r'\1', clean)
+    clean = re.sub(r'#{1,6}\s+', '', clean)
+    clean = re.sub(r'`([^`]+)`', r'\1', clean)
+    return clean.strip()
+
 def detect_tool_mention(text: str) -> Optional[str]:
     """Mendeteksi apakah pengguna menyebutkan salah satu dari 12 fitur Kuro."""
     clean = text.lower()
@@ -243,9 +253,13 @@ def health_check():
 def handle_chat(req: ChatRequest):
     message = req.message.strip()
     lower_msg = message.lower()
+    target_tool_id = detect_tool_mention(lower_msg)
 
-    # 1. Pengecekan Permintaan Tour Berkelanjutan (Sequence Tour)
-    if any(k in lower_msg for k in ["tour", "tur", "semua fitur", "jelaskan semua", "keliling", "panduan lengkap", "apa saja fitur"]):
+    # 1. Pengecekan Permintaan Tour Berkelanjutan (Sequence Tour) dengan regex word-boundary agar kata 'fitur' tidak tertukar dengan 'tur'
+    tour_patterns = [r'\btour\b', r'\btur\b', r'semua fitur', r'jelaskan semua', r'keliling', r'panduan lengkap', r'apa saja fitur']
+    is_tour_request = any(re.search(pat, lower_msg) for pat in tour_patterns)
+
+    if is_tour_request and not target_tool_id:
         first_tool = TOUR_ORDER[0]
         return ChatResponse(
             reply="Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 12 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!",
@@ -265,11 +279,10 @@ def handle_chat(req: ChatRequest):
         )
 
     # 3. Pengecekan Permintaan Penjelasan Fitur Spesifik (Auto-Scroll)
-    target_tool_id = detect_tool_mention(lower_msg)
     is_explanation_request = any(k in lower_msg for k in ["jelaskan", "apa itu", "cara pakai", "bagaimana", "bisa apa", "fitur", "fungsi"])
 
-    # Coba gunakan Gemini API jika key tersedia
-    if GEMINI_API_KEY:
+    # Coba gunakan Gemini API jika key resmi Google AI Studio tersedia (berawalan AIzaSy)
+    if GEMINI_API_KEY and GEMINI_API_KEY.startswith('AIzaSy'):
         try:
             gemini_res = call_gemini_api(message, req.history)
             
@@ -281,7 +294,7 @@ def handle_chat(req: ChatRequest):
                 act = "navigate_tool"
 
             return ChatResponse(
-                reply=gemini_res.get("reply", "Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?"),
+                reply=clean_speech_text(gemini_res.get("reply", "Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?")),
                 animation=gemini_res.get("animation", "talking"),
                 action=act,
                 targetTool=detected_target,
@@ -295,7 +308,7 @@ def handle_chat(req: ChatRequest):
     if target_tool_id:
         t_info = KURO_TOOLS[target_tool_id]
         return ChatResponse(
-            reply=f"Tentu saja! Ini dia fitur **{t_info['name']}**. {t_info['desc']} Kamu bisa langsung mencobanya sekarang!",
+            reply=clean_speech_text(f"Tentu saja! Ini dia fitur {t_info['name']}. {t_info['desc']} Kamu bisa langsung mencobanya sekarang!"),
             animation="talking",
             action="navigate_tool",
             targetTool=target_tool_id,

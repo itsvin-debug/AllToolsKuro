@@ -81,6 +81,18 @@ const TOUR_ORDER = [
   'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover'
 ];
 
+function cleanSpeechText(text) {
+  if (!text) return '';
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+    .replace(/_(.*?)_/g, '$1')
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .trim();
+}
+
 function detectToolMention(text) {
   const clean = text.toLowerCase();
   for (const [toolId, toolData] of Object.entries(KURO_TOOLS)) {
@@ -125,9 +137,11 @@ export default async function handler(req, res) {
     const { message = '', history = [] } = req.body || {};
     const cleanMsg = message.trim();
     const lowerMsg = cleanMsg.toLowerCase();
+    const targetToolId = detectToolMention(lowerMsg);
 
-    // 1. Deteksi Permintaan Tour Berkelanjutan (Sequence Tour)
-    if (['tour', 'tur', 'semua fitur', 'jelaskan semua', 'keliling', 'panduan lengkap', 'apa saja fitur'].some(k => lowerMsg.includes(k))) {
+    // 1. Deteksi Permintaan Tour Berkelanjutan (Sequence Tour) dengan regex word-boundary agar kata 'fitur' tidak tertukar dengan 'tur'
+    const isTourRequest = /\b(tour|tur|keliling|panduan lengkap|apa saja fitur)\b|semua fitur|jelaskan semua/i.test(lowerMsg);
+    if (isTourRequest && !targetToolId) {
       return res.status(200).json({
         reply: 'Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 12 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!',
         animation: 'talking',
@@ -148,7 +162,6 @@ export default async function handler(req, res) {
     }
 
     // 3. Deteksi Penjelasan Fitur Spesifik
-    const targetToolId = detectToolMention(lowerMsg);
     const isExplanation = ['jelaskan', 'apa itu', 'cara pakai', 'bagaimana', 'bisa apa', 'fitur', 'fungsi'].some(k => lowerMsg.includes(k));
 
     const geminiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_GEMINIKURO_KEY;
@@ -180,7 +193,7 @@ export default async function handler(req, res) {
             const parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim());
             const act = parsed.action || (targetToolId && isExplanation ? 'navigate_tool' : 'none');
             return res.status(200).json({
-              reply: parsed.reply || 'Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?',
+              reply: cleanSpeechText(parsed.reply) || 'Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?',
               animation: parsed.animation || 'talking',
               action: act,
               targetTool: parsed.targetTool || targetToolId || null,
@@ -197,7 +210,7 @@ export default async function handler(req, res) {
     if (targetToolId) {
       const tool = KURO_TOOLS[targetToolId];
       return res.status(200).json({
-        reply: `Tentu saja! Ini dia fitur **${tool.name}**. ${tool.desc} Kamu bisa langsung menggunakannya sekarang!`,
+        reply: `Tentu saja! Ini dia fitur ${tool.name}. ${tool.desc} Kamu bisa langsung menggunakannya sekarang!`,
         animation: 'talking',
         action: 'navigate_tool',
         targetTool: targetToolId,
