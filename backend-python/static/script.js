@@ -223,6 +223,8 @@ let currentTourIndex = 0;
 let typingInterval = null;
 let tourTimeout = null;
 
+const DEVICE_STORAGE_KEY = 'kuro_device_ai_chat_history';
+
 // Elemen DOM
 const triggerBtn = document.getElementById('kuroTriggerBtn');
 const triggerAvatarContainer = document.getElementById('kuroTriggerAvatarContainer');
@@ -230,6 +232,7 @@ const chatPopup = document.getElementById('kuroChatPopup');
 const headerAvatarContainer = document.getElementById('kuroHeaderAvatarContainer');
 const closePopupBtn = document.getElementById('btnClosePopup');
 const quickTourBtn = document.getElementById('btnQuickTour');
+const clearHistoryBtn = document.getElementById('btnClearHistory');
 const chatLogs = document.getElementById('kuroChatLogs');
 const kuroForm = document.getElementById('kuroForm');
 const kuroInput = document.getElementById('kuroInput');
@@ -412,6 +415,10 @@ async function sendMessage(text) {
     chatHistory.push({ sender: 'user', text: cleanMsg });
     chatHistory.push({ sender: 'ai', text: replyText });
 
+    try {
+      localStorage.setItem(DEVICE_STORAGE_KEY, JSON.stringify(chatHistory.slice(-25)));
+    } catch (e) {}
+
     if (action === 'start_tour') {
       startFullTour();
     } else if (action === 'navigate_tool' && targetTool) {
@@ -429,6 +436,30 @@ async function sendMessage(text) {
       updateAvatarContainers('idle');
     });
   }
+}
+
+// Fungsi Hapus Riwayat Khusus Perangkat Ini (Reset Chat)
+function clearDeviceChatHistory() {
+  if (typingInterval) {
+    clearInterval(typingInterval);
+    typingInterval = null;
+  }
+  if (tourTimeout) {
+    clearTimeout(tourTimeout);
+    tourTimeout = null;
+  }
+
+  try {
+    localStorage.removeItem(DEVICE_STORAGE_KEY);
+  } catch (e) {}
+
+  chatHistory = [];
+  if (chatLogs) chatLogs.innerHTML = '';
+  updateAvatarContainers('wave');
+
+  const welcome = 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu menjelaskan seluruh fitur keren di web ini.';
+  const bubble = appendChatBubble('ai', '');
+  typewriterStream(welcome, bubble);
 }
 
 // Tambah Pesan ke Log Obrolan
@@ -458,6 +489,25 @@ function appendChatBubble(sender, text) {
 document.addEventListener('DOMContentLoaded', () => {
   // Inisialisasi SVG Avatar
   updateAvatarContainers('idle');
+
+  // Muat riwayat pesan yang tersimpan di perangkat ini saja
+  try {
+    const saved = localStorage.getItem(DEVICE_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        chatHistory = parsed;
+        parsed.forEach(item => {
+          appendChatBubble(item.sender, item.text);
+        });
+      }
+    }
+  } catch (e) {}
+
+  // Tombol Hapus Riwayat (Reset)
+  if (clearHistoryBtn) {
+    clearHistoryBtn.addEventListener('click', clearDeviceChatHistory);
+  }
 
   // Tombol Buka Popup
   if (triggerBtn) {

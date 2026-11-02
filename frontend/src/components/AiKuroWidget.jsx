@@ -7,7 +7,8 @@ import {
   ChevronRight, 
   StopCircle, 
   ArrowUpRight, 
-  Maximize2
+  Maximize2,
+  RotateCcw
 } from 'lucide-react';
 import KuroCharacter from './KuroCharacter';
 
@@ -108,8 +109,23 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking'
   const [animState, setAnimState] = useState('idle');
 
-  // Obrolan
-  const [messages, setMessages] = useState([]);
+  // Kunci penyimpanan riwayat lokal terisolasi khusus perangkat ini saja
+  const DEVICE_CHAT_STORAGE_KEY = 'kuro_device_ai_chat_history';
+
+  // Obrolan terisolasi per perangkat (Local to this device only, tidak bercampur antar perangkat)
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem(DEVICE_CHAT_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      // Abaikan error parsing
+    }
+    return [];
+  });
+
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [displayedReply, setDisplayedReply] = useState('');
@@ -123,6 +139,19 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   const typingTimerRef = useRef(null);
   const tourSequenceRef = useRef(null);
   const hasGreetedRef = useRef(false);
+
+  // Simpan riwayat secara lokal di perangkat ini saja setiap kali ada obrolan baru
+  useEffect(() => {
+    try {
+      if (messages.length > 0) {
+        localStorage.setItem(DEVICE_CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-25)));
+      } else {
+        localStorage.removeItem(DEVICE_CHAT_STORAGE_KEY);
+      }
+    } catch (e) {
+      // Abaikan error storage quota
+    }
+  }, [messages]);
 
   // Auto-scroll riwayat obrolan ke bawah
   useEffect(() => {
@@ -160,10 +189,16 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }, speed);
   }, []);
 
-  // Sapaan otomatis saat pengguna pertama kali membuka web
+  // Sapaan otomatis saat pengguna pertama kali membuka web (jika belum ada riwayat sebelumnya)
   useEffect(() => {
     if (hasGreetedRef.current) return;
     hasGreetedRef.current = true;
+
+    // Jika perangkat ini sudah memiliki riwayat pesan, tampilkan riwayat tanpa mengulang sapaan
+    try {
+      const saved = localStorage.getItem(DEVICE_CHAT_STORAGE_KEY);
+      if (saved && JSON.parse(saved).length > 0) return;
+    } catch (e) {}
 
     // Beri jeda 800ms agar halaman utama termuat stabil terlebih dahulu
     const greetTimer = setTimeout(() => {
@@ -196,6 +231,34 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     } else {
       setTimeout(() => setAnimState('idle'), 1200);
     }
+  };
+
+  // Fitur Hapus Riwayat (Clear History) Khusus Perangkat Ini & Reset ke Sapaan Awal
+  const handleClearHistory = () => {
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    if (tourSequenceRef.current) {
+      clearTimeout(tourSequenceRef.current);
+      tourSequenceRef.current = null;
+    }
+
+    try {
+      localStorage.removeItem(DEVICE_CHAT_STORAGE_KEY);
+    } catch (e) {}
+
+    setMessages([]);
+    setDisplayedReply('');
+    setIsTyping(false);
+    setAnimState('wave');
+
+    const welcomeReset = 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu menjelaskan seluruh fitur keren di web ini.';
+    setTimeout(() => {
+      streamText(welcomeReset, () => {
+        setMessages([{ sender: 'ai', text: welcomeReset, animation: 'idle' }]);
+      });
+    }, 450);
   };
 
   // Batalkan seluruh timer tour, streaming teks, dan kembalikan kontrol penuh kepada pengguna
@@ -418,6 +481,15 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             </div>
 
             <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleClearHistory}
+                className="w-8 h-8 rounded-lg bg-white hover:bg-rose-50 text-neutral-800 hover:text-rose-600 border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                title="Hapus Riwayat Obrolan (Mulai Ulang Sapaan)"
+                aria-label="Hapus Riwayat Obrolan"
+              >
+                <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
+              </button>
               <button
                 type="button"
                 onClick={handleStartTour}
