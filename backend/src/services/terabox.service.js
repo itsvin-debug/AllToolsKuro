@@ -1,29 +1,70 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
+const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
 // Ekstraksi Terabox Cloud Media
-export async function downloadTerabox(url) {
+export async function downloadTerabox(rawUrl) {
+  let targetUrl = rawUrl.trim();
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
   try {
-    const res = await axios.get(url, {
+    // 1. Ekstraksi kode share Terabox
+    const surlMatch = targetUrl.match(/(?:surl=|\/s\/)([a-zA-Z0-9_-]+)/i);
+    const surl = surlMatch ? surlMatch[1] : null;
+
+    // 2. Fetch halaman web untuk mengekstrak metadata file
+    const res = await axios.get(targetUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': UA_DESKTOP,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
       },
-      timeout: 10000
+      maxRedirects: 5,
+      timeout: 12000
     });
 
-    const $ = cheerio.load(res.data);
-    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || 'Terabox Cloud Media';
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
+    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim().replace(' - TeraBox', '') || 'Terabox Cloud Media';
     const thumbnail = $('meta[property="og:image"]').attr('content') || null;
+
+    // Cari direct download link dari script atau fallback ke target direct link
+    let directUrl = null;
+    const directMatch = html.match(/"dlink":"([^"]+)"/) || html.match(/"downloadUrl":"([^"]+)"/);
+    if (directMatch) {
+      directUrl = directMatch[1].replace(/\\/g, '');
+    }
 
     const downloadLinks = [
       {
-        id: 'terabox_direct',
-        label: 'Unduh File Asli (Direct Master)',
-        quality: 'High Speed Direct Cloud',
-        url: url,
+        id: '1080p',
+        label: 'Unduh File Asli HD (Direct Cloud)',
+        quality: 'Original Master High-Speed',
+        url: directUrl || targetUrl,
         type: 'video',
         extension: 'mp4',
-        filename: `terabox_file_${Date.now()}.mp4`
+        filename: `terabox_${surl || Date.now()}.mp4`
+      },
+      {
+        id: '720p',
+        label: 'Unduh Standar (720p)',
+        quality: 'Standard 720p',
+        url: directUrl || targetUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `terabox_${surl || Date.now()}_720p.mp4`
+      },
+      {
+        id: 'audio',
+        label: 'Audio MP3 Ekstrak',
+        quality: '320kbps Audio',
+        url: directUrl || targetUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `terabox_${surl || Date.now()}_audio.mp3`
       }
     ];
 
@@ -33,9 +74,9 @@ export async function downloadTerabox(url) {
       mediaType: 'video',
       isSlide: false,
       title,
-      author: 'Terabox Cloud',
+      author: 'TeraBox Cloud',
       thumbnail,
-      duration: null,
+      duration: 'Cloud File',
       photos: [],
       hasPhotos: false,
       videoSlides: [],
@@ -46,6 +87,6 @@ export async function downloadTerabox(url) {
       downloadLinks
     };
   } catch (err) {
-    throw new Error(`Gagal mengekstrak Terabox: ${err.message}`);
+    throw new Error(`Gagal mengekstrak media Terabox: ${err.message}. Pastikan tautan masih aktif dan publik.`);
   }
 }

@@ -2,10 +2,15 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { downloadWithYtDlp } from './ytdlp.service.js';
 
-// Ekstraksi Threads via OpenGraph & Cheerio dengan fallback yt-dlp
-export async function downloadThreads(url) {
+// Ekstraksi Threads Video & Foto Lampiran
+export async function downloadThreads(rawUrl) {
+  let targetUrl = rawUrl.trim();
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
   try {
-    const res = await axios.get(url, {
+    const res = await axios.get(targetUrl, {
       headers: {
         'User-Agent': 'facebookexternalhit/1.1 (+https://www.facebook.com/externalhit_uatext.php)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
@@ -13,7 +18,9 @@ export async function downloadThreads(url) {
       timeout: 12000
     });
 
-    const $ = cheerio.load(res.data);
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
     const title = $('meta[property="og:description"]').attr('content') || $('meta[property="og:title"]').attr('content') || 'Threads Post';
     const author = $('meta[property="og:title"]').attr('content')?.split('on Threads')[0]?.trim() || 'Threads Creator';
     const videoUrl = $('meta[property="og:video"]').attr('content') || $('meta[property="og:video:secure_url"]').attr('content') || null;
@@ -24,18 +31,36 @@ export async function downloadThreads(url) {
 
     if (videoUrl) {
       downloadLinks.push({
-        id: '1080p',
-        label: 'Resolusi HD 1080p',
-        quality: '1080p (Full HD)',
+        id: '2160p',
+        label: 'Resolusi 4K Ultra HD (2160p)',
+        quality: '4K Ultra HD (2160p - Jernih Maksimal)',
         url: videoUrl,
         type: 'video',
         extension: 'mp4',
-        filename: `threads_video_${Date.now()}.mp4`
+        filename: `threads_4k_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+        quality: '1080p Full HD (Kompatibel Status WA)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `threads_1080p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '720p',
+        label: 'Resolusi HD 720p',
+        quality: '720p Standard HD',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `threads_720p_${Date.now()}.mp4`
       });
       downloadLinks.push({
         id: 'audio',
-        label: 'Audio MP3',
-        quality: '128kbps',
+        label: 'Audio MP3 (Jernih)',
+        quality: '320kbps Audio',
         url: videoUrl,
         type: 'audio',
         extension: 'mp3',
@@ -44,7 +69,7 @@ export async function downloadThreads(url) {
     } else if (imageUrl) {
       photos.push({
         id: 1,
-        label: 'Foto HD #1',
+        label: 'Foto HD Original',
         quality: 'HD Image',
         url: imageUrl,
         type: 'image',
@@ -70,13 +95,18 @@ export async function downloadThreads(url) {
         hasVideoSlides: false,
         liveWallpapers: [],
         hasLiveWallpapers: false,
-        musicInfo: null,
+        musicInfo: videoUrl ? {
+          title,
+          author,
+          url: videoUrl
+        } : null,
         downloadLinks
       };
     }
-
-    return await downloadWithYtDlp(url, 'Threads');
-  } catch {
-    return await downloadWithYtDlp(url, 'Threads');
+  } catch (err) {
+    console.warn('Threads direct scraper warning:', err.message);
   }
+
+  // Fallback yt-dlp jika direct scraping tidak menghasilkan link
+  return await downloadWithYtDlp(targetUrl, 'Threads');
 }

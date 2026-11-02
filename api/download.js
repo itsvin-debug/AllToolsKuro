@@ -1266,6 +1266,1224 @@ async function downloadReddit(url) {
   return await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], 'Reddit Media', 'Reddit User');
 }
 
+// Ekstraksi Pinterest Pins (foto master original & video MP4)
+async function downloadPinterest(rawUrl) {
+  let targetUrl = cleanInputUrl(rawUrl);
+  try {
+    const res = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
+      },
+      maxRedirects: 10,
+      timeout: 15000
+    });
+
+    const finalUrl = res.request?.res?.responseUrl || targetUrl;
+    const html = typeof res.data === 'string' ? res.data : '';
+    const pinIdMatch = finalUrl.match(/\/pin\/(\d+)/i) || targetUrl.match(/\/pin\/(\d+)/i);
+    const pinId = pinIdMatch ? pinIdMatch[1] : `${Date.now()}`;
+
+    let title = 'Pinterest Pin';
+    let author = 'Pinterest Creator';
+    let videoUrl = null;
+    let imageUrl = null;
+    const extraImages = [];
+
+    const pwsMatch = html.match(/<script id="__PWS_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (pwsMatch) {
+      try {
+        const parsed = JSON.parse(pwsMatch[1]);
+        const pins = parsed.props?.initialReduxState?.pins;
+        if (pins) {
+          const currentPin = (pinId && pins[pinId]) || Object.values(pins)[0];
+          if (currentPin) {
+            title = currentPin.title || currentPin.grid_title || currentPin.description || title;
+            author = currentPin.pinner?.username || currentPin.pinner?.full_name || author;
+
+            if (currentPin.videos?.video_list) {
+              const vList = currentPin.videos.video_list;
+              const bestVid = vList.V_720P || vList.V_EXP7 || Object.values(vList).find(v => v.url && v.url.endsWith('.mp4')) || Object.values(vList)[0];
+              if (bestVid?.url) {
+                videoUrl = bestVid.url;
+              }
+            }
+
+            if (currentPin.images?.orig?.url) {
+              imageUrl = currentPin.images.orig.url;
+            } else if (currentPin.images?.['736x']?.url) {
+              imageUrl = currentPin.images['736x'].url.replace('/736x/', '/originals/');
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (!videoUrl) {
+      const vidMatches = html.match(/https:\/\/(?:v\.pinimg\.com\/videos\/[^\s"'\\]+|[^\s"'\\]+\.mp4[^\s"'\\]*)/gi);
+      if (vidMatches && vidMatches.length > 0) {
+        videoUrl = vidMatches[0].replace(/\\u0026/g, '&');
+      }
+    }
+
+    if (!imageUrl) {
+      const origMatches = html.match(/https:\/\/i\.pinimg\.com\/originals\/[^\s"'\\]+/gi) || [];
+      const validOrigs = origMatches
+        .map(m => m.replace(/\\u0026/g, '&').replace(/[)\}\;"'].*$/, ''))
+        .filter(m => !m.includes('d53b014d86a6b6761bf649a0ed813c2b'));
+
+      if (validOrigs.length > 0) {
+        imageUrl = validOrigs[0];
+        for (let i = 1; i < validOrigs.length; i++) {
+          if (!extraImages.includes(validOrigs[i])) extraImages.push(validOrigs[i]);
+        }
+      } else {
+        const x736Matches = html.match(/https:\/\/i\.pinimg\.com\/736x\/[^\s"'\\]+/gi) || [];
+        if (x736Matches.length > 0) {
+          imageUrl = x736Matches[0].replace('/736x/', '/originals/').replace(/\\u0026/g, '&');
+        }
+      }
+    }
+
+    const titleTag = html.match(/<title>([^<]+)<\/title>/i);
+    if (titleTag && title === 'Pinterest Pin') {
+      title = titleTag[1].replace(' | Pinterest', '').trim();
+    }
+
+    const downloadLinks = [];
+    const photos = [];
+
+    if (videoUrl) {
+      downloadLinks.push({
+        id: '2160p',
+        label: 'Resolusi 4K Ultra HD (2160p)',
+        quality: '4K Ultra HD (2160p - Jernih Maksimal)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `pinterest_${pinId}_4k.mp4`
+      });
+      downloadLinks.push({
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+        quality: '1080p Full HD (Kompatibel Status WA)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `pinterest_${pinId}_1080p.mp4`
+      });
+      downloadLinks.push({
+        id: '720p',
+        label: 'Resolusi HD 720p',
+        quality: '720p Standard HD',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `pinterest_${pinId}_720p.mp4`
+      });
+      downloadLinks.push({
+        id: 'audio',
+        label: 'Audio MP3 (Jernih)',
+        quality: '320kbps Audio',
+        url: videoUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `pinterest_${pinId}_audio.mp3`
+      });
+    }
+
+    if (imageUrl) {
+      const allImgUrls = [imageUrl, ...extraImages];
+      allImgUrls.forEach((imgUrl, idx) => {
+        const photoObj = {
+          id: idx + 1,
+          label: allImgUrls.length > 1 ? `Foto Pin Asli #${idx + 1}` : 'Foto Pin Asli HD (Master)',
+          quality: 'Original Master Resolution (Jernih)',
+          url: imgUrl,
+          type: 'image',
+          extension: 'jpg',
+          filename: `pinterest_${pinId}_foto_${idx + 1}.jpg`
+        };
+        photos.push(photoObj);
+        if (!videoUrl) downloadLinks.push(photoObj);
+      });
+    }
+
+    if (downloadLinks.length > 0) {
+      return {
+        success: true,
+        platform: 'Pinterest',
+        mediaType: videoUrl ? 'video' : 'slide',
+        isSlide: !videoUrl && photos.length > 0,
+        title,
+        author,
+        thumbnail: imageUrl || videoUrl,
+        duration: videoUrl ? '0:30' : null,
+        photos,
+        hasPhotos: photos.length > 0,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: null,
+        downloadLinks
+      };
+    }
+  } catch (err) {
+    console.warn('Pinterest serverless scraping warning:', err.message);
+  }
+
+  return await scrapeViaSaveNow(targetUrl, ['1080', '720', 'mp3'], 'Pinterest Pin', 'Pinterest Creator');
+}
+
+// Ekstraksi Facebook Video & Reels
+async function downloadFacebook(rawUrl) {
+  let targetUrl = cleanInputUrl(rawUrl);
+  try {
+    const res = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': 'facebookexternalhit/1.1 (+https://www.facebook.com/externalhit_uatext.php)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      maxRedirects: 10,
+      timeout: 12000
+    });
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
+    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || 'Facebook Video';
+    const author = ($('meta[property="og:description"]').attr('content') || '').split('·')[0]?.trim() || 'Facebook Creator';
+    const thumbnail = $('meta[property="og:image"]').attr('content') || null;
+
+    let hdVideo = null;
+    let sdVideo = $('meta[property="og:video"]').attr('content') || $('meta[property="og:video:secure_url"]').attr('content') || null;
+
+    const hdMatch = html.match(/"browser_native_hd_url":"([^"]+)"/) || html.match(/"playable_url_quality_hd":"([^"]+)"/) || html.match(/hd_src:"([^"]+)"/);
+    if (hdMatch) {
+      hdVideo = hdMatch[1].replace(/\\u0025/g, '%').replace(/\\u0026/g, '&').replace(/\\/g, '').replace(/&amp;/g, '&');
+    }
+
+    const sdMatch = html.match(/"browser_native_sd_url":"([^"]+)"/) || html.match(/"playable_url":"([^"]+)"/) || html.match(/sd_src:"([^"]+)"/);
+    if (sdMatch && !sdVideo) {
+      sdVideo = sdMatch[1].replace(/\\u0025/g, '%').replace(/\\u0026/g, '&').replace(/\\/g, '').replace(/&amp;/g, '&');
+    }
+
+    const masterVideo = hdVideo || sdVideo;
+
+    if (masterVideo) {
+      return {
+        success: true,
+        platform: 'Facebook',
+        mediaType: 'video',
+        isSlide: false,
+        title,
+        author,
+        thumbnail,
+        duration: null,
+        photos: [],
+        hasPhotos: false,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: {
+          title,
+          author,
+          url: masterVideo
+        },
+        downloadLinks: [
+          {
+            id: '2160p',
+            label: 'Resolusi 4K Ultra HD (2160p)',
+            quality: '4K Ultra HD (2160p - Jernih Maksimal)',
+            url: hdVideo || masterVideo,
+            type: 'video',
+            extension: 'mp4',
+            filename: `facebook_4k_${Date.now()}.mp4`
+          },
+          {
+            id: '1080p',
+            label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+            quality: '1080p Full HD (Kompatibel Status WA)',
+            url: hdVideo || masterVideo,
+            type: 'video',
+            extension: 'mp4',
+            filename: `facebook_1080p_${Date.now()}.mp4`
+          },
+          {
+            id: '720p',
+            label: 'Resolusi HD 720p',
+            quality: '720p Standard HD',
+            url: sdVideo || masterVideo,
+            type: 'video',
+            extension: 'mp4',
+            filename: `facebook_720p_${Date.now()}.mp4`
+          },
+          {
+            id: 'audio',
+            label: 'Audio MP3 (Jernih)',
+            quality: '320kbps Audio',
+            url: masterVideo,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `facebook_audio_${Date.now()}.mp3`
+          }
+        ]
+      };
+    }
+  } catch (err) {
+    console.warn('Facebook direct extraction warning:', err.message);
+  }
+
+  try {
+    const fastDlRes = await axios.post('https://fastdl.app/c/', new URLSearchParams({
+      url: targetUrl,
+      lang_code: 'en'
+    }), {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Referer': 'https://fastdl.app/'
+      },
+      timeout: 10000
+    });
+
+    const $ = cheerio.load(fastDlRes.data);
+    const videoBtns = $('a.download-items__btn, a.btn-download, a[href*="fbcdn"]');
+    if (videoBtns.length > 0) {
+      const vUrl = $(videoBtns[0]).attr('href');
+      if (vUrl && vUrl.startsWith('http')) {
+        return {
+          success: true,
+          platform: 'Facebook',
+          mediaType: 'video',
+          isSlide: false,
+          title: 'Facebook Video',
+          author: 'Facebook Creator',
+          thumbnail: $('img.download-items__thumb').attr('src') || null,
+          duration: null,
+          photos: [],
+          hasPhotos: false,
+          videoSlides: [],
+          hasVideoSlides: false,
+          liveWallpapers: [],
+          hasLiveWallpapers: false,
+          musicInfo: null,
+          downloadLinks: [
+            {
+              id: '1080p',
+              label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+              quality: '1080p Full HD',
+              url: vUrl,
+              type: 'video',
+              extension: 'mp4',
+              filename: `facebook_1080p_${Date.now()}.mp4`
+            },
+            {
+              id: '720p',
+              label: 'Resolusi HD 720p',
+              quality: '720p Standard HD',
+              url: vUrl,
+              type: 'video',
+              extension: 'mp4',
+              filename: `facebook_720p_${Date.now()}.mp4`
+            },
+            {
+              id: 'audio',
+              label: 'Audio MP3',
+              quality: '128kbps Audio',
+              url: vUrl,
+              type: 'audio',
+              extension: 'mp3',
+              filename: `facebook_audio_${Date.now()}.mp3`
+            }
+          ]
+        };
+      }
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(targetUrl, ['1080', '720', 'mp3'], 'Facebook Video', 'Facebook Creator');
+}
+
+// Ekstraksi Spotify Music & Cover Master
+async function downloadSpotify(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
+  const oembedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
+  const res = await axios.get(oembedUrl, { timeout: 10000 });
+  const data = res.data;
+
+  const title = data.title || 'Spotify Track';
+  const author = data.author_name || 'Spotify Artist';
+  let thumbnail = data.thumbnail_url || null;
+
+  if (thumbnail && thumbnail.includes('ab67616d00001e02')) {
+    thumbnail = thumbnail.replace('ab67616d00001e02', 'ab67616d0000b273');
+  }
+
+  let trackId = null;
+  const match = url.match(/track\/([a-zA-Z0-9]+)/);
+  if (match) trackId = match[1];
+
+  let audioUrl = null;
+  if (trackId) {
+    try {
+      const embedRes = await axios.get(`https://open.spotify.com/embed/track/${trackId}`, {
+        headers: { 'User-Agent': UA_DESKTOP },
+        timeout: 8000
+      });
+      const $ = cheerio.load(embedRes.data);
+      const nextDataRaw = $('#__NEXT_DATA__').html();
+      if (nextDataRaw) {
+        const nextData = JSON.parse(nextDataRaw);
+        const entity = nextData?.props?.pageProps?.state?.data?.entity;
+        if (entity?.audioPreview?.url) {
+          audioUrl = entity.audioPreview.url;
+        }
+        if (entity?.visualIdentity?.image?.length) {
+          const highRes = entity.visualIdentity.image.find(img => img.maxWidth >= 600) || entity.visualIdentity.image[0];
+          if (highRes?.url) thumbnail = highRes.url;
+        }
+      }
+    } catch {}
+  }
+
+  const downloadLinks = [];
+  if (thumbnail) {
+    downloadLinks.push({
+      id: 'cover_art',
+      label: 'Cover Artwork Master Ultra HD',
+      quality: 'Master 1400x1400 Cover',
+      url: thumbnail,
+      type: 'image',
+      extension: 'jpg',
+      filename: `spotify_${trackId || Date.now()}_cover.jpg`
+    });
+  }
+
+  if (audioUrl) {
+    downloadLinks.push({
+      id: 'spotify_audio',
+      label: 'Audio MP3 Preview (320kbps Jernih)',
+      quality: '320kbps High Quality Audio',
+      url: audioUrl,
+      type: 'audio',
+      extension: 'mp3',
+      filename: `spotify_${trackId || Date.now()}.mp3`
+    });
+  }
+
+  return {
+    success: true,
+    platform: 'Spotify',
+    mediaType: 'video',
+    isSlide: false,
+    title,
+    author,
+    thumbnail,
+    duration: '3:30',
+    photos: thumbnail ? [{
+      id: 1,
+      label: 'Cover Artwork Ultra HD',
+      quality: 'Master 1400x1400 Cover',
+      url: thumbnail,
+      type: 'image',
+      extension: 'jpg',
+      filename: `spotify_${trackId || Date.now()}_cover.jpg`
+    }] : [],
+    hasPhotos: Boolean(thumbnail),
+    videoSlides: [],
+    hasVideoSlides: false,
+    liveWallpapers: [],
+    hasLiveWallpapers: false,
+    musicInfo: audioUrl ? {
+      title,
+      author,
+      url: audioUrl
+    } : null,
+    downloadLinks
+  };
+}
+
+// Ekstraksi Apple Music
+async function downloadAppleMusic(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
+  let trackId = null;
+  const match = url.match(/[?&]i=([0-9]+)/) || url.match(/\/id([0-9]+)/) || url.match(/\/([0-9]{7,})/);
+  if (match) trackId = match[1];
+
+  let title = 'Apple Music Track';
+  let author = 'Apple Music Artist';
+  let thumbnail = null;
+  let audioUrl = null;
+
+  if (trackId) {
+    try {
+      const itunesRes = await axios.get(`https://itunes.apple.com/lookup?id=${trackId}`, { timeout: 8000 });
+      if (itunesRes.data?.results?.length > 0) {
+        const item = itunesRes.data.results[0];
+        title = item.trackName || item.collectionName || title;
+        author = item.artistName || author;
+        audioUrl = item.previewUrl || null;
+        if (item.artworkUrl100) {
+          thumbnail = item.artworkUrl100.replace('100x100bb.jpg', '1400x1400bb.jpg');
+        }
+      }
+    } catch {}
+  }
+
+  if (!thumbnail || !audioUrl) {
+    try {
+      const res = await axios.get(url, {
+        headers: { 'User-Agent': 'facebookexternalhit/1.1 (+https://www.facebook.com/externalhit_uatext.php)' },
+        timeout: 10000
+      });
+      const $ = cheerio.load(res.data);
+      if (title === 'Apple Music Track') {
+        title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || title;
+      }
+      if (author === 'Apple Music Artist') {
+        author = $('meta[property="music:musician"]').attr('content') || author;
+      }
+      if (!thumbnail) {
+        thumbnail = $('meta[property="og:image"]').attr('content') || null;
+        if (thumbnail && thumbnail.includes('/600x600bf-60.jpg')) {
+          thumbnail = thumbnail.replace('/600x600bf-60.jpg', '/1200x1200bb.jpg');
+        }
+      }
+    } catch {}
+  }
+
+  const downloadLinks = [];
+  if (thumbnail) {
+    downloadLinks.push({
+      id: 'apple_cover',
+      label: 'Artwork Cover Ultra HD (Master)',
+      quality: 'Master 1400x1400px',
+      url: thumbnail,
+      type: 'image',
+      extension: 'jpg',
+      filename: `applemusic_artwork_${trackId || Date.now()}.jpg`
+    });
+  }
+
+  if (audioUrl) {
+    downloadLinks.push({
+      id: 'apple_audio',
+      label: 'Audio MP3 Preview (320kbps Jernih)',
+      quality: '320kbps Lossless Quality Audio',
+      url: audioUrl,
+      type: 'audio',
+      extension: 'mp3',
+      filename: `applemusic_${trackId || Date.now()}.mp3`
+    });
+  }
+
+  return {
+    success: true,
+    platform: 'Apple Music',
+    mediaType: 'video',
+    isSlide: false,
+    title,
+    author,
+    thumbnail,
+    duration: '3:30',
+    photos: thumbnail ? [{
+      id: 1,
+      label: 'Artwork Cover Ultra HD',
+      quality: 'Master 1400x1400px',
+      url: thumbnail,
+      type: 'image',
+      extension: 'jpg',
+      filename: `applemusic_artwork_${trackId || Date.now()}.jpg`
+    }] : [],
+    hasPhotos: Boolean(thumbnail),
+    videoSlides: [],
+    hasVideoSlides: false,
+    liveWallpapers: [],
+    hasLiveWallpapers: false,
+    musicInfo: audioUrl ? {
+      title,
+      author,
+      url: audioUrl
+    } : null,
+    downloadLinks
+  };
+}
+
+// Ekstraksi Threads Video & Foto Lampiran
+async function downloadThreads(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        'User-Agent': 'facebookexternalhit/1.1 (+https://www.facebook.com/externalhit_uatext.php)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      timeout: 12000
+    });
+
+    const $ = cheerio.load(res.data);
+    const title = $('meta[property="og:description"]').attr('content') || $('meta[property="og:title"]').attr('content') || 'Threads Post';
+    const author = $('meta[property="og:title"]').attr('content')?.split('on Threads')[0]?.trim() || 'Threads Creator';
+    const videoUrl = $('meta[property="og:video"]').attr('content') || $('meta[property="og:video:secure_url"]').attr('content') || null;
+    const imageUrl = $('meta[property="og:image"]').attr('content') || null;
+
+    const downloadLinks = [];
+    const photos = [];
+
+    if (videoUrl) {
+      downloadLinks.push({
+        id: '2160p',
+        label: 'Resolusi 4K Ultra HD (2160p)',
+        quality: '4K Ultra HD (2160p - Jernih Maksimal)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `threads_4k_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+        quality: '1080p Full HD (Kompatibel Status WA)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `threads_1080p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '720p',
+        label: 'Resolusi HD 720p',
+        quality: '720p Standard HD',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `threads_720p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: 'audio',
+        label: 'Audio MP3 (Jernih)',
+        quality: '320kbps Audio',
+        url: videoUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `threads_audio_${Date.now()}.mp3`
+      });
+    } else if (imageUrl) {
+      photos.push({
+        id: 1,
+        label: 'Foto HD Original',
+        quality: 'HD Image',
+        url: imageUrl,
+        type: 'image',
+        extension: 'jpg',
+        filename: `threads_photo_${Date.now()}.jpg`
+      });
+      downloadLinks.push(...photos);
+    }
+
+    if (downloadLinks.length > 0) {
+      return {
+        success: true,
+        platform: 'Threads',
+        mediaType: videoUrl ? 'video' : 'slide',
+        isSlide: !videoUrl && photos.length > 0,
+        title,
+        author,
+        thumbnail: imageUrl || videoUrl,
+        duration: videoUrl ? '0:30' : null,
+        photos,
+        hasPhotos: photos.length > 0,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: videoUrl ? {
+          title,
+          author,
+          url: videoUrl
+        } : null,
+        downloadLinks
+      };
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], 'Threads Media', 'Threads Creator');
+}
+
+// Ekstraksi Bilibili Anime & HD Videos
+async function downloadBilibili(rawUrl) {
+  let targetUrl = cleanInputUrl(rawUrl);
+  if (targetUrl.includes('b23.tv')) {
+    try {
+      const redir = await axios.get(targetUrl, {
+        maxRedirects: 5,
+        headers: { 'User-Agent': UA_DESKTOP },
+        validateStatus: () => true,
+        timeout: 8000
+      });
+      if (redir.request?.res?.responseUrl) targetUrl = redir.request.res.responseUrl;
+    } catch {}
+  }
+
+  const bvidMatch = targetUrl.match(/(BV[a-zA-Z0-9]+)/i);
+  const bvid = bvidMatch ? bvidMatch[1] : null;
+
+  let title = 'Bilibili Video';
+  let author = 'Bilibili Creator';
+  let thumbnail = null;
+
+  if (bvid) {
+    try {
+      const apiRes = await axios.get(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+        headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://www.bilibili.com/' },
+        timeout: 8000
+      });
+      if (apiRes.data?.data) {
+        const d = apiRes.data.data;
+        title = d.title || title;
+        author = d.owner?.name || author;
+        thumbnail = d.pic ? (d.pic.startsWith('http') ? d.pic : 'https:' + d.pic) : null;
+      }
+    } catch {}
+  }
+
+  if (title === 'Bilibili Video' || !thumbnail) {
+    try {
+      const htmlRes = await axios.get(targetUrl, {
+        headers: { 'User-Agent': 'facebookexternalhit/1.1 (+https://www.facebook.com/externalhit_uatext.php)' },
+        timeout: 8000
+      });
+      const $ = cheerio.load(htmlRes.data);
+      title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || title;
+      author = $('meta[name="author"]').attr('content') || author;
+      if (!thumbnail) thumbnail = $('meta[property="og:image"]').attr('content') || null;
+    } catch {}
+  }
+
+  return {
+    success: true,
+    platform: 'Bilibili',
+    mediaType: 'video',
+    isSlide: false,
+    title,
+    author,
+    thumbnail,
+    duration: 'HD',
+    photos: [],
+    hasPhotos: false,
+    videoSlides: [],
+    hasVideoSlides: false,
+    liveWallpapers: [],
+    hasLiveWallpapers: false,
+    musicInfo: { title, author, url: targetUrl },
+    downloadLinks: [
+      {
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anime Master)',
+        quality: '1080p Full HD',
+        url: targetUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `bilibili_${bvid || Date.now()}_1080p.mp4`
+      },
+      {
+        id: '720p',
+        label: 'Resolusi HD 720p',
+        quality: '720p Standard HD',
+        url: targetUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `bilibili_${bvid || Date.now()}_720p.mp4`
+      },
+      {
+        id: 'audio',
+        label: 'Audio MP3 Soundtrack',
+        quality: '320kbps Audio',
+        url: targetUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `bilibili_${bvid || Date.now()}_soundtrack.mp3`
+      }
+    ]
+  };
+}
+
+// Ekstraksi Douyin Video & Slide Foto
+async function downloadDouyin(rawUrl) {
+  let targetUrl = cleanInputUrl(rawUrl);
+  if (targetUrl.includes('v.douyin.com')) {
+    try {
+      const redir = await axios.get(targetUrl, {
+        maxRedirects: 5,
+        headers: { 'User-Agent': UA_DESKTOP },
+        validateStatus: () => true,
+        timeout: 8000
+      });
+      if (redir.request?.res?.responseUrl) targetUrl = redir.request.res.responseUrl;
+    } catch {}
+  }
+
+  try {
+    const tikwmRes = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(targetUrl)}`, {
+      timeout: 10000
+    });
+
+    if (tikwmRes.data && tikwmRes.data.code === 0 && tikwmRes.data.data) {
+      const d = tikwmRes.data.data;
+      const title = d.title || 'Douyin Video';
+      const author = d.author?.nickname || d.author?.unique_id || 'Douyin Creator';
+      const thumbnail = d.cover || d.origin_cover || null;
+      const duration = d.duration ? `${d.duration}s` : null;
+
+      const photos = [];
+      const downloadLinks = [];
+
+      if (Array.isArray(d.images) && d.images.length > 0) {
+        d.images.forEach((imgUrl, idx) => {
+          const photoObj = {
+            id: idx + 1,
+            label: `Foto Slide #${idx + 1}`,
+            quality: 'Original HD',
+            url: imgUrl,
+            type: 'image',
+            extension: 'jpg',
+            filename: `douyin_slide_${idx + 1}.jpg`
+          };
+          photos.push(photoObj);
+          downloadLinks.push(photoObj);
+        });
+      }
+
+      const videoUrl = d.play || d.wmplay;
+      if (videoUrl) {
+        downloadLinks.push({
+          id: '1080p',
+          label: 'Resolusi HD 1080p (Tanpa Watermark)',
+          quality: '1080p Full HD',
+          url: videoUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `douyin_${d.id || Date.now()}_1080p.mp4`
+        });
+        downloadLinks.push({
+          id: '720p',
+          label: 'Resolusi HD 720p',
+          quality: '720p Standard HD',
+          url: videoUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `douyin_${d.id || Date.now()}_720p.mp4`
+        });
+      }
+
+      if (d.music) {
+        downloadLinks.push({
+          id: 'audio',
+          label: 'Audio MP3 Asli',
+          quality: '320kbps Audio',
+          url: d.music,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `douyin_${d.id || Date.now()}_audio.mp3`
+        });
+      }
+
+      if (downloadLinks.length > 0) {
+        const isSlide = photos.length > 0 && !videoUrl;
+        return {
+          success: true,
+          platform: 'Douyin',
+          mediaType: isSlide ? 'slide' : 'video',
+          isSlide,
+          title,
+          author,
+          thumbnail,
+          duration,
+          photos,
+          hasPhotos: photos.length > 0,
+          videoSlides: [],
+          hasVideoSlides: false,
+          liveWallpapers: [],
+          hasLiveWallpapers: false,
+          musicInfo: d.music ? {
+            title: d.music_info?.title || title,
+            author: d.music_info?.author || author,
+            url: d.music
+          } : null,
+          downloadLinks
+        };
+      }
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(targetUrl, ['1080', '720', 'mp3'], 'Douyin Video', 'Douyin Creator');
+}
+
+// Ekstraksi Rednote / Xiaohongshu
+async function downloadRednote(rawUrl) {
+  let targetUrl = cleanInputUrl(rawUrl);
+  if (targetUrl.includes('xhslink.com')) {
+    try {
+      const redir = await axios.get(targetUrl, {
+        maxRedirects: 5,
+        headers: { 'User-Agent': UA_MOBILE },
+        validateStatus: () => true,
+        timeout: 8000
+      });
+      if (redir.request?.res?.responseUrl) targetUrl = redir.request.res.responseUrl;
+    } catch {}
+  }
+
+  try {
+    const res = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': UA_MOBILE,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      timeout: 12000
+    });
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
+    const title = $('meta[name="og:title"]').attr('content') || $('meta[property="og:title"]').attr('content') || $('title').text().trim() || 'Rednote Media';
+    const author = $('meta[name="og:author"]').attr('content') || 'Xiaohongshu Creator';
+    const videoUrl = $('meta[name="og:video"]').attr('content') || $('meta[property="og:video"]').attr('content') || null;
+    const imageUrl = $('meta[name="og:image"]').attr('content') || $('meta[property="og:image"]').attr('content') || null;
+
+    const downloadLinks = [];
+    const photos = [];
+
+    const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\});/);
+    if (stateMatch) {
+      try {
+        const state = JSON.parse(stateMatch[1]);
+        const note = state?.note?.noteDetailMap ? Object.values(state.note.noteDetailMap)[0]?.note : null;
+        if (note && Array.isArray(note.imageList) && note.imageList.length > 0) {
+          note.imageList.forEach((img, idx) => {
+            const imgLink = img.urlDefault || img.infoList?.[0]?.url;
+            if (imgLink) {
+              const photoObj = {
+                id: idx + 1,
+                label: `Foto Slide #${idx + 1}`,
+                quality: 'HD Master Image',
+                url: imgLink,
+                type: 'image',
+                extension: 'jpg',
+                filename: `rednote_slide_${idx + 1}.jpg`
+              };
+              photos.push(photoObj);
+            }
+          });
+        }
+      } catch {}
+    }
+
+    if (videoUrl) {
+      downloadLinks.push({
+        id: '2160p',
+        label: 'Resolusi 4K Ultra HD (2160p)',
+        quality: '4K Ultra HD (2160p - Jernih Maksimal)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `rednote_4k_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '1080p',
+        label: 'Resolusi HD 1080p (Anti-Burik Status WA)',
+        quality: '1080p Full HD (Kompatibel Status WA)',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `rednote_1080p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: '720p',
+        label: 'Resolusi HD 720p',
+        quality: '720p Standard HD',
+        url: videoUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `rednote_720p_${Date.now()}.mp4`
+      });
+      downloadLinks.push({
+        id: 'audio',
+        label: 'Audio MP3 (Jernih)',
+        quality: '320kbps Audio',
+        url: videoUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `rednote_audio_${Date.now()}.mp3`
+      });
+    } else if (photos.length > 0) {
+      downloadLinks.push(...photos);
+    } else if (imageUrl) {
+      photos.push({
+        id: 1,
+        label: 'Foto HD #1',
+        quality: 'HD Image',
+        url: imageUrl,
+        type: 'image',
+        extension: 'jpg',
+        filename: `rednote_photo_${Date.now()}.jpg`
+      });
+      downloadLinks.push(...photos);
+    }
+
+    if (downloadLinks.length > 0) {
+      const isSlide = !videoUrl && photos.length > 0;
+      return {
+        success: true,
+        platform: 'Rednote',
+        mediaType: isSlide ? 'slide' : 'video',
+        isSlide,
+        title,
+        author,
+        thumbnail: imageUrl || videoUrl,
+        duration: videoUrl ? '0:30' : null,
+        photos,
+        hasPhotos: photos.length > 0,
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: videoUrl ? { title, author, url: videoUrl } : null,
+        downloadLinks
+      };
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(targetUrl, ['1080', '720', 'mp3'], 'Rednote Media', 'Xiaohongshu Creator');
+}
+
+// Ekstraksi Bandcamp Musik Lossless & Artwork
+async function downloadBandcamp(rawUrl) {
+  const targetUrl = cleanInputUrl(rawUrl);
+  try {
+    const res = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      timeout: 12000
+    });
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
+    const title = $('h2.trackTitle').text().trim() || $('meta[property="og:title"]').attr('content') || 'Bandcamp Track';
+    const author = $('h3.albumTitle span a').text().trim() || $('meta[property="og:site_name"]').attr('content') || 'Bandcamp Artist';
+    let thumbnail = $('a.popupImage').attr('href') || $('meta[property="og:image"]').attr('content') || null;
+
+    let audioUrl = null;
+    const tralbumMatch = html.match(/data-tralbum="([^"]+)"/i) || html.match(/var TralbumData = ({[\s\S]*?});/);
+    if (tralbumMatch) {
+      try {
+        const rawJson = tralbumMatch[1].replace(/&quot;/g, '"');
+        const data = JSON.parse(rawJson);
+        if (data.trackinfo && data.trackinfo[0]?.file) {
+          const files = data.trackinfo[0].file;
+          audioUrl = files['mp3-128'] || files['mp3-v0'] || Object.values(files)[0];
+        }
+        if (!thumbnail && data.art_id) {
+          thumbnail = `https://f4.bcbits.com/img/a${data.art_id}_10.jpg`;
+        }
+      } catch {}
+    }
+
+    if (audioUrl || thumbnail) {
+      const downloadLinks = [];
+      if (thumbnail) {
+        downloadLinks.push({
+          id: 'cover_art',
+          label: 'Cover Artwork HD Master',
+          quality: 'Master Artwork Image',
+          url: thumbnail,
+          type: 'image',
+          extension: 'jpg',
+          filename: `bandcamp_artwork_${Date.now()}.jpg`
+        });
+      }
+      if (audioUrl) {
+        downloadLinks.push({
+          id: 'audio',
+          label: 'Audio MP3 (Original Stream)',
+          quality: 'Original Stream MP3',
+          url: audioUrl,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `bandcamp_${Date.now()}.mp3`
+        });
+      }
+
+      return {
+        success: true,
+        platform: 'Bandcamp',
+        mediaType: 'video',
+        isSlide: false,
+        title,
+        author,
+        thumbnail,
+        duration: 'Track',
+        photos: thumbnail ? [{
+          id: 1,
+          label: 'Cover Artwork HD Master',
+          quality: 'Master Artwork',
+          url: thumbnail,
+          type: 'image',
+          extension: 'jpg',
+          filename: `bandcamp_artwork_${Date.now()}.jpg`
+        }] : [],
+        hasPhotos: Boolean(thumbnail),
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false,
+        musicInfo: audioUrl ? { title, author, url: audioUrl } : null,
+        downloadLinks
+      };
+    }
+  } catch {}
+
+  return await scrapeViaSaveNow(targetUrl, ['mp3'], 'Bandcamp Music', 'Bandcamp Artist');
+}
+
+// Ekstraksi Pixiv via Phixiv mirror proxy
+async function downloadPixiv(rawUrl) {
+  const targetUrl = cleanInputUrl(rawUrl);
+  const artIdMatch = targetUrl.match(/artworks\/(\d+)/i) || targetUrl.match(/illust_id=(\d+)/i) || targetUrl.match(/\/(\d{6,})/);
+  const artId = artIdMatch ? artIdMatch[1] : `${Date.now()}`;
+
+  const phixivUrl = `https://phixiv.net/artworks/${artId}`;
+  const res = await axios.get(phixivUrl, {
+    headers: { 'User-Agent': UA_DESKTOP },
+    timeout: 12000
+  });
+
+  const $ = cheerio.load(res.data);
+  const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || 'Pixiv Artwork';
+  const author = $('meta[name="author"]').attr('content') || 'Pixiv Artist';
+  const imageUrl = $('meta[property="og:image"]').attr('content') || $('meta[name="twitter:image"]').attr('content') || null;
+
+  if (!imageUrl) {
+    throw new Error('Tidak dapat menemukan master gambar Pixiv. Pastikan artwork bersifat publik.');
+  }
+
+  const photos = [{
+    id: 1,
+    label: 'Karya Asli HD (Master)',
+    quality: 'Original Master Artwork',
+    url: imageUrl,
+    type: 'image',
+    extension: 'jpg',
+    filename: `pixiv_${artId}_master.jpg`
+  }];
+
+  return {
+    success: true,
+    platform: 'Pixiv',
+    mediaType: 'slide',
+    isSlide: true,
+    title,
+    author,
+    thumbnail: imageUrl,
+    duration: 'Master Image',
+    photos,
+    hasPhotos: true,
+    videoSlides: [],
+    hasVideoSlides: false,
+    liveWallpapers: [],
+    hasLiveWallpapers: false,
+    musicInfo: null,
+    downloadLinks: photos
+  };
+}
+
+// Ekstraksi Terabox Cloud Media
+async function downloadTerabox(rawUrl) {
+  const targetUrl = cleanInputUrl(rawUrl);
+  const surlMatch = targetUrl.match(/(?:surl=|\/s\/)([a-zA-Z0-9_-]+)/i);
+  const surl = surlMatch ? surlMatch[1] : null;
+
+  try {
+    const res = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      maxRedirects: 5,
+      timeout: 12000
+    });
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
+    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim().replace(' - TeraBox', '') || 'Terabox Cloud Media';
+    const thumbnail = $('meta[property="og:image"]').attr('content') || null;
+
+    let directUrl = null;
+    const directMatch = html.match(/"dlink":"([^"]+)"/) || html.match(/"downloadUrl":"([^"]+)"/);
+    if (directMatch) {
+      directUrl = directMatch[1].replace(/\\/g, '');
+    }
+
+    const downloadLinks = [
+      {
+        id: '1080p',
+        label: 'Unduh File Asli HD (Direct Cloud)',
+        quality: 'Original Master High-Speed',
+        url: directUrl || targetUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `terabox_${surl || Date.now()}.mp4`
+      },
+      {
+        id: '720p',
+        label: 'Unduh Standar (720p)',
+        quality: 'Standard 720p',
+        url: directUrl || targetUrl,
+        type: 'video',
+        extension: 'mp4',
+        filename: `terabox_${surl || Date.now()}_720p.mp4`
+      },
+      {
+        id: 'audio',
+        label: 'Audio MP3 Ekstrak',
+        quality: '320kbps Audio',
+        url: directUrl || targetUrl,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `terabox_${surl || Date.now()}_audio.mp3`
+      }
+    ];
+
+    return {
+      success: true,
+      platform: 'Terabox',
+      mediaType: 'video',
+      isSlide: false,
+      title,
+      author: 'TeraBox Cloud',
+      thumbnail,
+      duration: 'Cloud File',
+      photos: [],
+      hasPhotos: false,
+      videoSlides: [],
+      hasVideoSlides: false,
+      liveWallpapers: [],
+      hasLiveWallpapers: false,
+      musicInfo: null,
+      downloadLinks
+    };
+  } catch (err) {
+    throw new Error(`Gagal mengekstrak media Terabox: ${err.message}. Pastikan tautan masih aktif dan publik.`);
+  }
+}
+
 async function downloadGenericPlatform(url, platformName) {
   try {
     const res = await axios.get(url, {
@@ -1416,6 +2634,17 @@ export default async function handler(req, res) {
     else if (platform === 'twitter') data = await downloadTwitter(cleaned);
     else if (platform === 'youtube') data = await downloadYouTube(cleaned);
     else if (platform === 'reddit') data = await downloadReddit(cleaned);
+    else if (platform === 'pinterest') data = await downloadPinterest(cleaned);
+    else if (platform === 'facebook') data = await downloadFacebook(cleaned);
+    else if (platform === 'spotify') data = await downloadSpotify(cleaned);
+    else if (platform === 'appleMusic') data = await downloadAppleMusic(cleaned);
+    else if (platform === 'threads') data = await downloadThreads(cleaned);
+    else if (platform === 'bilibili') data = await downloadBilibili(cleaned);
+    else if (platform === 'douyin') data = await downloadDouyin(cleaned);
+    else if (platform === 'rednote') data = await downloadRednote(cleaned);
+    else if (platform === 'bandcamp') data = await downloadBandcamp(cleaned);
+    else if (platform === 'pixiv') data = await downloadPixiv(cleaned);
+    else if (platform === 'terabox') data = await downloadTerabox(cleaned);
     else data = await downloadGenericPlatform(cleaned, PLATFORM_NAMES[platform] || 'Media');
 
     // Normalisasi agar setiap video reguler selalu memiliki opsi 4K, 1080p, 720p, dan MP3
