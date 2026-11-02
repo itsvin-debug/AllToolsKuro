@@ -282,6 +282,8 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
               return (
                 <div
                   key={tool.id}
+                  id={`tool-${tool.id}`}
+                  data-tool-id={tool.id}
                   onClick={handleCardClick}
                   className={`rounded-xl border-2 p-3 sm:p-5 flex flex-col justify-between text-left transition-all duration-150 select-none min-h-[180px] sm:min-h-[190px] relative overflow-hidden ${
                     isLocked && !isAdmin 

@@ -23,6 +23,7 @@ import MobileBottomNav from './components/MobileBottomNav';
 import Toast from './components/Toast';
 import Footer from './components/Footer';
 import ErrorBoundary from './components/ErrorBoundary';
+import AiKuroWidget from './components/AiKuroWidget';
 import { getSettings, saveSettings, logHistoryItem, isToolLocked, isAdminAuthenticated } from './services/storageService';
 
 // Kamus nama alat untuk logging riwayat aktivitas
@@ -302,6 +303,13 @@ export default function App() {
         currentScreen={currentScreen}
         onNavigate={(target) => handleNavigate(target)}
         settings={settings}
+      />
+
+      {/* Asisten Virtual Cerdas AI Kuro (Persona Elaina) */}
+      <AiKuroWidget
+        currentScreen={currentScreen}
+        onNavigateScreen={handleNavigate}
+        onOpenTool={handleNavigate}
       />
 
     </div>

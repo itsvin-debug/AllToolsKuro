@@ -1,0 +1,601 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  X, 
+  Send, 
+  Sparkles, 
+  Compass, 
+  ChevronRight, 
+  StopCircle, 
+  ArrowUpRight, 
+  Maximize2
+} from 'lucide-react';
+import KuroCharacter from './KuroCharacter';
+
+// Data resmi 12 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
+const KURO_TOOLS_CATALOG = [
+  {
+    id: 'downloader',
+    name: 'Media Downloader',
+    tag: 'All-in-One HD',
+    desc: 'Pengunduh video, foto slide, dan audio tanpa watermark dari TikTok, IG, YT, dan platform lainnya dengan pilihan 4K serta 1080p Status WA Anti-Burik.'
+  },
+  {
+    id: 'jjFinder',
+    name: 'Cari Link JJ',
+    tag: 'Jedag-Jedug Viral',
+    desc: 'Temukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung siap pakai.'
+  },
+  {
+    id: 'pngToPdf',
+    name: 'PNG to PDF',
+    tag: 'Konversi Dokumen',
+    desc: 'Satukan banyak file gambar dan foto (PNG/JPG) menjadi satu berkas PDF rapi dengan kualitas visual maksimal.'
+  },
+  {
+    id: 'linkToDoc',
+    name: 'Link to PDF/PPT',
+    tag: 'Ekstraktor Materi',
+    desc: 'Ekstrak dokumen dan materi presentasi dari Scribd atau SlideShare menjadi file PDF atau PPT utuh tanpa ribet.'
+  },
+  {
+    id: 'imageToLink',
+    name: 'File ke Link',
+    tag: 'Hosting Instan',
+    desc: 'Unggah file gambar dari perangkatmu dan dapatkan tautan URL publik instan untuk dibagikan ke mana saja.'
+  },
+  {
+    id: 'compressor',
+    name: 'Kompres Media HD',
+    tag: 'Hemat Memori',
+    desc: 'Perkecil ukuran file video dan foto secara drastis dengan tetap mempertahankan ketajaman visual anti-burik.'
+  },
+  {
+    id: 'qrStudio',
+    name: 'QR Code Studio',
+    tag: 'Desain Kustom',
+    desc: 'Studio pembuat kode QR estetik dengan logo kustom, pewarnaan fleksibel, dan resolusi tinggi siap cetak.'
+  },
+  {
+    id: 'audioMerger',
+    name: 'Audio Merger',
+    tag: 'Kombinasi Suara',
+    desc: 'Gabungkan beberapa file musik atau audio menjadi satu trek utuh dengan transisi alunan yang rapi.'
+  },
+  {
+    id: 'photoStudio',
+    name: 'Photo Studio',
+    tag: 'Filter & Efek',
+    desc: 'Editor foto cepat dengan ragam filter neobrutalist, pemotongan, penyesuaian kontras, dan efek grafis modern.'
+  },
+  {
+    id: 'videoStudio',
+    name: 'Video Studio',
+    tag: 'Studio Kreatif',
+    desc: 'Editor video praktis untuk mengubah kecepatan, menyesuaikan rasio layar (9:16, 16:9), dan menerapkan filter video.'
+  },
+  {
+    id: 'videoTrimmer',
+    name: 'Video Trimmer',
+    tag: 'Pemotong Presisi',
+    desc: 'Pangkas detik awal atau akhir klip videomu secara presisi tanpa menurunkan bitrate atau kualitas audio-video.'
+  },
+  {
+    id: 'bgRemover',
+    name: 'Hapus Background',
+    tag: 'AI Background Remover',
+    desc: 'Hapus latar belakang foto dalam 1 kali klik menggunakan kecerdasan AI untuk hasil PNG transparan yang rapi.'
+  }
+];
+
+export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTool }) {
+  // Mode tampilan: 'collapsed' | 'chat_popup' | 'floating_helper'
+  const [mode, setMode] = useState('collapsed');
+  
+  // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused'
+  const [animState, setAnimState] = useState('idle');
+
+  // Obrolan
+  const [messages, setMessages] = useState([]);
+  const [inputText, setInputText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [displayedReply, setDisplayedReply] = useState('');
+
+  // Tour State
+  const [isTourActive, setIsTourActive] = useState(false);
+  const [tourIndex, setTourIndex] = useState(0);
+  const [highlightedToolId, setHighlightedToolId] = useState(null);
+
+  const messagesEndRef = useRef(null);
+  const typingTimerRef = useRef(null);
+  const tourSequenceRef = useRef(null);
+
+  // Auto-scroll riwayat obrolan ke bawah
+  useEffect(() => {
+    if (mode === 'chat_popup') {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, displayedReply, mode]);
+
+  // Efek mengetik bertahap karakter per karakter (Typewriter Effect + Lip-Sync)
+  const streamText = useCallback((fullText, onComplete) => {
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+    }
+
+    setAnimState('talking');
+    setIsTyping(true);
+    setDisplayedReply('');
+
+    let currentIndex = 0;
+    const speed = 20; // 20ms per karakter agar typewriter natural dan lip-sync sinkron
+
+    typingTimerRef.current = setInterval(() => {
+      currentIndex += 1;
+      if (currentIndex >= fullText.length) {
+        setDisplayedReply(fullText);
+        clearInterval(typingTimerRef.current);
+        typingTimerRef.current = null;
+        setIsTyping(false);
+        setAnimState('idle');
+        if (onComplete) onComplete();
+      } else {
+        setDisplayedReply(fullText.slice(0, currentIndex));
+      }
+    }, speed);
+  }, []);
+
+  // Buka widget untuk pertama kali: sapaan dan lambaian tangan (Wave)
+  const handleOpenWidget = () => {
+    setMode('chat_popup');
+    setAnimState('wave');
+
+    // Jika belum ada riwayat pesan, tampilkan kalimat pembuka resmi
+    if (messages.length === 0) {
+      const greeting = 'Halo! Aku AI Kuro, siap membantumu menjelajahi dan memahami fitur-fitur di website ini!';
+      streamText(greeting, () => {
+        setMessages([{ sender: 'ai', text: greeting, animation: 'wave' }]);
+      });
+    }
+  };
+
+  // Batalkan seluruh timer tour dan streaming teks
+  const handleCancelTour = () => {
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    if (tourSequenceRef.current) {
+      clearTimeout(tourSequenceRef.current);
+      tourSequenceRef.current = null;
+    }
+    setIsTourActive(false);
+    setHighlightedToolId(null);
+    setIsTyping(false);
+    setAnimState('idle');
+    setMode('chat_popup');
+  };
+
+  // Tutup widget sepenuhnya
+  const handleCloseWidget = () => {
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    handleCancelTour();
+    setMode('collapsed');
+    setAnimState('idle');
+    setIsTyping(false);
+  };
+
+  // Auto-scroll halus ke kartu alat tertentu
+  const scrollToToolElement = (toolId) => {
+    if (currentScreen !== 'welcome' && onNavigateScreen) {
+      onNavigateScreen('welcome');
+    }
+
+    setHighlightedToolId(toolId);
+
+    setTimeout(() => {
+      const el = document.getElementById(`tool-${toolId}`) || document.querySelector(`[data-tool-id="${toolId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
+        // Efek sorotan ring neobrutalist
+        el.classList.add('ring-4', 'ring-purple-600', 'ring-offset-2', 'transition-all');
+        setTimeout(() => {
+          el.classList.remove('ring-4', 'ring-purple-600', 'ring-offset-2');
+        }, 3500);
+      }
+    }, 280);
+  };
+
+  // Eksekusi langkah tour berurutan
+  const executeTourStep = useCallback((index) => {
+    if (index >= KURO_TOOLS_CATALOG.length) {
+      setAnimState('wave');
+      const completionText = 'Fufufu~ Selesai! Itu dia seluruh 12 fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi secara maksimal!';
+      streamText(completionText, () => {
+        setMessages(prev => [...prev, { sender: 'ai', text: completionText, animation: 'wave' }]);
+        setIsTourActive(false);
+      });
+      return;
+    }
+
+    const currentTool = KURO_TOOLS_CATALOG[index];
+    setTourIndex(index);
+    scrollToToolElement(currentTool.id);
+
+    const stepText = `[Fitur ${index + 1}/12] **${currentTool.name}** (${currentTool.tag}): ${currentTool.desc}`;
+    streamText(stepText, () => {
+      setMessages(prev => [...prev, { sender: 'ai', text: stepText, animation: 'talking', toolId: currentTool.id }]);
+      
+      // Auto-progress ke fitur berikutnya dengan jeda ramah pembaca
+      if (tourSequenceRef.current) clearTimeout(tourSequenceRef.current);
+      tourSequenceRef.current = setTimeout(() => {
+        executeTourStep(index + 1);
+      }, 4000);
+    });
+  }, [streamText, currentScreen, onNavigateScreen]);
+
+  // Mulai tour seluruh fitur
+  const handleStartTour = () => {
+    setMode('floating_helper');
+    setIsTourActive(true);
+    setTourIndex(0);
+    executeTourStep(0);
+  };
+
+  // Navigasi ke fitur tunggal (Single Tool Guidance)
+  const handleGuideSpecificTool = (toolId, customText) => {
+    setMode('floating_helper');
+    setIsTourActive(false);
+    scrollToToolElement(toolId);
+
+    const tool = KURO_TOOLS_CATALOG.find(t => t.id === toolId);
+    const explanation = customText || (tool 
+      ? `Ini dia **${tool.name}**! ${tool.desc} Klik tombol 'Buka Fitur' untuk langsung menggunakannya!`
+      : 'Fitur siap digunakan!');
+
+    streamText(explanation, () => {
+      setMessages(prev => [...prev, { sender: 'ai', text: explanation, animation: 'talking', toolId }]);
+    });
+  };
+
+  // Kirim pesan obrolan ke Backend (FastAPI / Vercel Serverless)
+  const handleSendMessage = async (customMessage = null) => {
+    const textToSend = (customMessage || inputText).trim();
+    if (!textToSend || isTyping) return;
+
+    setInputText('');
+    setDisplayedReply('');
+
+    const newHistory = [...messages, { sender: 'user', text: textToSend }];
+    setMessages(newHistory);
+    setIsTyping(true);
+    setAnimState('talking');
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: textToSend,
+          history: newHistory.slice(-5)
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error ${res.status}`);
+      }
+
+      const data = await res.json();
+      const reply = data.reply || 'Halo! Ada yang bisa AI Kuro bantu seputar Kuro Studio?';
+      const anim = data.animation || 'talking';
+      const action = data.action || 'none';
+      const targetTool = data.targetTool || null;
+
+      setAnimState(anim);
+
+      if (action === 'start_tour') {
+        handleStartTour();
+      } else if (action === 'navigate_tool' && targetTool) {
+        handleGuideSpecificTool(targetTool, reply);
+      } else {
+        streamText(reply, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: reply, animation: anim }]);
+        });
+      }
+    } catch (err) {
+      console.warn('[AI Kuro] Request fallback:', err);
+      const fallbackMsg = 'Maaf ya, Kuro hanya bisa membantu menjelaskan seputar fitur-fitur dan cara penggunaan website ini! Ada fitur Kuro Studio yang ingin kamu ketahui?';
+      setAnimState('confused');
+      streamText(fallbackMsg, () => {
+        setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: 'confused' }]);
+      });
+    }
+  };
+
+  return (
+    <>
+      {/* ─── 1. TOMBOL WIDGET MELAYANG (COLLAPSED) ─── */}
+      {mode === 'collapsed' && (
+        <div className="fixed bottom-20 right-4 sm:bottom-6 sm:right-6 z-50 flex items-center gap-2 group">
+          {/* Label Sapaan saat Hover */}
+          <div className="hidden sm:flex items-center gap-1.5 bg-white border-2 border-black px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_#000000] text-xs font-bold font-mono text-black pointer-events-none group-hover:opacity-100 opacity-90 transition-opacity">
+            <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+            <span>Tanya AI Kuro</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleOpenWidget}
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border-2 border-black shadow-[3px_3px_0px_#000000] hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center relative cursor-pointer overflow-hidden p-1 bg-gradient-to-b from-purple-100 to-white"
+            title="Buka Asisten AI Kuro"
+            aria-label="Buka Asisten AI Kuro"
+          >
+            {/* Karakter Vektor SVG Elaina */}
+            <KuroCharacter state="wave" size={54} />
+            {/* Badge Status Sihir Aktif */}
+            <span className="absolute top-1.5 right-1.5 w-3 h-3 rounded-full bg-purple-600 border border-black animate-pulse" />
+          </button>
+        </div>
+      )}
+
+      {/* ─── 2. POPUP CHAT INTERAKTIF (NORMAL CHAT MODE) ─── */}
+      {mode === 'chat_popup' && (
+        <div className="fixed bottom-20 right-3 sm:bottom-6 sm:right-6 z-50 w-[92vw] sm:w-[380px] max-h-[85vh] sm:max-h-[580px] bg-white border-2 border-black rounded-2xl shadow-[5px_5px_0px_#000000] flex flex-col overflow-hidden text-black animate-in fade-in slide-in-from-bottom-4 duration-200">
+          
+          {/* Header Popup: Karakter, Nama, & Tombol Kontrol */}
+          <div className="p-3.5 bg-purple-600 text-white border-b-2 border-black flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-11 h-11 rounded-xl bg-white border-2 border-black overflow-hidden shrink-0 shadow-[1.5px_1.5px_0px_#000000] flex items-center justify-center p-0.5">
+                <KuroCharacter state={animState} size={42} />
+              </div>
+              <div className="flex flex-col">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-black text-sm tracking-tight text-white">AI Kuro</span>
+                  <span className="bg-amber-300 text-black text-[9px] font-mono font-black px-1.5 py-0.2 rounded border border-black">
+                    ELAINA
+                  </span>
+                </div>
+                <span className="text-[10px] text-purple-100 font-mono font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-ping" />
+                  Asisten Panduan Web
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleStartTour}
+                className="px-2 py-1 bg-amber-300 hover:bg-amber-400 text-black text-xs font-bold rounded-lg border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
+                title="Mulai Tour Seluruh Fitur"
+              >
+                <Compass className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Tour Web</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseWidget}
+                className="w-8 h-8 rounded-lg bg-white hover:bg-neutral-100 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                aria-label="Tutup Chat"
+              >
+                <X className="w-4 h-4 stroke-[2.5]" />
+              </button>
+            </div>
+          </div>
+
+          {/* Area Riwayat Pesan Obrolan */}
+          <div className="flex-1 p-4 overflow-y-auto max-h-[360px] flex flex-col gap-3 bg-neutral-50/70 text-xs">
+            {messages.map((m, idx) => (
+              <div
+                key={idx}
+                className={`flex gap-2 items-start ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                {m.sender === 'ai' && (
+                  <div className="w-8 h-8 rounded-lg bg-purple-100 border border-black overflow-hidden shrink-0 mt-0.5 flex items-center justify-center">
+                    <KuroCharacter state={m.animation || 'idle'} size={32} />
+                  </div>
+                )}
+                <div
+                  className={`p-3 rounded-xl border-2 border-black max-w-[82%] text-xs leading-relaxed font-sans ${
+                    m.sender === 'user'
+                      ? 'bg-black text-white shadow-[2px_2px_0px_#a855f7]'
+                      : 'bg-white text-black shadow-[2px_2px_0px_#000000]'
+                  }`}
+                >
+                  <p className="whitespace-pre-line">{m.text}</p>
+
+                  {/* Tombol Pintasan Buka Fitur */}
+                  {m.toolId && onOpenTool && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenTool(m.toolId)}
+                      className="mt-2.5 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-purple-600 hover:bg-purple-700 text-white font-bold text-[11px] border border-black shadow-xs cursor-pointer"
+                    >
+                      <span>Buka Fitur Ini</span>
+                      <ArrowUpRight className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {/* Bubble Respons Typewriter Streaming */}
+            {isTyping && displayedReply && (
+              <div className="flex gap-2 items-start justify-start">
+                <div className="w-8 h-8 rounded-lg bg-purple-100 border border-black overflow-hidden shrink-0 mt-0.5 flex items-center justify-center">
+                  <KuroCharacter state="talking" size={32} />
+                </div>
+                <div className="p-3 rounded-xl border-2 border-black bg-white text-black shadow-[2px_2px_0px_#000000] max-w-[82%] text-xs leading-relaxed font-sans">
+                  <p className="whitespace-pre-line">{displayedReply}</p>
+                  <span className="inline-block w-1.5 h-3 ml-1 bg-purple-600 animate-pulse" />
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Prompt Cepat (Quick Suggestions) */}
+          <div className="px-3 py-2 bg-neutral-100 border-t-2 border-black flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+            <button
+              type="button"
+              onClick={handleStartTour}
+              className="px-2.5 py-1 rounded-md bg-purple-100 hover:bg-purple-200 text-purple-900 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+            >
+              🚀 Jelaskan Semua Fitur
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendMessage('Jelaskan fitur media downloader')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+            >
+              📥 Media Downloader
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendMessage('Jelaskan fitur cari link jj')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+            >
+              🔥 Cari Link JJ
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendMessage('Jelaskan fitur hapus background')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-200 text-black border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+            >
+              ✂️ Hapus Background
+            </button>
+          </div>
+
+          {/* Form Input Obrolan */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSendMessage();
+            }}
+            className="p-3 bg-white border-t-2 border-black flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Tanya seputar fitur Kuro Studio..."
+              disabled={isTyping}
+              className="flex-1 bg-neutral-100 border-2 border-black rounded-lg px-3 py-2 text-xs font-medium text-black placeholder:text-neutral-500 focus:outline-none focus:bg-white"
+            />
+            <button
+              type="submit"
+              disabled={!inputText.trim() || isTyping}
+              className="w-9 h-9 rounded-lg bg-black hover:bg-neutral-800 disabled:opacity-50 text-white border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+              aria-label="Kirim Pesan"
+            >
+              <Send className="w-3.5 h-3.5" />
+            </button>
+          </form>
+
+        </div>
+      )}
+
+      {/* ─── 3. FLOATING HELPER MODE (GUIDED TOUR & AUTO-SCROLL) ─── */}
+      {mode === 'floating_helper' && (
+        <div className="fixed bottom-20 right-3 sm:bottom-8 sm:right-8 z-50 flex items-end gap-3 max-w-[360px] sm:max-w-[460px] animate-in fade-in slide-in-from-right-4 duration-200">
+          
+          {/* Balon Penjelasan Interaktif */}
+          <div className="flex-1 bg-white border-2 border-black rounded-2xl p-4 shadow-[4px_4px_0px_#000000] flex flex-col gap-2.5 text-black">
+            
+            {/* Header Helper: Nomor Urut Tour & Tombol Cancel */}
+            <div className="flex items-center justify-between border-b border-neutral-200 pb-2">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-purple-600 animate-ping" />
+                <span className="text-xs font-mono font-black text-purple-700 uppercase">
+                  {isTourActive ? `Guided Tour (${tourIndex + 1}/12)` : 'Panduan Fitur'}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCancelTour}
+                className="px-2 py-0.8 rounded-md bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold font-mono border-2 border-black shadow-[1px_1px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
+                title="Batalkan Tour dan Kembali"
+              >
+                <StopCircle className="w-3.5 h-3.5" />
+                <span>Cancel</span>
+              </button>
+            </div>
+
+            {/* Isi Teks Typewriter */}
+            <div className="text-xs font-medium leading-relaxed font-sans min-h-[48px] text-neutral-800">
+              <p className="whitespace-pre-line">{displayedReply || messages[messages.length - 1]?.text}</p>
+              {isTyping && <span className="inline-block w-1.5 h-3 ml-1 bg-purple-600 animate-pulse" />}
+            </div>
+
+            {/* Kontrol Aksi Lanjutan */}
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-100">
+              {highlightedToolId && onOpenTool && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleCancelTour();
+                    onOpenTool(highlightedToolId);
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-bold text-xs border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
+                >
+                  <span>Buka Fitur</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {isTourActive ? (
+                <button
+                  type="button"
+                  onClick={() => executeTourStep(tourIndex + 1)}
+                  disabled={isTyping}
+                  className="ml-auto px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-black text-xs border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <span>{tourIndex === 11 ? 'Selesai' : 'Fitur Berikutnya'}</span>
+                  <ChevronRight className="w-3.5 h-3.5 stroke-[3]" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setMode('chat_popup')}
+                  className="ml-auto px-3 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-black font-bold text-xs border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
+                >
+                  <span>Buka Obrolan</span>
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+          </div>
+
+          {/* Karakter Vektor Elaina + Tombol Cancel Langsung pada Avatar Sisi Kanan */}
+          <div className="flex flex-col items-center gap-1.5 shrink-0">
+            <div 
+              className="w-18 h-18 sm:w-22 sm:h-22 rounded-2xl bg-white border-2 border-black p-1 shadow-[3px_3px_0px_#000000] relative cursor-pointer hover:scale-105 transition-transform flex items-center justify-center bg-gradient-to-b from-purple-100/80 to-white"
+              onClick={() => setMode('chat_popup')}
+              title="Klik untuk membuka obrolan penuh"
+            >
+              <KuroCharacter state={animState} size={74} />
+            </div>
+
+            {/* Tombol Cancel / Batal Langsung pada Avatar Kanan Sesuai Kebutuhan Spesifikasi */}
+            <button
+              type="button"
+              onClick={handleCancelTour}
+              className="w-full px-2 py-1 rounded-md bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-black font-mono border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center gap-1 transition-all cursor-pointer"
+              title="Batalkan Tour dan Kembalikan Kontrol"
+            >
+              <StopCircle className="w-3.5 h-3.5" />
+              <span>Cancel</span>
+            </button>
+          </div>
+
+        </div>
+      )}
+    </>
+  );
+}

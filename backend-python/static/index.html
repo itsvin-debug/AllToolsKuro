@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Kuro - Asisten Virtual Elaina (Kuro Studio)</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Mockup Konten Web Kuro Studio untuk Uji Coba Navigasi & Auto-Scroll -->
+  <div class="mock-container">
+    <header class="mock-header">
+      <div class="brand">
+        <span class="badge-brand">KURO</span>
+        <h1>Kuro Studio — Demo Integrasi Chatbot</h1>
+      </div>
+      <p class="subtitle">Platform serbaguna untuk pengunduhan media, konversi dokumen, dan studio kreatif digital.</p>
+    </header>
+
+    <div class="section-title">
+      <h2>Daftar Fitur Kuro Studio</h2>
+      <p>Klik tombol tour di widget AI Kuro untuk melihat auto-scroll dan panduan suara secara mulus.</p>
+    </div>
+
+    <!-- Grid Kartu Fitur -->
+    <div class="tools-grid">
+      <div class="tool-card" id="tool-downloader" data-tool-id="downloader">
+        <div class="tool-badge">ALL-IN-ONE HD</div>
+        <div class="tool-icon">📥</div>
+        <h3>Media Downloader</h3>
+        <p>Pengunduh video, foto slide, dan audio tanpa watermark dari TikTok, IG, YT, dan platform lainnya dengan resolusi 4K & 1080p Anti-Burik WA.</p>
+      </div>
+
+      <div class="tool-card" id="tool-jjFinder" data-tool-id="jjFinder">
+        <div class="tool-badge">VIRAL JJ</div>
+        <div class="tool-icon">🔥</div>
+        <h3>Cari Link JJ</h3>
+        <p>Temukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung.</p>
+      </div>
+
+      <div class="tool-card" id="tool-pngToPdf" data-tool-id="pngToPdf">
+        <div class="tool-badge">DOKUMEN</div>
+        <div class="tool-icon">📄</div>
+        <h3>PNG to PDF</h3>
+        <p>Satukan banyak file gambar (PNG/JPG) menjadi satu berkas PDF rapi dalam hitungan detik.</p>
+      </div>
+
+      <div class="tool-card" id="tool-linkToDoc" data-tool-id="linkToDoc">
+        <div class="tool-badge">EKSTRAKSI</div>
+        <div class="tool-icon">📑</div>
+        <h3>Link to PDF/PPT</h3>
+        <p>Ekstrak materi kuliah dan presentasi dari Scribd atau SlideShare menjadi file PDF/PPT utuh.</p>
+      </div>
+
+      <div class="tool-card" id="tool-imageToLink" data-tool-id="imageToLink">
+        <div class="tool-badge">HOSTING</div>
+        <div class="tool-icon">🔗</div>
+        <h3>File ke Link</h3>
+        <p>Unggah foto lokal dan dapatkan URL publik instan untuk dibagikan ke media sosial atau forum.</p>
+      </div>
+
+      <div class="tool-card" id="tool-compressor" data-tool-id="compressor">
+        <div class="tool-badge">HEMAT MEMORI</div>
+        <div class="tool-icon">🗜️</div>
+        <h3>Kompres Media HD</h3>
+        <p>Kecilkan ukuran video dan foto tanpa membuat gambar pecah atau burik saat diunggah.</p>
+      </div>
+
+      <div class="tool-card" id="tool-qrStudio" data-tool-id="qrStudio">
+        <div class="tool-badge">ESTETIK</div>
+        <div class="tool-icon">📱</div>
+        <h3>QR Code Studio</h3>
+        <p>Studio pembuat kode QR neobrutalist dengan kustomisasi logo, warna, dan resolusi tinggi.</p>
+      </div>
+
+      <div class="tool-card" id="tool-audioMerger" data-tool-id="audioMerger">
+        <div class="tool-badge">AUDIO</div>
+        <div class="tool-icon">🎵</div>
+        <h3>Audio Merger</h3>
+        <p>Gabungkan aneka trek audio menjadi satu lagu utuh dengan sambungan musik yang halus.</p>
+      </div>
+
+      <div class="tool-card" id="tool-photoStudio" data-tool-id="photoStudio">
+        <div class="tool-badge">CREATIVE</div>
+        <div class="tool-icon">✨</div>
+        <h3>Photo Studio</h3>
+        <p>Editor foto instan untuk filter warna, pemotongan, penyesuaian kontras, dan efek grafis modern.</p>
+      </div>
+
+      <div class="tool-card" id="tool-videoStudio" data-tool-id="videoStudio">
+        <div class="tool-badge">VIDEO</div>
+        <div class="tool-icon">🎬</div>
+        <h3>Video Studio</h3>
+        <p>Editor video ringan untuk mengatur kecepatan frame, rasio layar (9:16, 16:9), dan efek visual.</p>
+      </div>
+
+      <div class="tool-card" id="tool-videoTrimmer" data-tool-id="videoTrimmer">
+        <div class="tool-badge">PRESISI</div>
+        <div class="tool-icon">✂️</div>
+        <h3>Video Trimmer</h3>
+        <p>Pangkas detik awal atau akhir video dengan presisi frame-by-frame tanpa merusak kualitas.</p>
+      </div>
+
+      <div class="tool-card" id="tool-bgRemover" data-tool-id="bgRemover">
+        <div class="tool-badge">AI REMOVER</div>
+        <div class="tool-icon">🪄</div>
+        <h3>Hapus Background</h3>
+        <p>Hapus latar belakang foto otomatis dalam 1 klik berbasis AI untuk menghasilkan PNG transparan rapi.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── WIDGET AI KURO (STANDALONE HTML/CSS/JS) ─── -->
+  <div id="aiKuroWidget">
+    
+    <!-- Tombol Mengambang (Collapsed Button) -->
+    <button id="kuroTriggerBtn" class="kuro-trigger-btn" aria-label="Buka Asisten AI Kuro" title="Tanya AI Kuro">
+      <img id="kuroTriggerAvatar" src="/static/kuro_wave.png" alt="AI Kuro Chibi Elaina" class="kuro-avatar-img">
+      <span class="trigger-sparkle">✦</span>
+    </button>
+
+    <!-- Modal Popup Chat Standar -->
+    <div id="kuroChatPopup" class="kuro-popup-box hidden">
+      <!-- Header -->
+      <div class="kuro-header">
+        <div class="kuro-profile">
+          <div class="avatar-frame">
+            <img id="kuroHeaderAvatar" src="/static/kuro_idle.png" alt="AI Kuro">
+          </div>
+          <div class="kuro-meta">
+            <div class="name-row">
+              <span class="kuro-name">AI Kuro</span>
+              <span class="kuro-tag">ELAINA</span>
+            </div>
+            <span class="kuro-status"><span class="dot-online"></span> Asisten Panduan Web</span>
+          </div>
+        </div>
+        <div class="kuro-controls">
+          <button id="btnQuickTour" class="btn-pill-tour" title="Mulai Tour Berkelanjutan">🚀 Tour Web</button>
+          <button id="btnClosePopup" class="btn-icon" aria-label="Tutup Chat">✕</button>
+        </div>
+      </div>
+
+      <!-- Pesan Chat -->
+      <div id="kuroChatLogs" class="kuro-logs"></div>
+
+      <!-- Saran Cepat (Quick Suggestions) -->
+      <div class="kuro-chips">
+        <button class="chip-item" data-prompt="Jelaskan fitur media downloader">📥 Downloader</button>
+        <button class="chip-item" data-prompt="Jelaskan fitur cari link jj">🔥 Cari Link JJ</button>
+        <button class="chip-item" data-prompt="Jelaskan fitur hapus background">🪄 Hapus BG</button>
+        <button class="chip-item" data-prompt="Jelaskan fitur kompres media">🗜️ Kompres HD</button>
+      </div>
+
+      <!-- Input Form -->
+      <form id="kuroForm" class="kuro-form">
+        <input type="text" id="kuroInput" placeholder="Tanya seputar fitur Kuro Studio..." autocomplete="off">
+        <button type="submit" id="btnSend" aria-label="Kirim Pesan">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </form>
+    </div>
+
+    <!-- Floating Helper Bar (Tour & Single Feature Guide Mode) -->
+    <div id="kuroFloatingHelper" class="kuro-helper-card hidden">
+      <div class="helper-top">
+        <span class="helper-tag" id="helperTourTag">GUIDED TOUR</span>
+        <button id="btnCancelTour" class="btn-cancel-tour" title="Batalkan Tour">✕ Cancel Tour</button>
+      </div>
+      <div class="helper-content" id="helperText">
+        Memuat panduan...
+      </div>
+      <div class="helper-footer">
+        <button id="btnNextStep" class="btn-next-step">Fitur Berikutnya ➔</button>
+      </div>
+      <div class="helper-chibi-badge">
+        <img id="kuroHelperAvatar" src="/static/kuro_talking.png" alt="AI Kuro">
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

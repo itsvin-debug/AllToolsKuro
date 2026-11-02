@@ -25,6 +25,9 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+__pycache__/
+*/__pycache__/
+*.pyc
 
 # Backend binary executables (yt-dlp auto-downloaded on server or cloud)
 backend/bin/
