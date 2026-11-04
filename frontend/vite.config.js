@@ -138,8 +138,68 @@ function chatDevMiddleware() {
   };
 }
 
+function downloadDevMiddleware() {
+  return {
+    name: 'download-dev-middleware',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const pathname = req.url?.split('?')[0];
+        if (pathname === '/api/download') {
+          try {
+            const dlModule = await import('../api/download.js');
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', async () => {
+              try { req.body = body ? JSON.parse(body) : {}; } catch { req.body = {}; }
+              const mockRes = {
+                setHeader: (k, v) => res.setHeader(k, v),
+                status: (code) => {
+                  res.statusCode = code;
+                  return {
+                    json: (data) => {
+                      if (!res.headersSent) res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify(data));
+                    },
+                    send: (data) => res.end(data),
+                    end: () => res.end()
+                  };
+                }
+              };
+              await dlModule.default(req, mockRes);
+            });
+            return;
+          } catch (err) {
+            console.warn('downloadDevMiddleware error:', err);
+          }
+        } else if (pathname === '/api/proxy-stream') {
+          try {
+            const streamModule = await import('../api/proxy-stream.js');
+            const parsedUrl = new URL(req.url, 'http://localhost:5173');
+            req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+            await streamModule.default(req, res);
+            return;
+          } catch (err) {
+            console.warn('proxyStreamDevMiddleware error:', err);
+          }
+        } else if (pathname === '/api/proxy-download') {
+          try {
+            const proxyDlModule = await import('../api/proxy-download.js');
+            const parsedUrl = new URL(req.url, 'http://localhost:5173');
+            req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+            await proxyDlModule.default(req, res);
+            return;
+          } catch (err) {
+            console.warn('proxyDownloadDevMiddleware error:', err);
+          }
+        }
+        next();
+      });
+    }
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), pingDevMiddleware(), lockedToolsDevMiddleware(), chatDevMiddleware()],
+  plugins: [react(), pingDevMiddleware(), lockedToolsDevMiddleware(), chatDevMiddleware(), downloadDevMiddleware()],
   clearScreen: false,
   resolve: {
     preserveSymlinks: true,

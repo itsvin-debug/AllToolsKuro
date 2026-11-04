@@ -12,7 +12,11 @@ export function getDeviceId() {
   if (typeof window === 'undefined') return 'device_default';
   let id = localStorage.getItem('kuro_device_client_id');
   if (!id) {
-    id = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
+    if (typeof window.crypto !== 'undefined' && typeof window.crypto.randomUUID === 'function') {
+      id = 'dev_' + window.crypto.randomUUID();
+    } else {
+      id = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
+    }
     localStorage.setItem('kuro_device_client_id', id);
   }
   return id;

@@ -1,6 +1,8 @@
 import axios from 'axios';
+import { validateRequestSecurity } from './_security.js';
 
 export default async function handler(req, res) {
+  if (!validateRequestSecurity(req, res)) return;
   // CORS headers yang valid
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');

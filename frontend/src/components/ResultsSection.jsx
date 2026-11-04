@@ -123,6 +123,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   const activeAudio = audioLinks[0] || null;
 
   const [selectedQualityIndex, setSelectedQualityIndex] = useState(1);
+  const [userSelectedQualityId, setUserSelectedQualityId] = useState(null);
   const [selectedPhotoRes, setSelectedPhotoRes] = useState('1080p');
 
   // Pilihan kualitas resolusi lengkap untuk video (4K, 1080p, 720p, MP3)
@@ -163,6 +164,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         label: isEn ? '4K Ultra HD (2160p)' : 'Resolusi 4K Ultra HD',
         badge: isEn ? 'Max Clarity' : 'Jernih Maksimal',
         quality: '4K Ultra HD (2160p)',
+        sizeEst: isEn ? '~45-75 MB (High Bitrate)' : '~45-75 MB (Ultra HD)',
         desc: isEn ? 'Master source resolution for large screens' : 'Kualitas tertinggi ultra tajam',
         url: existing4k?.url || masterVideo.url,
         streamUrl: existing4k?.streamUrl || masterVideo.streamUrl,
@@ -177,6 +179,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         label: isEn ? '1080p Full HD' : 'Resolusi HD 1080p',
         badge: isEn ? 'Status WA Anti-Blur' : 'Rekomendasi Status WA',
         quality: '1080p (Full HD)',
+        sizeEst: isEn ? '~18-28 MB (WA Optimal)' : '~18-28 MB (Status WA)',
         desc: isEn ? 'Optimized for WhatsApp Status without compression blur' : 'Anti-burik, format pas untuk Status WA',
         url: existing1080?.url || masterVideo.url,
         streamUrl: existing1080?.streamUrl || masterVideo.streamUrl,
@@ -191,6 +194,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         label: isEn ? '720p HD' : 'Resolusi HD 720p',
         badge: isEn ? 'Fast' : 'Standar Cepat',
         quality: '720p (Standard HD)',
+        sizeEst: isEn ? '~8-14 MB (Fast Download)' : '~8-14 MB (Cepat & Ringan)',
         desc: isEn ? 'Lightweight and fast download' : 'Hemat kuota dan unduh cepat',
         url: existing720?.url || masterVideo.url,
         streamUrl: existing720?.streamUrl || masterVideo.streamUrl,
@@ -210,6 +214,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         label: isEn ? 'Live Wallpaper Loop' : 'Live Wallpaper (Animasi Loop)',
         badge: isEn ? 'Motion Loop' : 'Animasi HP',
         quality: 'Live Wallpaper Dynamic Loop',
+        sizeEst: isEn ? '~10-20 MB' : '~10-20 MB',
         desc: isEn ? 'Animated loop for phone live wallpaper' : 'Format loop animasi bergerak untuk wallpaper layar HP',
         url: existingWallpaper.url,
         streamUrl: existingWallpaper.streamUrl,
@@ -227,6 +232,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         label: isEn ? 'Audio MP3' : 'Audio MP3',
         badge: isEn ? 'Extract' : 'Ekstrak Suara',
         quality: '320kbps MP3',
+        sizeEst: isEn ? '~3-6 MB' : '~3-6 MB (Trek Bersih)',
         desc: isEn ? 'Clean standalone sound track' : 'Trek audio jernih tanpa video',
         url: activeAudio.url,
         streamUrl: activeAudio.streamUrl,
@@ -352,11 +358,16 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     });
   }, [currentSlideIndex, activeSlideList]);
 
+  const handleSelectQuality = (idx, optId) => {
+    setUserSelectedQualityId(optId);
+    setSelectedQualityIndex(idx);
+  };
+
   useEffect(() => {
     if (!videoQualityOptions || videoQualityOptions.length === 0) return;
 
-    // Cari kecocokan presisi berdasarkan resolusi yang dipilih pengguna
-    const target = (preferredFormat || '1080p').toLowerCase();
+    // Prioritaskan pilihan manual pengguna, jika belum ada pakai preferredFormat
+    const target = (userSelectedQualityId || preferredFormat || '1080p').toLowerCase();
     const matchIdx = videoQualityOptions.findIndex(o => {
       const oid = (o.id || '').toLowerCase();
       if (target === '2160p') return oid === '2160p';
@@ -372,7 +383,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       const default1080 = videoQualityOptions.findIndex(o => o.id === '1080p');
       setSelectedQualityIndex(default1080 !== -1 ? default1080 : 0);
     }
-  }, [preferredFormat, videoQualityOptions]);
+  }, [result?.id, preferredFormat]);
 
   const activeRegularVideo = videoQualityOptions[selectedQualityIndex] || videoQualityOptions[0] || regularVideoLinks[0];
   const primaryVideoSource = regularVideoLinks.find(v => v.type === 'video') || videoQualityOptions.find(v => v.type === 'video') || activeRegularVideo;
@@ -554,8 +565,11 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         : `kuro_video_${Date.now()}.${ext}`
     );
 
-    const proxyUrl = mediaItem.proxyUrl 
+    let proxyUrl = mediaItem.proxyUrl 
       || `/api/proxy-download?url=${encodeURIComponent(mediaItem.url)}&filename=${encodeURIComponent(filename)}`;
+    if (mediaItem.id && !proxyUrl.includes('resolution=')) {
+      proxyUrl += `&resolution=${encodeURIComponent(mediaItem.id)}`;
+    }
 
     // Catat ke Galeri perangkat lokal
     recordMediaInGallery(mediaItem, filename, mediaId);
@@ -1301,7 +1315,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                     <button
                       key={opt.key || idx}
                       type="button"
-                      onClick={() => setSelectedQualityIndex(idx)}
+                      onClick={() => handleSelectQuality(idx, opt.id)}
                       className={`p-2.5 rounded-lg text-left transition-all duration-150 cursor-pointer border-2 border-black flex flex-col justify-between gap-1.5 ${
                         isSelected
                           ? 'bg-black text-white shadow-[2px_2px_0px_#000000] -translate-x-0.5 -translate-y-0.5'
@@ -1316,6 +1330,9 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                       </div>
                       <div className="font-extrabold text-xs tracking-tight truncate">
                         {opt.label}
+                      </div>
+                      <div className={`text-[10px] font-mono font-bold ${isSelected ? 'text-neutral-300' : 'text-neutral-500'}`}>
+                        {opt.sizeEst || opt.quality}
                       </div>
                     </button>
                   );

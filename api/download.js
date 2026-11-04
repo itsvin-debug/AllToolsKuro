@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { validateRequestSecurity } from './_security.js';
 
 const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
@@ -166,19 +167,20 @@ async function resolveTikTokUrl(rawUrl) {
   if (url.includes('vt.tiktok.com') || url.includes('vm.tiktok.com')) {
     try {
       const head = await axios.get(url, {
-        maxRedirects: 5,
+        maxRedirects: 8,
         headers: {
-          'User-Agent': UA_DESKTOP
+          'User-Agent': UA_MOBILE
         },
         timeout: 6000
       });
       const resolved = head.request?.res?.responseUrl || head.config?.url;
-      if (resolved && resolved.includes('tiktok.com')) {
+      if (resolved && resolved.includes('tiktok.com') && (resolved.includes('/video/') || resolved.includes('/photo/') || resolved.includes('/@'))) {
         return resolved;
       }
     } catch (e) {
-      if (e.response?.headers?.location) {
-        return e.response.headers.location;
+      const loc = e.response?.headers?.location;
+      if (loc && (loc.includes('/video/') || loc.includes('/photo/') || loc.includes('/@'))) {
+        return loc;
       }
     }
   }
@@ -641,6 +643,26 @@ async function downloadTikTok(rawUrl) {
         hasLiveWallpapers: false,
         downloadLinks,
         musicInfo: { title: 'Original TikTok Audio', author }
+      };
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
+  // Fallback via SaveNow
+  try {
+    const saveNowRes = await scrapeViaSaveNow(url, ['2160', '1080', '720', 'mp3'], 'TikTok Video', 'TikTok Creator');
+    if (saveNowRes && (saveNowRes.downloadLinks?.length > 0 || saveNowRes.photos?.length > 0)) {
+      return {
+        ...saveNowRes,
+        platform: 'TikTok',
+        isSlide: false,
+        photos: saveNowRes.photos || [],
+        hasPhotos: Boolean(saveNowRes.photos?.length),
+        videoSlides: [],
+        hasVideoSlides: false,
+        liveWallpapers: [],
+        hasLiveWallpapers: false
       };
     }
   } catch (e) {
@@ -2579,15 +2601,20 @@ async function downloadGenericPlatform(url, platformName) {
 }
 
 export default async function handler(req, res) {
+  if (!validateRequestSecurity(req, res)) return;
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ success: false, message: 'Method not allowed.' });
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    return res.status(405).json({ success: false, message: 'Method not allowed.' });
+  }
 
-  const { url, expectedPlatform } = req.body;
+  const payload = req.method === 'POST' ? (req.body || {}) : (req.query || {});
+  const url = payload.url;
+  const expectedPlatform = payload.expectedPlatform;
   if (!url || typeof url !== 'string' || !url.trim()) {
     return res.status(400).json({ success: false, message: 'URL tidak boleh kosong.' });
   }

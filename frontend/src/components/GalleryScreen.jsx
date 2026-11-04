@@ -34,6 +34,7 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
   const [modalTouchStartX, setModalTouchStartX] = useState(null);
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false);
   const [batchProgressText, setBatchProgressText] = useState('');
+  const [videoPlaybackError, setVideoPlaybackError] = useState(false);
   
   const t = translations[lang] || translations.id;
 
@@ -72,6 +73,7 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
   }, [previewModalItem]);
 
   const openPreview = (item, initialIndex = 0) => {
+    setVideoPlaybackError(false);
     setPreviewModalItem(item);
     setModalSlideIndex(initialIndex);
   };
@@ -474,30 +476,45 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
                     {hasVideo && (
                       <div 
                         onClick={() => openPreview(item)}
-                        className="relative w-full aspect-[9/16] sm:aspect-video bg-black flex items-center justify-center cursor-pointer overflow-hidden group/vid"
-                        title="Klik untuk memutar video"
+                        className="relative w-full aspect-[9/16] sm:aspect-video bg-neutral-900 flex items-center justify-center cursor-pointer overflow-hidden group/vid select-none"
+                        title={isEn ? 'Click to play video' : 'Klik untuk memutar video'}
                       >
-                        {thumbnailSrc ? (
+                        {thumbnailSrc && (
                           <img
                             src={thumbnailSrc}
                             alt={item.title}
                             className="w-full h-full object-cover group-hover/vid:scale-105 transition-transform duration-200"
                             referrerPolicy="no-referrer"
+                            onError={(e) => {
+                              e.currentTarget.style.display = 'none';
+                              const fallback = e.currentTarget.parentElement.querySelector('.video-card-fallback');
+                              if (fallback) fallback.style.display = 'flex';
+                            }}
                           />
-                        ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center text-neutral-400 p-2 text-center">
-                            <Film className="w-8 h-8 text-neutral-500 mb-1" />
-                            <span className="text-[9px] font-mono">Video HD</span>
-                          </div>
                         )}
 
-                        <div className="absolute inset-0 bg-black/25 group-hover/vid:bg-black/40 transition-colors flex items-center justify-center">
-                          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white text-black border-2 border-black flex items-center justify-center shadow-[2px_2px_0px_#000000] group-hover/vid:scale-110 transition-transform">
-                            <Play className="w-5 h-5 fill-current ml-0.5" />
+                        <div 
+                          className={`video-card-fallback w-full h-full flex flex-col items-center justify-center p-3 text-center bg-gradient-to-b from-neutral-800 via-neutral-900 to-black ${thumbnailSrc ? 'hidden' : 'flex'}`}
+                        >
+                          <div className="w-10 h-10 rounded-lg border-2 border-white/20 bg-neutral-800/80 flex items-center justify-center mb-1 text-white shadow-sm">
+                            <Film className="w-5 h-5 text-neutral-200" />
+                          </div>
+                          <span className="text-[10px] font-mono font-bold text-white tracking-wide uppercase line-clamp-1">
+                            {item.title || 'Video Player'}
+                          </span>
+                          <span className="text-[9px] font-mono text-neutral-400 mt-0.5">
+                            {item.size || 'HD MP4'}
+                          </span>
+                        </div>
+
+                        {/* Tombol Play Overlay */}
+                        <div className="absolute inset-0 bg-black/20 group-hover/vid:bg-black/40 transition-colors flex items-center justify-center pointer-events-none">
+                          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-white text-black border-2 border-black flex items-center justify-center shadow-[2px_2px_0px_#000000] group-hover/vid:scale-110 transition-transform">
+                            <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-current ml-0.5" />
                           </div>
                         </div>
 
-                        <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded border border-black bg-black/80 text-white font-mono text-[8px] sm:text-[9px] font-bold">
+                        <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 rounded border border-black bg-black/90 text-white font-mono text-[8px] sm:text-[9px] font-bold">
                           {item.size || 'HD MP4'}
                         </span>
                       </div>
@@ -797,25 +814,53 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
 
                 {/* 2. Pratinjau Video Tunggal Modal */}
                 {!isModalSlide && previewModalItem.type === 'video' && (
-                  <div className="w-full flex items-center justify-center bg-black">
-                    <video
-                      src={
-                        previewModalItem.previewUrl?.startsWith('http') && !previewModalItem.previewUrl?.includes('proxy')
-                          ? `/api/proxy-stream?url=${encodeURIComponent(previewModalItem.previewUrl)}&type=video`
-                          : (previewModalItem.previewUrl || previewModalItem.downloadData)
-                      }
-                      poster={previewModalItem.thumbnail || undefined}
-                      controls
-                      autoPlay
-                      playsInline
-                      preload="metadata"
-                      className="max-h-[65vh] sm:max-h-[58vh] w-auto max-w-full aspect-[9/16] sm:aspect-auto object-contain bg-black mx-auto"
-                      onError={(e) => {
-                        if (previewModalItem.downloadData && e.target.src !== previewModalItem.downloadData) {
-                          e.target.src = previewModalItem.downloadData;
+                  <div className="w-full flex items-center justify-center bg-black min-h-[240px]">
+                    {videoPlaybackError ? (
+                      <div className="w-full flex flex-col items-center justify-center p-6 text-center text-white bg-neutral-900 gap-3">
+                        <div className="w-12 h-12 rounded-full border-2 border-white/30 bg-neutral-800 flex items-center justify-center">
+                          <Film className="w-6 h-6 text-neutral-300" />
+                        </div>
+                        <div className="flex flex-col gap-1 max-w-sm">
+                          <h3 className="font-extrabold text-sm text-white">
+                            {isEn ? 'Direct Preview Unavailable' : 'Pratinjau Video Tidak Dapat Dimuat Langsung'}
+                          </h3>
+                          <p className="text-xs text-neutral-400">
+                            {isEn 
+                              ? 'The streaming token from the external CDN has expired or blocked embedding. You can still download the video directly to your device.' 
+                              : 'Token streaming dari server asal telah kedaluwarsa atau dibatasi. Kamu tetap dapat mengunduh berkas video ini langsung ke penyimpanan perangkat.'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDownload(previewModalItem)}
+                          className="mt-1 px-4 py-2.5 rounded-lg border-2 border-white bg-white text-black font-extrabold text-xs flex items-center gap-1.5 shadow-[2px_2px_0px_#ffffff] cursor-pointer hover:bg-neutral-200 transition-all"
+                        >
+                          <Download className="w-4 h-4 stroke-[2.5]" />
+                          <span>{isEn ? 'Download Video File' : 'Unduh Berkas Video Sekarang'}</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <video
+                        src={
+                          previewModalItem.previewUrl?.startsWith('http') && !previewModalItem.previewUrl?.includes('proxy')
+                            ? `/api/proxy-stream?url=${encodeURIComponent(previewModalItem.previewUrl)}&type=video`
+                            : (previewModalItem.previewUrl || previewModalItem.downloadData)
                         }
-                      }}
-                    />
+                        poster={previewModalItem.thumbnail || undefined}
+                        controls
+                        autoPlay
+                        playsInline
+                        preload="metadata"
+                        className="max-h-[65vh] sm:max-h-[58vh] w-auto max-w-full aspect-[9/16] sm:aspect-auto object-contain bg-black mx-auto"
+                        onError={(e) => {
+                          if (previewModalItem.downloadData && e.target.src !== previewModalItem.downloadData) {
+                            e.target.src = previewModalItem.downloadData;
+                          } else {
+                            setVideoPlaybackError(true);
+                          }
+                        }}
+                      />
+                    )}
                   </div>
                 )}
 

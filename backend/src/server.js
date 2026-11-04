@@ -15,6 +15,32 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// Middleware Keamanan & Anti-Bot Scanner
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+
+  const ua = req.headers['user-agent'] || '';
+  const url = req.originalUrl || req.url || '';
+
+  // 1. Blokir bot scanner eksploitasi
+  const isMaliciousBot = /sqlmap|nikto|wpscan|acunetix|dirbuster|nmap|masscan|zgrab|gobuster/i.test(ua);
+  if (isMaliciousBot) {
+    return res.status(403).json({ success: false, error: 'Forbidden', message: 'Akses diblokir oleh Kuro Security Shield.' });
+  }
+
+  // 2. Blokir akses ke file .env dan path traversal
+  const isSensitive = /\/\.env|\/\.git|\/\.aws|\/\.ssh|config\.json|package\.json|\.\.\/|%2e%2e/i.test(url);
+  if (isSensitive) {
+    return res.status(403).json({ success: false, error: 'Forbidden', message: 'Akses ke berkas sensitif dilarang.' });
+  }
+
+  next();
+});
+
 // settingan CORS biar frontend React kita bisa leluasa nembak API
 app.use(cors({
   origin: '*', // ijinin akses dari domain/port mana aja (termasuk localhost vite)
