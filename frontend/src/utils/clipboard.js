@@ -61,3 +61,4 @@ export async function readClipboardText() {
     message: 'Browser Anda tidak mengizinkan pembacaan papan klip otomatis.'
   };
 }
+
