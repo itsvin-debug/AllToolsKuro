@@ -24,7 +24,7 @@ import {
 import ResultsSection from './ResultsSection';
 import { translations } from '../utils/translations';
 
-export default function ConverterScreen({ activePlatform: initialPlatform = 'tiktok', onSelectPlatform, onBack, lang = 'id' }) {
+export default function ConverterScreen({ activePlatform: initialPlatform = 'tiktok', onSelectPlatform, onBack, lang = 'id', onShowToast }) {
   const isEn = lang === 'en';
   const t = translations[lang] || translations.id;
   const dl = t.downloader;
@@ -205,19 +205,27 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
         pastedText = await navigator.clipboard.readText();
       }
     } catch {
-      // Permission API browser dibatasi atau butuh gestur manual
+      // Permission API browser dibatasi atau butuh gestur prompt
     }
 
     if (pastedText && pastedText.trim()) {
       handleUrlChange(pastedText.trim());
       setErrorMsg('');
       if (inputRef.current) inputRef.current.focus();
+      onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
     } else {
       if (inputRef.current) {
         inputRef.current.focus();
         try { document.execCommand('paste'); } catch {}
       }
-      setErrorMsg('Izin akses papan klip dibatasi browser. Silakan tekan lama kolom teks lalu pilih "Tempel".');
+      try {
+        const manual = window.prompt(isEn ? 'Paste your media link here:' : 'Tempel link media di sini:', '');
+        if (manual && manual.trim()) {
+          handleUrlChange(manual.trim());
+          setErrorMsg('');
+          onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
+        }
+      } catch {}
     }
   };
 

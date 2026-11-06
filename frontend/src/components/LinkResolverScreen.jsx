@@ -72,9 +72,10 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
 
   // Daftar sampel link untuk uji coba cepat
   const sampleLinks = [
-    { label: 'Safelink Mediafire', url: 'https://safelink.blogger.com/go?url=aHR0cHM6Ly93d3cubWVkaWFmaXJlLmNvbS9maWxlL3NhbXBsZS56aXA=' },
+    { label: 'SFL Mediafire', url: 'https://sfl.gl/8VwvPZI' },
     { label: 'S.id Shortlink', url: 'https://s.id/1x' },
-    { label: 'Safelink Base64', url: 'https://example.com/safelink?url=aHR0cHM6Ly9naXRodWIuY29t' }
+    { label: 'Safelink Base64', url: 'https://safelink.blogger.com/go?url=aHR0cHM6Ly93d3cubWVkaWFmaXJlLmNvbS9maWxlL3NhbXBsZS56aXA=' },
+    { label: 'Bitly Redirect', url: 'https://bit.ly/3sample' }
   ];
 
   const handlePaste = async () => {
@@ -84,19 +85,27 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         text = await navigator.clipboard.readText();
       }
     } catch {
-      // Izin clipboard dibatasi browser
+      // Permission clipboard dibatasi oleh browser
     }
 
     if (text && text.trim()) {
       setUrlInput(text.trim());
       setErrorMessage('');
       if (inputRef.current) inputRef.current.focus();
+      onShowToast?.('Tautan berhasil ditempel!');
     } else {
       if (inputRef.current) {
         inputRef.current.focus();
         try { document.execCommand('paste'); } catch {}
       }
-      setErrorMessage('Izin akses papan klip dibatasi browser. Silakan tekan lama kolom teks lalu pilih "Tempel".');
+      try {
+        const manual = window.prompt('Tempel link safelink di sini:', '');
+        if (manual && manual.trim()) {
+          setUrlInput(manual.trim());
+          setErrorMessage('');
+          onShowToast?.('Tautan berhasil ditempel!');
+        }
+      } catch {}
     }
   };
 
@@ -113,19 +122,22 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
     setErrorMessage('');
     setResolveResult(null);
 
-    // Timeline tahap animasi bertahap
-    const t1 = setTimeout(() => setActiveStepIndex(1), 750);
-    const t2 = setTimeout(() => setActiveStepIndex(2), 2000);
-    const t3 = setTimeout(() => setActiveStepIndex(3), 5500);
+    // Animasi bertahap visual 5 langkah
+    const animTimer1 = setTimeout(() => setActiveStepIndex(1), 220);
+    const animTimer2 = setTimeout(() => setActiveStepIndex(2), 520);
+    const animTimer3 = setTimeout(() => setActiveStepIndex(3), 850);
 
     try {
       const res = await axios.post('/api/resolve', { url: target }, {
-        timeout: 35000
+        timeout: 25000
       });
 
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
+      clearTimeout(animTimer1);
+      clearTimeout(animTimer2);
+      clearTimeout(animTimer3);
+
+      setActiveStepIndex(3);
+      await new Promise((r) => setTimeout(r, 260));
 
       if (res.data && res.data.status === 'success') {
         setActiveStepIndex(4);
@@ -143,7 +155,7 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
             timestamp: Date.now()
           });
         } catch {
-          // ignore parsing error
+          // Abaikan parsing error
         }
 
         onShowToast?.('Link tujuan berhasil di-bypass!');
@@ -151,9 +163,9 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         setErrorMessage(res.data?.message || 'Link tujuan tidak ditemukan atau dilindungi proteksi.');
       }
     } catch (err) {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
+      clearTimeout(animTimer1);
+      clearTimeout(animTimer2);
+      clearTimeout(animTimer3);
       const msg = err.response?.data?.message || (err.code === 'ECONNABORTED' 
         ? 'Proses bypass melebihi batas waktu (timeout). Link mungkin dilindungi Captcha interaktif.' 
         : 'Gagal menghubungi server resolver. Pastikan koneksi backend aktif.');

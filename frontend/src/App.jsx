@@ -207,6 +207,7 @@ export default function App() {
               onSelectPlatform={(p) => setActivePlatform(p)}
               onBack={() => handleNavigate('welcome')}
               lang={settings.language || 'id'}
+              onShowToast={handleShowToast}
             />
           )}
 
