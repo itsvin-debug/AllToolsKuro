@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import downloadRoutes from './routes/download.route.js';
 import toolsRoutes from './routes/tools.route.js';
 import resolverRoutes from './routes/resolver.route.js';
+import envGuard from './middlewares/envGuard.js';
 
 // load konfigurasi env
 dotenv.config();
@@ -56,6 +57,9 @@ app.use(express.urlencoded({ extended: true, limit: '150mb' }));
 // sajikan file static uploads untuk direct image link
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+// pasang proteksi lingkungan kloning publik
+app.use(envGuard);
+
 // pasang rute API
 app.use('/api', downloadRoutes);
 app.use('/api', toolsRoutes);
@@ -74,8 +78,15 @@ app.get('/api/ping', (req, res) => {
 // Endpoint verifikasi login admin
 app.post('/api/verify-admin', (req, res) => {
   const { password } = req.body || {};
-  const correctPassword = (process.env.ADMIN_PASSWORD || 'VINZ6767').trim();
+  const correctPassword = (process.env.ADMIN_PASSWORD || process.env.KURO_ADMIN_SECRET || '').trim();
   
+  if (!correctPassword) {
+    return res.status(403).json({
+      success: false,
+      message: 'Mode kloning publik aktif: Fitur Admin dinonaktifkan karena variabel ADMIN_PASSWORD tidak dikonfigurasi.'
+    });
+  }
+
   if (password && password.trim() === correctPassword) {
     return res.json({
       success: true,

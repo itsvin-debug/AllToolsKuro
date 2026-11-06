@@ -104,14 +104,7 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         inputRef.current.focus();
         try { document.execCommand('paste'); } catch {}
       }
-      try {
-        const manual = window.prompt('Tempel link safelink di sini:', '');
-        if (manual && manual.trim()) {
-          setUrlInput(manual.trim());
-          setErrorMessage('');
-          onShowToast?.('Tautan berhasil ditempel!');
-        }
-      } catch {}
+      onShowToast?.('Tekan lama pada kolom input untuk menempel tautan.');
     }
   };
 

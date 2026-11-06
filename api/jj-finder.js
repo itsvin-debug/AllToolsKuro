@@ -137,8 +137,9 @@ export async function runFourLayerJjEngine(targetUrl) {
           ratio: '9:16',
           duration: `00:${String(videoDuration).padStart(2, '0')}`,
           template_id: tId,
+          web_url: `https://www.capcut.com/template-detail/${tId}`,
+          deep_link: `capcut://template/detail?template_id=${tId}&enter_from=template`,
           url: `https://www.capcut.com/template-detail/${tId}`,
-          deep_link: `capcut://template/detail?template_id=${tId}`,
           cover_url: coverUrl
         };
         sourceConfidence = 'Tautan Resmi di Video';
@@ -192,8 +193,9 @@ export async function runFourLayerJjEngine(targetUrl) {
         ratio: '9:16',
         duration: `00:${String(videoDuration).padStart(2, '0')}`,
         template_id: tId,
+        web_url: `https://www.capcut.com/template-detail/${tId}`,
+        deep_link: `capcut://template/detail?template_id=${tId}&enter_from=template`,
         url: `https://www.capcut.com/template-detail/${tId}`,
-        deep_link: `capcut://template/detail?template_id=${tId}`,
         cover_url: coverUrl
       };
       sourceConfidence = 'Tautan Resmi di Video';
@@ -251,8 +253,9 @@ export async function runFourLayerJjEngine(targetUrl) {
             ratio: '9:16',
             duration: `00:${String(videoDuration).padStart(2, '0')}`,
             template_id: tId,
+            web_url: `https://www.capcut.com/template-detail/${tId}`,
+            deep_link: `capcut://template/detail?template_id=${tId}&enter_from=template`,
             url: `https://www.capcut.com/template-detail/${tId}`,
-            deep_link: `capcut://template/detail?template_id=${tId}`,
             cover_url: coverUrl
           };
           if (sourceConfidence !== 'Tautan Resmi di Video') {
@@ -277,8 +280,9 @@ export async function runFourLayerJjEngine(targetUrl) {
       ratio: '9:16',
       duration: `00:${String(videoDuration).padStart(2, '0')}`,
       template_id: stableCapcutId,
+      web_url: `https://www.capcut.com/template-detail/${stableCapcutId}`,
+      deep_link: `capcut://template/detail?template_id=${stableCapcutId}&enter_from=template`,
       url: `https://www.capcut.com/template-detail/${stableCapcutId}`,
-      deep_link: `capcut://template/detail?template_id=${stableCapcutId}`,
       cover_url: coverUrl
     };
   }

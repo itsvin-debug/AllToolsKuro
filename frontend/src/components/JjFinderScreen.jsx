@@ -71,7 +71,7 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
   const [audioElement, setAudioElement] = useState(null);
   const inputRef = useRef(null);
 
-  // Penempelan dari clipboard dengan fallback prompt
+  // Penempelan dari clipboard langsung tanpa prompt sekunder
   const handlePaste = async () => {
     let text = '';
     try {
@@ -92,15 +92,28 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
         inputRef.current.focus();
         try { document.execCommand('paste'); } catch {}
       }
-      try {
-        const manual = window.prompt('Tempel link TikTok JJ di sini:', '');
-        if (manual && manual.trim()) {
-          setInputQuery(manual.trim());
-          setError('');
-          if (onShowToast) onShowToast('Tautan video berhasil ditempel!');
-        }
-      } catch {}
+      if (onShowToast) onShowToast('Tekan lama pada kolom input untuk menempel tautan.');
     }
+  };
+
+  // Peluncuran skema universal CapCut dengan fallback otomatis ke web
+  const handleOpenCapCut = (cc) => {
+    if (!cc) return;
+    const deepLink = cc.deep_link || `capcut://template/detail?template_id=${cc.template_id}&enter_from=template`;
+    const webUrl = cc.web_url || cc.url || `https://www.capcut.com/template-detail/${cc.template_id}`;
+
+    let didBlur = false;
+    const handleBlur = () => { didBlur = true; };
+    window.addEventListener('blur', handleBlur, { once: true });
+
+    window.location.href = deepLink;
+
+    setTimeout(() => {
+      window.removeEventListener('blur', handleBlur);
+      if (!didBlur) {
+        window.open(webUrl, '_blank', 'noopener,noreferrer');
+      }
+    }, 1200);
   };
 
   const handleSearch = async (e, directQuery = null) => {
@@ -460,16 +473,15 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
                 </div>
 
                 <div className="pt-2 border-t border-neutral-200 flex flex-col gap-2">
-                  <a
-                    href={capcut.deep_link || capcut.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCapCut(capcut)}
                     className="w-full py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
                   >
                     <Clapperboard className="w-4 h-4 text-emerald-400" />
                     <span>Pakai di CapCut</span>
                     <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
+                  </button>
 
                   <div className="flex items-center gap-2">
                     <a

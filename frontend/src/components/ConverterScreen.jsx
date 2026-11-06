@@ -198,6 +198,27 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
 
   const currentMeta = platforms.find((p) => p.id === activePlatform) || platforms[0];
   const CurrentIcon = currentMeta.icon;
+  const formCardRef = useRef(null);
+  const [showScrollArrow, setShowScrollArrow] = useState(true);
+
+  // Pantau posisi scroll untuk menyembunyikan tombol panah saat mencapai input form
+  useEffect(() => {
+    const handleScroll = () => {
+      if (formCardRef.current) {
+        const rect = formCardRef.current.getBoundingClientRect();
+        // Sembunyikan saat kartu form sudah masuk ke viewport
+        if (rect.top <= window.innerHeight * 0.7) {
+          setShowScrollArrow(false);
+        } else {
+          setShowScrollArrow(true);
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const handlePasteClipboard = async () => {
     let pastedText = '';
@@ -206,7 +227,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
         pastedText = await navigator.clipboard.readText();
       }
     } catch {
-      // Permission API browser dibatasi atau butuh gestur prompt
+      // Permission API clipboard browser dibatasi
     }
 
     if (pastedText && pastedText.trim()) {
@@ -219,21 +240,17 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
         inputRef.current.focus();
         try { document.execCommand('paste'); } catch {}
       }
-      try {
-        const manual = window.prompt(isEn ? 'Paste your media link here:' : 'Tempel link media di sini:', '');
-        if (manual && manual.trim()) {
-          handleUrlChange(manual.trim());
-          setErrorMsg('');
-          onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
-        }
-      } catch {}
+      onShowToast?.(isEn ? 'Tekan lama pada kolom input untuk menempel tautan.' : 'Tekan lama pada kolom input untuk menempel tautan.');
     }
   };
 
   const scrollToInput = () => {
+    setShowScrollArrow(false);
     if (inputRef.current) {
       inputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       inputRef.current.focus();
+    } else if (formCardRef.current) {
+      formCardRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   };
 
@@ -432,7 +449,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
         </div>
 
         {/* ─── ACTIVE FEATURE INTERFACE (INPUT & ACTIONS) ─── */}
-        <div className="w-full rounded-xl p-5 sm:p-6 border-2 border-black bg-white shadow-[4px_4px_0px_#000000] flex flex-col gap-4">
+        <div ref={formCardRef} className="w-full rounded-xl p-5 sm:p-6 border-2 border-black bg-white shadow-[4px_4px_0px_#000000] flex flex-col gap-4">
           
           <div className="flex items-center gap-3 pb-3 border-b-2 border-black">
             <div className="w-10 h-10 rounded-lg border-2 border-black bg-black text-white flex items-center justify-center">
@@ -560,15 +577,17 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
 
       </div>
 
-      {/* Floating Bouncing Scroll-to-Input Button for Mobile */}
-      <button
-        type="button"
-        onClick={scrollToInput}
-        aria-label="Scroll to download form"
-        className="fixed bottom-24 right-4 z-40 md:hidden flex items-center justify-center w-11 h-11 rounded-full bg-black text-white border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 animate-bounce cursor-pointer hover:bg-neutral-800 transition-colors"
-      >
-        <ArrowDown className="w-5 h-5 stroke-[2.5]" />
-      </button>
+      {/* Floating Bouncing Scroll-to-Input Button for Mobile (Tengah Bawah) */}
+      {showScrollArrow && (
+        <button
+          type="button"
+          onClick={scrollToInput}
+          aria-label="Scroll to download form"
+          className="fixed bottom-20 left-1/2 -translate-x-1/2 z-30 md:hidden flex items-center justify-center w-11 h-11 rounded-full bg-black text-white border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 animate-bounce cursor-pointer hover:bg-neutral-800 transition-all"
+        >
+          <ArrowDown className="w-5 h-5 stroke-[2.5]" />
+        </button>
+      )}
 
     </main>
   );

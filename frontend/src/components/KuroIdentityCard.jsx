@@ -470,22 +470,6 @@ export default function KuroIdentityCard({
     setIsLoggingIn(true);
     setLoginError('');
 
-    const envPassword = (import.meta.env.VITE_ADMIN_PASSWORD || 'VINZ6767').trim();
-
-    if (pass === envPassword) {
-      setRole('Admin');
-      setAdminAuth(true);
-      if (onAuthChange) onAuthChange(true);
-      setShowLoginModal(false);
-      setAdminPassword('');
-      setLoginError('');
-      setIsLoggingIn(false);
-      if (onShowToast) {
-        onShowToast(lang === 'en' ? 'Logged in as Admin. Control features active.' : 'Berhasil masuk sebagai Admin. Panel kontrol fitur aktif.');
-      }
-      return;
-    }
-
     try {
       const res = await fetch('/api/verify-admin', {
         method: 'POST',

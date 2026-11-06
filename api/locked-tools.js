@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { checkEnvGuard, enforceAdminGuard } from './_envGuard.js';
 
 let inMemoryLockedTools = [];
 let inMemoryUpdatedAt = 0;
@@ -60,7 +61,13 @@ export default async function handler(req, res) {
 
       // Penanganan verifikasi kata sandi admin (merangkap endpoint /api/verify-admin)
       if (typeof password === 'string' || (req.url && req.url.includes('verify-admin'))) {
-        const expectedPassword = (process.env.ADMIN_PASSWORD || 'VINZ6767').trim();
+        const expectedPassword = (process.env.ADMIN_PASSWORD || process.env.KURO_ADMIN_SECRET || '').trim();
+        if (!expectedPassword) {
+          return res.status(403).json({ 
+            success: false, 
+            message: 'Mode kloning publik aktif: Fitur Admin dinonaktifkan karena variabel ADMIN_PASSWORD tidak dikonfigurasi.' 
+          });
+        }
         if (password && String(password).trim() === expectedPassword) {
           return res.status(200).json({ success: true, message: 'Autentikasi admin berhasil.' });
         }

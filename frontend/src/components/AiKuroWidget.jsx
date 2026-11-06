@@ -321,11 +321,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }, 280);
   };
 
-  // Eksekusi tour 12 fitur secara berurutan satu per satu
+  // Eksekusi tour fitur secara berurutan satu per satu
   const executeTourStep = useCallback((index) => {
     if (index >= KURO_TOOLS_CATALOG.length) {
       setAnimState('wave');
-      const completionText = 'Fufufu~ Selesai! Itu dia seluruh 13 fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi dan mencoba setiap fiturnya!';
+      const completionText = `Fufufu~ Selesai! Itu dia seluruh ${KURO_TOOLS_CATALOG.length} fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi dan mencoba setiap fiturnya!`;
       streamText(completionText, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: completionText, animation: 'wave' }]);
         setIsTourActive(false);
@@ -646,7 +646,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-purple-600 animate-ping" />
                 <span className="text-xs font-mono font-black text-purple-700 uppercase">
-                  {isTourActive ? `Guided Tour (${tourIndex + 1}/12)` : 'Panduan Fitur'}
+                  {isTourActive ? `Guided Tour (${tourIndex + 1}/${KURO_TOOLS_CATALOG.length})` : 'Panduan Fitur'}
                 </span>
               </div>
 
@@ -691,7 +691,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                   disabled={isTyping}
                   className="ml-auto px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-black text-xs border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1.5 transition-all cursor-pointer"
                 >
-                  <span>{tourIndex === 11 ? 'Selesai' : 'Fitur Berikutnya'}</span>
+                  <span>{tourIndex === KURO_TOOLS_CATALOG.length - 1 ? 'Selesai' : 'Fitur Berikutnya'}</span>
                   <ChevronRight className="w-3.5 h-3.5 stroke-[3]" />
                 </button>
               ) : (

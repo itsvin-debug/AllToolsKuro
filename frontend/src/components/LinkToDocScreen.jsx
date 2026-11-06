@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import jsPDF from 'jspdf';
 import PptxGenJS from 'pptxgenjs';
@@ -103,8 +103,9 @@ export default function LinkToDocScreen({ onBack }) {
   const [fontSizeMode, setFontSizeMode] = useState('normal');  // 'normal' | 'compact'
   const [previewTab, setPreviewTab] = useState('visual');      // 'visual' | 'fulltext'
   const [copied, setCopied] = useState(false);
+  const inputRef = useRef(null);
 
-  // Paste dari clipboard dengan fallback prompt
+  // Tempel tautan dari clipboard tanpa popup prompt browser
   const handlePaste = async () => {
     let text = '';
     try {
@@ -118,16 +119,14 @@ export default function LinkToDocScreen({ onBack }) {
     if (text && text.trim()) {
       setUrl(text.trim());
       setErrorMessage('');
+      if (inputRef.current) inputRef.current.focus();
       onShowToast?.('Tautan dokumen berhasil ditempel!');
     } else {
-      try {
-        const manual = window.prompt('Tempel link dokumen di sini:', '');
-        if (manual && manual.trim()) {
-          setUrl(manual.trim());
-          setErrorMessage('');
-          onShowToast?.('Tautan dokumen berhasil ditempel!');
-        }
-      } catch {}
+      if (inputRef.current) {
+        inputRef.current.focus();
+        try { document.execCommand('paste'); } catch {}
+      }
+      onShowToast?.('Tekan lama pada kolom input untuk menempel tautan.');
     }
   };
 
@@ -849,6 +848,7 @@ export default function LinkToDocScreen({ onBack }) {
           <div className="relative flex items-center">
             <LinkIcon className="absolute left-4 w-5 h-5 text-on-surface-variant pointer-events-none" />
             <input
+              ref={inputRef}
               type="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}

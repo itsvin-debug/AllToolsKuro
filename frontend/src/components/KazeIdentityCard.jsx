@@ -268,19 +268,6 @@ function detectUserDevice() {
     setIsLoggingIn(true);
     setLoginError('');
 
-    const envPassword = (import.meta.env.VITE_ADMIN_PASSWORD || 'VINZ6767').trim();
-
-    if (pass === envPassword) {
-      setRole('Admin');
-      setAdminAuth(true);
-      if (onAuthChange) onAuthChange(true);
-      setShowLoginModal(false);
-      setAdminPassword('');
-      setLoginError('');
-      setIsLoggingIn(false);
-      return;
-    }
-
     try {
       const res = await fetch('/api/verify-admin', {
         method: 'POST',

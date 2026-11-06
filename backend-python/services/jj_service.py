@@ -153,7 +153,8 @@ def search_capcut_direct_template(query: str) -> Optional[Dict[str, Any]]:
                     "duration": "00:15",
                     "template_id": str(t_id),
                     "url": f"https://www.capcut.com/template-detail/{t_id}",
-                    "deep_link": f"capcut://template/detail?template_id={t_id}",
+                    "web_url": f"https://www.capcut.com/template-detail/{t_id}",
+                    "deep_link": f"capcut://template/detail?template_id={t_id}&enter_from=template",
                     "cover_url": cover
                 }
     except Exception:
@@ -175,7 +176,8 @@ def search_capcut_direct_template(query: str) -> Optional[Dict[str, Any]]:
                     "duration": "00:15",
                     "template_id": t_id,
                     "url": f"https://www.capcut.com/template-detail/{t_id}",
-                    "deep_link": f"capcut://template/detail?template_id={t_id}",
+                    "web_url": f"https://www.capcut.com/template-detail/{t_id}",
+                    "deep_link": f"capcut://template/detail?template_id={t_id}&enter_from=template",
                     "cover_url": None
                 }
     except Exception:
@@ -189,7 +191,8 @@ def search_capcut_direct_template(query: str) -> Optional[Dict[str, Any]]:
         "duration": "00:15",
         "template_id": seed_id,
         "url": f"https://www.capcut.com/template-detail/{seed_id}",
-        "deep_link": f"capcut://template/detail?template_id={seed_id}",
+        "web_url": f"https://www.capcut.com/template-detail/{seed_id}",
+        "deep_link": f"capcut://template/detail?template_id={seed_id}&enter_from=template",
         "cover_url": None
     }
 
@@ -250,7 +253,8 @@ def find_jj_presets(raw_url: str) -> Dict[str, Any]:
                 "duration": f"00:{int(v_duration):02d}",
                 "template_id": t_id,
                 "url": f"https://www.capcut.com/template-detail/{t_id}",
-                "deep_link": f"capcut://template/detail?template_id={t_id}",
+                "web_url": f"https://www.capcut.com/template-detail/{t_id}",
+                "deep_link": f"capcut://template/detail?template_id={t_id}&enter_from=template",
                 "cover_url": v_cover
             }
             source_confidence = "Tautan Resmi di Video"
@@ -268,7 +272,8 @@ def find_jj_presets(raw_url: str) -> Dict[str, Any]:
             "duration": f"00:{int(v_duration):02d}",
             "template_id": t_id,
             "url": u,
-            "deep_link": f"capcut://template/detail?template_id={t_id}",
+            "web_url": f"https://www.capcut.com/template-detail/{t_id}",
+            "deep_link": f"capcut://template/detail?template_id={t_id}&enter_from=template",
             "cover_url": v_cover
         }
         source_confidence = "Tautan Resmi di Video"

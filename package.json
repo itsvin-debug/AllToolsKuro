@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "opkuro": "./bin/opkuro.js"
+  },
   "scripts": {
     "dev": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"cyan.bold,green.bold\" \"npm --prefix backend run dev:server\" \"npm --prefix frontend run dev:vite\"",
     "dev:backend": "npm --prefix backend run dev:server",
     "dev:frontend": "npm --prefix frontend run dev:vite",
-    "build": "npm --prefix frontend run build"
+    "build": "npm --prefix frontend run build",
+    "docs:sync": "node scripts/generate-readme.js",
+    "audit:secrets": "node scripts/audit-secrets.js"
   },
   "dependencies": {
     "axios": "^1.7.9",

@@ -502,7 +502,13 @@ router.post('/locked-tools', (req, res) => {
 
 router.post('/verify-admin', (req, res) => {
   const { password } = req.body || {};
-  const expectedPassword = (process.env.ADMIN_PASSWORD || 'VINZ6767').trim();
+  const expectedPassword = (process.env.ADMIN_PASSWORD || process.env.KURO_ADMIN_SECRET || '').trim();
+  if (!expectedPassword) {
+    return res.status(403).json({
+      success: false,
+      message: 'Mode kloning publik aktif: Variabel ADMIN_PASSWORD tidak dikonfigurasi di server.'
+    });
+  }
   if (password && String(password).trim() === expectedPassword) {
     return res.json({ success: true, message: 'Autentikasi admin berhasil.' });
   }

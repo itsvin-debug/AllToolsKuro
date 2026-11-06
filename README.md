@@ -1,120 +1,280 @@
-# 🌟 Kuro Studio - Multi-Tool Platform
+# Kuro Studio - Technical Utility Suite
 
-Aplikasi Web Downloader Video & Audio Modern tanpa watermark untuk **TikTok**, **Instagram**, dan **X (Twitter)** dengan arsitektur **Node.js (Express)** di Backend dan **React (Vite)** di Frontend. Mengadopsi visual dan tema interaktif 5 screen dari Stitch UI Design & WebGL Shader.
+[![Node.js](https://img.shields.io/badge/Node.js-20.x-000000?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-18.x-000000?style=flat-square&logo=react&logoColor=white)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-6.x-000000?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-000000?style=flat-square&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Python](https://img.shields.io/badge/Python-3.11+-000000?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Vercel](https://img.shields.io/badge/Deployment-Vercel_Serverless-000000?style=flat-square&logo=vercel&logoColor=white)](https://vercel.com/)
+[![License](https://img.shields.io/badge/License-MIT-000000?style=flat-square&logo=opensourceinitiative&logoColor=white)](LICENSE)
+
+Kuro Studio adalah suite utilitas digital multi-mesin yang dirancang dengan arsitektur hybrid modern: antarmuka web reaktif berbasis React dan Vite, lapisan serverless API berbasis Node.js pada Vercel, serta pekerja scraping berkecepatan tinggi berbasis Python. Sistem ini menggabungkan 13 modul produktivitas media, bypass proteksi tautan perantara, konversi dokumen kecerdasan buatan, dan CLI terintegrasi bernama `opkuro`.
 
 ---
 
-## 📁 Struktur Folder Proyek
+## 1. Arsitektur Sistem
+
+Arsitektur aplikasi terbagi menjadi tiga komponen utama yang terisolasi dan modular:
 
 ```text
-download/
-├── backend/                  # Server Node.js & Express API
-│   ├── package.json
-│   └── src/
-│       ├── server.js         # Server express utama, CORS & error handler
-│       ├── routes/
-│       │   └── download.route.js    # Endpoint POST /api/download & GET /api/proxy-download
-│       └── services/
-│           ├── detector.service.js  # Deteksi platform via Regex (TikTok, IG, X)
-│           ├── tiktok.service.js    # Scraper & extractor TikTok no-watermark & MP3
-│           ├── instagram.service.js # Scraper & extractor Instagram Reels & Post HD
-│           └── twitter.service.js   # Scraper & extractor X (Twitter) Video HD
-│
-├── frontend/                 # Client React (Vite + Tailwind Theme Stitch)
-│   ├── index.html            # Google Fonts Inter, Material Symbols & Stitch Theme
-│   ├── package.json
-│   ├── vite.config.js
-│   └── src/
-│       ├── main.jsx
-│       ├── App.jsx           # State router pengatur Screen (Splash, Welcome, Converter)
-│       ├── index.css         # Styling Glassmorphism, Glow effect & animasi
-│       └── components/
-│           ├── ShaderBackground.jsx # WebGL dynamic canvas background (Screen 4)
-│           ├── SplashScreen.jsx     # Screen 1: Splash screen animasi glow
-│           ├── WelcomeScreen.jsx    # Screen 2: Welcome Hub & Grid Platform Card
-│           ├── ConverterScreen.jsx  # Screen 3: Input link, format MP4/MP3 & instant paste
-│           ├── ResultsSection.jsx   # Screen 5: Preview thumbnail, quality chips, & MP3 player
-│           ├── Navbar.jsx           # Header navigasi desktop & responsive mobile
-│           └── Footer.jsx           # Footer brand & hak cipta
-│
-└── stitch_designs/           # File HTML dan screenshot dari project Stitch
++-----------------------------------------------------------------------------------+
+|                                  Kuro Client UI                                   |
+|             (React 18, Vite, Tailwind CSS, Neobrutalist Design System)            |
++-----------------------------------------------------------------------------------+
+                                   |          |
+                  HTTP / JSON API  |          |  Web Intent / Deep Links
+                                   v          v
++----------------------------------------+  +---------------------------------------+
+|          Edge & Serverless API         |  |         Platform Applications         |
+|   (Vercel Functions / Node.js Engine)  |  |    (CapCut App, Alight Motion, dll)   |
++----------------------------------------+  +---------------------------------------+
+        |                        |
+        v                        v
++----------------------+  +---------------------------------------------------------+
+| Dedicated Extractors |  |                 Python Backend Workers                  |
+| (16 Social Scrapers) |  |   (Safelink Deobfuscation, Kasada Bypass, Deep Scrape)  |
++----------------------+  +---------------------------------------------------------+
 ```
+
+### Karakteristik Arsitektur
+1. **Desain Antarmuka Neobrutalist**: Border tegas 2px hitam, bayangan kontras tanpa blur (`shadow-[3px_3px_0px_#000000]`), layout fluid mobile-first, dan aksesibilitas keyboard lengkap.
+2. **Kepatuhan Vercel Serverless (Hobby Plan)**: Seluruh endpoint terdistribusi dalam 10 serverless function mandiri (di bawah ambang batas 12 fungsi Hobby Plan) dengan durasi eksekusi maksimum 15 detik.
+3. **Pemisahan Logika Proteksi**: Fitur administratif dilindungi oleh `EnvGuard` di tingkat middleware untuk memastikan repositori publik yang di-fork atau di-clone berjalan aman tanpa membocorkan credential internal.
 
 ---
 
-## 🚀 Cara Menjalankan Aplikasi
+## 2. Katalog Lengkap Modul Utilitas
 
-Pastikan di komputermu sudah terpasang [Node.js](https://nodejs.org/) (versi 18 ke atas).
+Berikut adalah daftar modul yang tersedia pada Kuro Studio:
 
-### 🚀 Cara Menjalankan Sekaligus (1 Perintah / 1 Terminal)
-Cukup buka 1 terminal di folder utama (`AllToolsKaze`) atau folder `frontend`, lalu jalankan:
+<!-- AUTO-FEATURES-START -->
+| ID Fitur | Nama Alat | Kategori | Ringkasan Fungsi Teknis | Status Mesin |
+|:---|:---|:---|:---|:---:|
+| `downloader` | **Media Downloader** | All-in-One HD | Pengunduh serbaguna untuk mengunduh video, foto slide album, dan audio MP3 tanpa watermark dari TikTok, Instagram, YouTube, dan medsos lainnya dengan kualitas jernih hingga 4K serta opsi 1080p Status WA Anti-Burik agar tidak pecah saat di-upload. | Aktif |
+| `jjFinder` | **Cari Link JJ** | Jedag-Jedug Viral | Temukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung siap pakai untuk konten kreatifmu. | Aktif |
+| `pngToPdf` | **PNG to PDF** | Konversi Dokumen | Satukan banyak file gambar atau foto PNG dan JPG menjadi satu berkas PDF rapi dengan tata letak proporsional dan kualitas visual tajam. | Aktif |
+| `linkToDoc` | **Link to PDF/PPT** | Ekstraktor Materi | Ekstrak dokumen kuliah dan materi presentasi dari Scribd atau SlideShare menjadi berkas PDF atau PPT utuh langsung dari tautan web. | Aktif |
+| `imageToLink` | **File ke Link** | Hosting Instan | Unggah foto dari perangkatmu dan dapatkan tautan URL publik instan berkecepatan tinggi untuk dibagikan ke mana saja. | Aktif |
+| `compressor` | **Kompres Media HD** | Hemat Memori | Kecilkan ukuran file video dan gambar secara drastis tanpa membuat visual pecah atau burik, sangat hemat kuota dan memori. | Aktif |
+| `qrStudio` | **QR Code Studio** | Desain Kustom | Studio pembuat kode QR estetik dengan logo kustom, pewarnaan neobrutalist fleksibel, dan resolusi tinggi yang siap dipindai. | Aktif |
+| `audioMerger` | **Audio Merger** | Kombinasi Suara | Gabungkan beberapa trek audio atau musik menjadi satu kesatuan alunan utuh dengan perpindahan lagu yang mulus dan jernih. | Aktif |
+| `photoStudio` | **Photo Studio** | Filter & Efek | Editor foto instan dengan ragam filter neobrutalist, rotasi, penyesuaian kontras, serta efek grafis artistik untuk mempercantik gambarmu. | Aktif |
+| `videoStudio` | **Video Studio** | Studio Kreatif | Editor video praktis untuk mengatur kecepatan pemutaran, mengubah rasio layar 9:16 untuk story dan 16:9 untuk layar lebar, serta filter visual. | Aktif |
+| `videoTrimmer` | **Video Trimmer** | Pemotong Presisi | Pangkas detik awal atau akhir klip videomu secara akurat tanpa menurunkan bitrate asli atau merusak kualitas audionya. | Aktif |
+| `bgRemover` | **Hapus Background** | AI Background Remover | Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi. | Aktif |
+| `resolver` | **Safelink & Link Resolver** | Bypass Link & Iklan | Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman. | Aktif |
+<!-- AUTO-FEATURES-END -->
+
+### Detail Spesifikasi Modul Inti
+
+#### A. Media Downloader (16 Platform)
+Mendukung ekstraksi video resolusi tinggi (hingga 4K Ultra HD), audio MP3 320kbps, dan album carousel multi-slide dari 16 penyedia konten:
+- **Platform yang Didukung**: TikTok, Instagram, YouTube, X (Twitter), Spotify, Bilibili, Douyin, Rednote (Xiaohongshu), Threads, Pinterest, Facebook, CapCut, SoundCloud, SnackVideo, Likee, dan Dailymotion.
+- **Preset Khusus**: Opsi unduhan 1080p Status WA Anti-Burik dengan optimalisasi kompresi agar tidak mengalami degradasi kualitas saat diunggah ke status WhatsApp.
+
+#### B. Safelink & Shortlink Resolver
+Menembus rantai pengalihan berlapis dan timer penundaan iklan:
+- **Mekanisme Ekstraksi**: Evaluasi HTTP redirect header (301, 302, 307), parsing DOM HTML untuk script pengalihan (meta refresh, window.location, countdown redirect), dan dekoder payload Base64 otomatis.
+- **Dukungan Agregator Bio**: Mendeteksi halaman bio seperti Linktree (`linktr.ee`), mengumpulkan seluruh tautan anak secara agregat, dan menyajikan opsi batch download atau penyalinan sekaligus.
+
+#### C. Cari Link JJ (Jedag-Jedug & CapCut Deep Linking)
+Pencari template dan audio pengiring untuk kreator video pendek:
+- **Deep Linking Native**: Mengintegrasikan skema URL `capcut://template/detail?template_id={id}&enter_from=template` untuk langsung meluncurkan aplikasi CapCut di perangkat pengguna.
+- **Fallback Otomatis**: Jika aplikasi tidak terpasang atau pengguna menggunakan desktop, sistem melakukan fallback otomatis dalam 1.2 detik ke antarmuka web browser.
+
+#### D. Link to Document & Slides
+Ekstraktor dokumen materi kuliah dan presentasi:
+- **Bypass Proteksi Baca**: Mengunduh dan merekonstruksi dokumen utuh dari Scribd, Canva, dan SlideShare tanpa terhalang paywall login.
+- **Pilihan Ekspor**: Mendukung konversi langsung ke format PDF standar penerbitan atau berkas presentasi PPTX yang dapat diedit langsung.
+
+---
+
+## 3. Kuro Command Line Interface (opkuro)
+
+Kuro Studio menyediakan perkakas CLI global `opkuro` untuk meluncurkan antarmuka web, mengelola konfigurasi, dan memicu server lokal langsung dari terminal.
+
+### Instalasi Global
+Jalankan salah satu metode berikut:
+
 ```bash
+# Melalui npm global link dari repositori lokal
+npm link
+
+# Atau jalankan installer otomatis (Linux/macOS)
+curl -fsSL https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/install.sh | bash
+
+# Atau jalankan installer otomatis (Windows PowerShell)
+irm https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/install.ps1 | iex
+```
+
+### Penggunaan CLI
+```bash
+# Buka Kuro Studio di web browser lokal
+opkuro
+
+# Buka Kuro Studio versi cloud production
+opkuro --cloud
+
+# Menampilkan versi CLI terpasang
+opkuro --version
+
+# Menampilkan bantuan parameter
+opkuro --help
+```
+
+Setiap pemanggilan `opkuro` akan memeriksa rilis pembaruan terbaru secara asinkron di latar belakang tanpa menghambat alur kerja utama pengguna.
+
+---
+
+## 4. Panduan Menjalankan Repositori Lokal
+
+### Prasyarat
+- Node.js versi 20.x atau lebih baru
+- Python versi 3.11 atau lebih baru (opsional untuk worker deep-scraping)
+- Git
+
+### Langkah Instalasi
+```bash
+# 1. Kloning repositori
+git clone https://github.com/itsvin-debug/AllToolsKuro.git
+cd AllToolsKuro
+
+# 2. Pasang dependensi pada root dan frontend
+npm install
+npm --prefix frontend install
+npm --prefix backend install
+
+# 3. Konfigurasi Environment Variables
+cp .env.example .env
+cp .env.example frontend/.env
+
+# 4. Jalankan aplikasi dalam mode pengembangan
 npm run dev
 ```
-> Perintah ini otomatis menjalankan **Backend (`http://localhost:5001`)** dan **Frontend (`http://localhost:5173`)** secara bersamaan dengan label warna rapi `[BACKEND]` dan `[FRONTEND]`.
 
-Jika ingin menjalankan secara terpisah:
-- **Backend saja**: `npm run dev:backend` (atau `cd backend && npm run dev`)
-- **Frontend saja**: `npm run dev:frontend` (atau `cd frontend && npm run dev:vite`)
-
+Aplikasi frontend akan aktif di `http://localhost:5173` dan server backend lokal akan berjalan di `http://localhost:5001`.
 
 ---
 
-## 📡 Dokumentasi Spesifikasi API Backend
+## 5. Sistem Proteksi Repositori Publik (Env Guard)
 
-### 1. Ekstraksi Video & Audio
-- **URL**: `POST /api/download`
-- **Headers**: `Content-Type: application/json`
-- **Request Body**:
-  ```json
-  {
-    "url": "https://www.tiktok.com/@user/video/1234567890"
-  }
-  ```
-- **Response Sukses (200 OK)**:
-  ```json
-  {
-    "success": true,
-    "message": "Berhasil mengambil media!",
-    "data": {
-      "platform": "TikTok",
-      "title": "Judul Video",
-      "author": "Nama Pembuat",
-      "thumbnail": "https://...",
-      "duration": "15s",
-      "downloadLinks": [
-        {
-          "label": "HD (No Watermark)",
-          "quality": "1080p / HD",
-          "url": "https://direct-cdn-link.mp4",
-          "proxyUrl": "/api/proxy-download?url=...&filename=...",
-          "type": "video",
-          "extension": "mp4",
-          "filename": "tiktok_123_hd.mp4"
-        },
-        {
-          "label": "Audio MP3",
-          "quality": "128kbps",
-          "url": "https://direct-cdn-link.mp3",
-          "proxyUrl": "/api/proxy-download?url=...&filename=...",
-          "type": "audio",
-          "extension": "mp3",
-          "filename": "tiktok_audio_123.mp3"
-        }
-      ]
-    }
-  }
-  ```
-
-### 2. Proxy Stream Direct Download (Bypass CORS CDN)
-- **URL**: `GET /api/proxy-download?url={ENCODED_URL}&filename={FILENAME}`
-- **Fungsi**: Memaksa browser mengunduh file media langsung ke penyimpanan lokal / galeri dengan header `Content-Disposition: attachment; filename="..."` tanpa kendala CORS.
+Repositori ini menerapkan sistem keamanan `EnvGuard` (`backend/src/middlewares/envGuard.js` dan `api/_envGuard.js`):
+- Saat dijalankan pada mode kloning publik (tanpa `ADMIN_PASSWORD` atau `KURO_ADMIN_SECRET`), seluruh endpoint mutasi administratif (`/api/admin/*`, `/api/locked-tools`) otomatis terkunci dengan respons `403 Forbidden` terstandarisasi.
+- Seluruh verifikasi kredensial divalidasi secara kriptografis di sisi server; tidak ada password, secret token, atau kunci enkripsi yang tertanam pada bundle JavaScript sisi klien.
 
 ---
 
-## 🎨 Fitur & Keunggulan Frontend
-- **WebGL Dynamic Shader Background**: Latar kanvas interaktif berbasis GPU 60fps tanpa lag.
-- **Glassmorphism & Glow Design System**: Tema gelap navy elegan (`#0b1326`) sesuai token Stitch.
-- **Smooth Flow**: Transisi mulus antara Splash Screen -> Welcome Screen -> Media Converter -> Results.
-- **Direct Save to Gallery/Disk**: Pengunduhan video/audio langsung tersimpan di komputer/smartphone pengguna.
-- **Informal Indonesian Code Comments**: Seluruh komentar kode ditulis dalam bahasa Indonesia yang santai dan mudah dimengerti.
+## 6. Pohon Direktori Repositori
+
+Struktur organisasi berkas utama proyek:
+
+<!-- AUTO-TREE-START -->
+```text
+AllToolsKuro/
+├── .github/
+│   └── workflows/
+│       └── auto-readme.yml
+├── .kilo/
+│   ├── .gitignore
+│   └── agent-manager.json
+├── api/
+│   ├── _envGuard.js
+│   ├── _security.js
+│   ├── chat.js
+│   ├── download.js
+│   ├── jj-finder.js
+│   ├── link-to-doc.js
+│   ├── locked-tools.js
+│   ├── ping.js
+│   ├── proxy-doc-image.js
+│   ├── proxy-download.js
+│   ├── proxy-stream.js
+│   └── resolve.js
+├── backend/
+│   ├── bin/
+│   │   └── yt-dlp.exe
+│   ├── src/
+│   │   ├── controllers/
+│   │   ├── middlewares/
+│   │   ├── routes/
+│   │   ├── services/
+│   │   └── server.js
+│   ├── uploads/
+│   │   ├── temp/
+│   │   └── .gitkeep
+│   ├── package-lock.json
+│   └── package.json
+├── backend-python/
+│   ├── __pycache__/
+│   │   └── app.cpython-314.pyc
+│   ├── services/
+│   │   ├── __pycache__/
+│   │   ├── jj_service.py
+│   │   └── resolver_service.py
+│   ├── static/
+│   │   ├── index.html
+│   │   ├── script.js
+│   │   └── style.css
+│   ├── app.py
+│   ├── requirements.txt
+│   ├── script_jj.py
+│   └── script_resolver.py
+├── bin/
+│   └── opkuro.js
+├── frontend/
+│   ├── public/
+│   │   ├── videos/
+│   │   ├── favicon.svg
+│   │   └── icons.svg
+│   ├── src/
+│   │   ├── assets/
+│   │   ├── components/
+│   │   ├── services/
+│   │   ├── utils/
+│   │   ├── App.css
+│   │   ├── App.jsx
+│   │   ├── index.css
+│   │   └── main.jsx
+│   ├── .gitignore
+│   ├── .oxlintrc.json
+│   ├── index.html
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── README.md
+│   └── vite.config.js
+├── scripts/
+│   ├── audit-secrets.js
+│   └── generate-readme.js
+├── .gitignore
+├── .vercelignore
+├── AGENTS.md
+├── GEMINI.md
+├── install.ps1
+├── install.sh
+├── package-lock.json
+├── package.json
+├── README.md
+├── start-dev.js
+└── vercel.json
+```
+<!-- AUTO-TREE-END -->
+
+---
+
+## 7. Catatan Pembaruan (Changelog)
+
+5 riwayat pembaruan commit terakhir pada repositori:
+
+<!-- AUTO-CHANGELOG-START -->
+- [a3db3e5] feat: add Python script and JJ preset service for video extraction (2026-11-06)
+- [b9ebd6b] fix(all): resolve sfl bypass, 4-layer jj preset engine, clean downloader video preview & universal paste (2026-11-06)
+- [4b9ad9e] feat(resolver): implement hybrid python and js gateway with multi-link aggregator and deep scan (2026-11-06)
+- [32f95e1] fix(resolver): guarantee sfl safelink bypass to mediafire destination and enhance paste button (2026-11-06)
+- [155f23e] fix(resolver): enhance link resolver engine with cloud bypass fallback and improve mobile clipboard paste (2026-11-06)
+<!-- AUTO-CHANGELOG-END -->
+
+---
+
+## 8. Lisensi
+
+Proyek ini didistribusikan di bawah lisensi terbuka [MIT License](LICENSE). Seluruh hak cipta modul, desain neobrutalist, dan implementasi kode dilindungi.

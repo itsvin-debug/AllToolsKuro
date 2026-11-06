@@ -4,7 +4,7 @@ import { validateRequestSecurity } from './_security.js';
 
 const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
-const SAVENOW_API_KEY = 'dfcb6d76f2f6a9894gjkege8a4ab232222';
+const SAVENOW_API_KEY = process.env.SAVENOW_API_KEY || '';
 
 function cleanInputUrl(raw) {
   if (!raw) return '';
