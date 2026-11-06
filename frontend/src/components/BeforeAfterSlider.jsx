@@ -106,7 +106,7 @@ export default function BeforeAfterSlider({
           <img
             src={beforeImage}
             alt="Original Burik"
-            className="w-full h-full object-contain filter contrast-90 brightness-95"
+            className="w-full h-full object-contain"
           />
           {/* Badge Kiri */}
           <div className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-white text-black font-mono text-[10px] sm:text-xs font-bold border-2 border-black shadow-md flex items-center gap-1.5 z-10">

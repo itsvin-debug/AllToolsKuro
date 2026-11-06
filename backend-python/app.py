@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from services.resolver_service import deep_resolve
 
 # Muat variabel lingkungan
 BASE_DIR = Path(__file__).resolve().parent
@@ -38,7 +39,7 @@ GEMINI_API_KEY = (
     or ""
 )
 
-# Kamus data 12 fitur resmi Kuro Studio
+# Kamus data 13 fitur resmi Kuro Studio
 KURO_TOOLS = {
     "downloader": {
         "id": "downloader",
@@ -160,13 +161,26 @@ KURO_TOOLS = {
             "remove bg", "transparan", "hapus latar", "potong background", "bikin png transparan"
         ],
         "desc": "Penghapus latar belakang gambar berbasis AI yang memotong subjek foto utama secara rapi dan otomatis menjadi PNG transparan."
+    },
+    "resolver": {
+        "id": "resolver",
+        "name": "Safelink & Link Resolver",
+        "element_id": "tool-resolver",
+        "keywords": [
+            "resolver", "safelink", "shortlink", "bypass link", "lewati link", "buka link",
+            "resolve link", "ouo", "bitly", "s.id", "linkvertise", "adf.ly", "url resolver",
+            "sfl", "sfl.gl", "safelinku", "bypass", "lewati safelink", "mediafire link", 
+            "bypasser", "link safelink", "iklan link", "lewati iklan", "lewat link",
+            "buka safelink", "tembus safelink", "tembus link"
+        ],
+        "desc": "Fitur Safelink & Shortlink Resolver untuk melewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll), melewati countdown waktu dan iklan membingungkan agar langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan tanpa ribet."
     }
 }
 
 TOUR_ORDER = [
     "downloader", "jjFinder", "pngToPdf", "linkToDoc", 
     "imageToLink", "compressor", "qrStudio", "audioMerger", 
-    "photoStudio", "videoStudio", "videoTrimmer", "bgRemover"
+    "photoStudio", "videoStudio", "videoTrimmer", "bgRemover", "resolver"
 ]
 
 class ChatRequest(BaseModel):
@@ -217,7 +231,8 @@ def is_strictly_out_of_topic(text: str) -> bool:
         "download", "unduh", "video", "foto", "gambar", "musik", "sound", 
         "lagu", "pdf", "ppt", "doc", "link", "qr", "barcode", "kompres", 
         "potong", "trim", "background", "transparan", "jedag", "jj", "preset",
-        "status wa", "sw", "anti burik", "gratis", "cara pakai", "panduan"
+        "status wa", "sw", "anti burik", "gratis", "cara pakai", "panduan",
+        "safelink", "bypass", "shortlink", "sfl", "sfl.gl", "resolver"
     ]
     if any(kw in clean for kw in web_keywords):
         return False
@@ -251,7 +266,7 @@ def handle_chat(req: ChatRequest):
     # 1. Guardrail KETAT: Cek apakah topik BENAR-BENAR di luar konteks web
     if is_strictly_out_of_topic(lower_msg):
         return ChatResponse(
-            reply="Maaf ya, Kuro hanya bisa membantu menjawab hal seputar fitur, alat, dan panduan penggunaan website Kuro Studio! Fufufu~ Coba tanyakan seputar 12 fitur hebat kami!",
+            reply="Maaf ya, Kuro hanya bisa membantu menjawab hal seputar fitur, alat, dan panduan penggunaan website Kuro Studio! Fufufu~ Coba tanyakan seputar 13 fitur hebat kami!",
             is_valid_context=False,
             animation="confused",
             action="none",
@@ -260,14 +275,14 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 2. Deteksi Permintaan Tour Berkelanjutan (12 Fitur Web)
+    # 2. Deteksi Permintaan Tour Berkelanjutan (13 Fitur Web)
     tour_patterns = [r'\btour\b', r'\btur\b', r'semua fitur', r'jelaskan semua', r'keliling', r'panduan lengkap', r'demo semua']
     is_tour_request = any(re.search(pat, lower_msg) for pat in tour_patterns)
 
     if is_tour_request:
         first_tool = TOUR_ORDER[0]
         return ChatResponse(
-            reply="Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 12 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!",
+            reply="Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 13 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!",
             is_valid_context=True,
             animation="talking",
             action="start_tour",
@@ -284,9 +299,9 @@ def handle_chat(req: ChatRequest):
     ]
     if any(trigger in lower_msg for trigger in general_features_triggers):
         overview_text = (
-            "Fufufu~ Tentu saja! Kuro Studio (AllToolsKuro) punya 12 fitur hebat serbaguna yang terbagi dalam 4 kategori utama:\n\n"
+            "Fufufu~ Tentu saja! Kuro Studio (AllToolsKuro) punya 13 fitur hebat serbaguna yang terbagi dalam 4 kategori utama:\n\n"
             "1. Media & Audio: Media Downloader (Unduh video 4K & 1080p Status WA Anti-Burik tanpa watermark dari TikTok, IG, YT), Cari Link JJ (Preset AM & Sound viral), dan Audio Merger.\n\n"
-            "2. Dokumen & Cloud: PNG to PDF (Satukan banyak foto jadi PDF rapi), Link to PDF/PPT (Ekstrak materi Scribd & SlideShare), dan File ke Link (Hosting gambar instan jadi tautan publik).\n\n"
+            "2. Dokumen & Cloud: PNG to PDF (Satukan banyak foto jadi PDF rapi), Link to PDF/PPT (Ekstrak materi Scribd & SlideShare), File ke Link (Hosting gambar instan jadi tautan publik), dan Safelink Resolver (Bypass link bertingkat Sfl.gl, SafelinkU, dan iklan langsung ke file asli Mediafire/Drive).\n\n"
             "3. Studio Kreatif & AI: Hapus Background AI (PNG transparan 1-klik), QR Code Studio (Kode QR neobrutalist dengan logo), dan Photo Studio.\n\n"
             "4. Editor Video & Media: Kompres Media HD (Kecilkan file video/foto tanpa burik), Video Studio, dan Video Trimmer.\n\n"
             "Kamu bisa klik tombol Tour Web di atas untuk panduan interaktif, atau sebutkan fitur yang ingin kamu coba!"
@@ -305,8 +320,9 @@ def handle_chat(req: ChatRequest):
     guidance_triggers = ["cara pakai", "cara menggunakan", "gimana cara", "panduan", "bingung"]
     if any(g in lower_msg for g in guidance_triggers) and not detect_tool_mention(lower_msg):
         guide_text = (
-            "Caranya sangat mudah! Kamu cukup pilih salah satu dari 12 kartu alat di halaman utama Kuro Studio:\n"
+            "Caranya sangat mudah! Kamu cukup pilih salah satu dari 13 kartu alat di halaman utama Kuro Studio:\n"
             "• Mau unduh video? Klik Media Downloader lalu tempel tautan video dari TikTok, IG, atau YT.\n"
+            "• Mau lewati link iklan safelink? Klik Safelink Resolver lalu tempel link Sfl.gl atau SafelinkU untuk langsung membuka file aslinya.\n"
             "• Mau satukan foto jadi dokumen? Klik PNG to PDF.\n"
             "• Mau hilangkan latar foto? Klik Hapus Background.\n"
             "• Mau bikin kode barcode? Klik QR Code Studio.\n\n"
@@ -325,7 +341,7 @@ def handle_chat(req: ChatRequest):
     # 5. Deteksi Pertanyaan Biaya / Gratis
     if any(k in lower_msg for k in ["gratis", "bayar", "biaya", "langganan", "tarif"]):
         return ChatResponse(
-            reply="Semua 12 fitur di Kuro Studio 100% gratis tanpa biaya langganan apapun! Kamu bebas download video, convert dokumen, kompres file, hingga edit media sepuasnya tanpa watermark fufufu~",
+            reply="Semua 13 fitur di Kuro Studio 100% gratis tanpa biaya langganan apapun! Kamu bebas download video, convert dokumen, kompres file, lewati safelink, hingga edit media sepuasnya tanpa watermark fufufu~",
             is_valid_context=True,
             animation="talking",
             action="none",
@@ -385,7 +401,7 @@ def handle_chat(req: ChatRequest):
 
     # 9. Respons Default Ramah seputar Web Kuro (BUKAN Menolak)
     return ChatResponse(
-        reply="Ada yang bisa Kuro bantu seputar website Kuro Studio? Kamu bisa tanyakan cara penggunaan 12 alat kami (seperti Media Downloader, PNG to PDF, Hapus Background, QR Studio) atau klik tombol Tour Web untuk berkeliling otomatis!",
+        reply="Ada yang bisa Kuro bantu seputar website Kuro Studio? Kamu bisa tanyakan cara penggunaan 13 alat kami (seperti Media Downloader, Safelink Resolver, PNG to PDF, Hapus Background, QR Studio) atau klik tombol Tour Web untuk berkeliling otomatis!",
         is_valid_context=True,
         animation="talking",
         action="none",
@@ -393,6 +409,21 @@ def handle_chat(req: ChatRequest):
         target_element=None,
         tour_sequence=None
     )
+
+class ResolvePayload(BaseModel):
+    url: str
+
+@app.post("/worker/resolve")
+@app.post("/resolve")
+def resolve_shortlink_post(payload: ResolvePayload):
+    """Endpoint Deep-Scraper Worker untuk menyelesaikan Safelink dan Shortlink bertingkat."""
+    return deep_resolve(payload.url, timeout=28)
+
+@app.get("/worker/resolve")
+@app.get("/resolve")
+def resolve_shortlink_get(url: str):
+    """Endpoint GET pendukung untuk resolver worker."""
+    return deep_resolve(url, timeout=28)
 
 # Sajikan file statis (HTML, CSS, JS, Vektor SVG) untuk demo web lokal
 STATIC_DIR = BASE_DIR / "static"
@@ -408,6 +439,6 @@ if STATIC_DIR.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PYTHON_RESOLVER_PORT", os.getenv("PORT", 8001)))
     print(f"🚀 AI Kuro Backend berjalan di http://localhost:{port}")
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=True)

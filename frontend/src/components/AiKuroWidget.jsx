@@ -26,7 +26,7 @@ function cleanSpeechText(text) {
     .trim();
 }
 
-// Data resmi 12 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
+// Data resmi 13 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
 const KURO_TOOLS_CATALOG = [
   {
     id: 'downloader',
@@ -99,6 +99,12 @@ const KURO_TOOLS_CATALOG = [
     name: 'Hapus Background',
     tag: 'AI Background Remover',
     desc: 'Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi.'
+  },
+  {
+    id: 'resolver',
+    name: 'Safelink & Link Resolver',
+    tag: 'Bypass Link & Iklan',
+    desc: 'Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
   }
 ];
 
@@ -319,7 +325,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   const executeTourStep = useCallback((index) => {
     if (index >= KURO_TOOLS_CATALOG.length) {
       setAnimState('wave');
-      const completionText = 'Fufufu~ Selesai! Itu dia seluruh 12 fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi dan mencoba setiap fiturnya!';
+      const completionText = 'Fufufu~ Selesai! Itu dia seluruh 13 fitur hebat yang ada di Kuro Studio. Sekarang giliranmu untuk berkreasi dan mencoba setiap fiturnya!';
       streamText(completionText, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: completionText, animation: 'wave' }]);
         setIsTourActive(false);
@@ -331,7 +337,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setTourIndex(index);
     scrollToToolElement(currentTool.id);
 
-    const stepText = `Fitur ${index + 1} dari 12: ${currentTool.name} (${currentTool.tag}). ${currentTool.desc}`;
+    const stepText = `Fitur ${index + 1} dari ${KURO_TOOLS_CATALOG.length}: ${currentTool.name} (${currentTool.tag}). ${currentTool.desc}`;
     streamText(stepText, () => {
       setMessages(prev => [...prev, { sender: 'ai', text: stepText, animation: 'talking', toolId: currentTool.id }]);
       
@@ -418,9 +424,14 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       const lower = textToSend.toLowerCase();
       const isOut = ['resep', 'masak', 'politik', 'presiden', 'matematika', 'rumus', 'sejarah', 'cuaca', 'ramalan', 'zodiak'].some(k => lower.includes(k));
       
+      if (!isOut && (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl'))) {
+        handleGuideSpecificTool('resolver', 'Tentu saja! Ini dia fitur Safelink Resolver. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya tanpa menunggu iklan.');
+        return;
+      }
+
       const fallbackMsg = isOut
-        ? 'Maaf ya, Kuro hanya bisa membantu menjelaskan seputar fitur-fitur dan cara penggunaan website ini! Fufufu~ Coba tanyakan salah satu dari 12 fitur hebat kami.'
-        : 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu. Mau tahu penjelasan seputar 12 fitur Kuro Studio?';
+        ? 'Maaf ya, Kuro hanya bisa membantu menjelaskan seputar fitur-fitur dan cara penggunaan website ini! Fufufu~ Coba tanyakan salah satu dari 13 fitur hebat kami.'
+        : 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu. Mau tahu penjelasan seputar 13 fitur Kuro Studio?';
       
       const anim = isOut ? 'confused' : 'talking';
       setAnimState(anim);

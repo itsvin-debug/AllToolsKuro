@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import downloadRoutes from './routes/download.route.js';
 import toolsRoutes from './routes/tools.route.js';
+import resolverRoutes from './routes/resolver.route.js';
 
 // load konfigurasi env
 dotenv.config();
@@ -58,6 +59,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // pasang rute API
 app.use('/api', downloadRoutes);
 app.use('/api', toolsRoutes);
+app.use('/api', resolverRoutes);
 
 // Endpoint real-time ping untuk telemetri jaringan
 app.get('/api/ping', (req, res) => {

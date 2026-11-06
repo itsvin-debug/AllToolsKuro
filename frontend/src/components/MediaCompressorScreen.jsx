@@ -86,6 +86,15 @@ export default function MediaCompressorScreen({ onBack }) {
     setImgEnhancedDataUrl('');
     setImgEnhancedSize(0);
 
+    // Otomatis pilih format ekspor sesuai format sumber
+    if (file.type === 'image/png') {
+      setTargetFormat('image/png');
+    } else if (file.type === 'image/webp') {
+      setTargetFormat('image/webp');
+    } else {
+      setTargetFormat('image/jpeg');
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target.result;
@@ -131,9 +140,9 @@ export default function MediaCompressorScreen({ onBack }) {
       else if (sharpenMode === 'ultra') sharpenVal = 1.65;
       else if (sharpenMode === 'extreme') sharpenVal = 2.15;
 
-      // Stage 4: Micro-Contrast & Finishing
+      // Stage 4: Finishing
       await new Promise(r => setTimeout(r, 600));
-      setProcessingStage('Meningkatkan micro-contrast & kejernihan Status WA Anti-Burik...');
+      setProcessingStage('Menghaluskan detail tekstur & kejernihan HD tanpa merubah warna...');
 
       const result = await enhanceImageToSuperHd(img, {
         upscaleFactor,
@@ -174,7 +183,9 @@ export default function MediaCompressorScreen({ onBack }) {
   const downloadEnhancedImage = () => {
     if (!imgEnhancedDataUrl) return;
     const link = document.createElement('a');
-    const ext = targetFormat === 'image/webp' ? 'webp' : 'jpg';
+    let ext = 'jpg';
+    if (targetFormat === 'image/webp') ext = 'webp';
+    else if (targetFormat === 'image/png') ext = 'png';
     link.download = `kuro_super_hd_${imgEnhancedDimensions.w}x${imgEnhancedDimensions.h}_${Date.now()}.${ext}`;
     link.href = imgEnhancedDataUrl;
     document.body.appendChild(link);
@@ -221,8 +232,8 @@ export default function MediaCompressorScreen({ onBack }) {
       const res = await axios.post('/api/compress-video', {
         videoBase64: videoPreview,
         originalName: videoFile.name,
-        qualityPreset: videoPreset === 'status_wa_1080p' ? 'balanced' : videoPreset === '4k_remaster' ? 'high_hd' : 'ultra_kb',
-        scale: videoPreset === '4k_remaster' ? 'original' : '720p'
+        qualityPreset: videoPreset === 'status_wa_1080p' ? 'status_wa_1080p' : videoPreset === '4k_remaster' ? 'high_hd' : 'balanced',
+        scale: videoPreset === 'status_wa_1080p' ? '1080p' : videoPreset === '4k_remaster' ? 'original' : '720p'
       }, {
         timeout: 180000
       });
@@ -460,28 +471,39 @@ export default function MediaCompressorScreen({ onBack }) {
                     <Zap className="w-3.5 h-3.5" />
                     <span>Format Ekspor:</span>
                   </label>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-3 gap-1">
                     <button
                       type="button"
                       onClick={() => setTargetFormat('image/jpeg')}
-                      className={`py-2 px-2 text-center rounded-lg border-2 text-xs font-black cursor-pointer ${
+                      className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer ${
                         targetFormat === 'image/jpeg'
                           ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
                           : 'bg-white text-black border-black hover:bg-neutral-100'
                       }`}
                     >
-                      JPG (Kompatibel WA)
+                      JPG
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTargetFormat('image/png')}
+                      className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer ${
+                        targetFormat === 'image/png'
+                          ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
+                          : 'bg-white text-black border-black hover:bg-neutral-100'
+                      }`}
+                    >
+                      PNG
                     </button>
                     <button
                       type="button"
                       onClick={() => setTargetFormat('image/webp')}
-                      className={`py-2 px-2 text-center rounded-lg border-2 text-xs font-black cursor-pointer ${
+                      className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer ${
                         targetFormat === 'image/webp'
                           ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
                           : 'bg-white text-black border-black hover:bg-neutral-100'
                       }`}
                     >
-                      WebP (Lossless)
+                      WebP
                     </button>
                   </div>
                 </div>

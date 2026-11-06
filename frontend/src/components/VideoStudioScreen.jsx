@@ -32,9 +32,9 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
 
   // Parameter Filter Video
   const [blur, setBlur] = useState(0);
-  const [contrast, setContrast] = useState(115); // HD Boost
-  const [brightness, setBrightness] = useState(105);
-  const [saturation, setSaturation] = useState(120);
+  const [contrast, setContrast] = useState(100);
+  const [brightness, setBrightness] = useState(100);
+  const [saturation, setSaturation] = useState(100);
   const [sepia, setSepia] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
 

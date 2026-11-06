@@ -8,6 +8,7 @@ import PhotoStudioScreen from './components/PhotoStudioScreen';
 import VideoStudioScreen from './components/VideoStudioScreen';
 import VideoTrimmerScreen from './components/VideoTrimmerScreen';
 import BgRemoverScreen from './components/BgRemoverScreen';
+import LinkResolverScreen from './components/LinkResolverScreen';
 import JjFinderScreen from './components/JjFinderScreen';
 import PngToPdfScreen from './components/PngToPdfScreen';
 import MediaCompressorScreen from './components/MediaCompressorScreen';
@@ -39,7 +40,8 @@ const TOOL_NAMES = {
   photoStudio: 'Photo Studio',
   videoStudio: 'Video Studio',
   videoTrimmer: 'Video Trimmer',
-  bgRemover: 'Hapus Background'
+  bgRemover: 'Hapus Background',
+  resolver: 'Safelink Resolver'
 };
 
 export default function App() {
@@ -289,6 +291,13 @@ export default function App() {
               theme={settings.darkMode ? 'dark' : 'light'}
               onBack={() => handleNavigate('welcome')}
               lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'resolver' && (
+            <LinkResolverScreen
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
             />
           )}
           </ErrorBoundary>

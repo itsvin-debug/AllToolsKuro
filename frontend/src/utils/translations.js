@@ -120,6 +120,11 @@ export const translations = {
           name: 'Hapus Background',
           desc: 'Ekstraksi subjek foto dan logo untuk menghasilkan gambar transparan format PNG.',
           tag: 'PNG HD'
+        },
+        resolver: {
+          name: 'Safelink Resolver',
+          desc: 'Lewati safelink bertingkat (Sfl.gl, SafelinkU, dll), lewati iklan & countdown langsung ke link file asli (Mediafire, Drive, dll).',
+          tag: 'BYPASS'
         }
       }
     },
@@ -611,6 +616,11 @@ export const translations = {
           name: 'Background Remover',
           desc: 'Extract subjects and logos into clean, high-resolution transparent PNG images.',
           tag: 'PNG HD'
+        },
+        resolver: {
+          name: 'Safelink Resolver',
+          desc: 'Bypass multi-level safelinks (Sfl.gl, SafelinkU, etc), skip ads and countdowns straight to the direct download link.',
+          tag: 'BYPASS'
         }
       }
     },

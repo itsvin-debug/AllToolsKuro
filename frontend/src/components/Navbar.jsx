@@ -49,7 +49,8 @@ export default function Navbar({
     { id: 'photoStudio', label: t.welcome?.tools?.photoStudio?.name || 'Photo Studio', icon: Sparkles },
     { id: 'videoStudio', label: t.welcome?.tools?.videoStudio?.name || 'Video Studio', icon: Film },
     { id: 'videoTrimmer', label: t.welcome?.tools?.videoTrimmer?.name || 'Video Trimmer', icon: Scissors },
-    { id: 'bgRemover', label: t.welcome?.tools?.bgRemover?.name || 'Hapus Background', icon: Scissors }
+    { id: 'bgRemover', label: t.welcome?.tools?.bgRemover?.name || 'Hapus Background', icon: Scissors },
+    { id: 'resolver', label: t.welcome?.tools?.resolver?.name || 'Safelink Resolver', icon: Link2 }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);

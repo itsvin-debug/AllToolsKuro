@@ -59,11 +59,11 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
   const wt = t.welcome;
 
   const categories = [
-    { id: 'all', label: wt.catAll, count: 12 },
+    { id: 'all', label: wt.catAll, count: 13 },
     { id: 'downloader', label: wt.catDownloader, count: 2 },
     { id: 'file', label: wt.catFile, count: 4 },
     { id: 'creative', label: wt.catCreative, count: 5 },
-    { id: 'utility', label: wt.catUtility, count: 1 }
+    { id: 'utility', label: wt.catUtility, count: 2 }
   ];
 
   const tools = [
@@ -174,6 +174,15 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       tag: wt.tools.bgRemover.tag,
       icon: Scissors,
       onClick: () => onOpenTool('bgRemover')
+    },
+    {
+      id: 'resolver',
+      category: 'utility',
+      name: wt.tools.resolver?.name || 'Safelink Resolver',
+      desc: wt.tools.resolver?.desc || 'Bypass safelink bertingkat dan shortlink secara instan.',
+      tag: wt.tools.resolver?.tag || 'BYPASS',
+      icon: Link2,
+      onClick: () => onOpenTool('resolver')
     }
   ];
 

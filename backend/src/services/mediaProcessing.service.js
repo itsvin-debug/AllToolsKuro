@@ -53,15 +53,20 @@ export async function compressVideoService({
       if (scale === 'original') {
         scaleFilter = '-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2"';
       }
+    } else if (qualityPreset === 'status_wa_1080p') {
+      targetCrf = 19;
+      audioBitrate = '160k';
     } else if (qualityPreset === 'high_hd') {
-      targetCrf = 23;
+      targetCrf = 22;
       audioBitrate = '128k';
     } else {
       targetCrf = Number(crf) || 28;
       audioBitrate = '96k';
     }
 
-    if (scale === '720p') {
+    if (scale === '1080p') {
+      scaleFilter = '-vf "scale=-2:1080"';
+    } else if (scale === '720p') {
       scaleFilter = '-vf "scale=-2:720"';
     } else if (scale === '480p') {
       scaleFilter = '-vf "scale=-2:480"';

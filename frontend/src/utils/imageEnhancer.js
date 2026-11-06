@@ -1,17 +1,16 @@
 /**
  * Kuro Studio - Image Super-Resolution & Clarity Enhancer
- * Algoritma peningkatan resolusi foto (Super-Resolution, Unsharp Masking & Micro-Contrast)
- * Menghilangkan tampilan burik/burem dan meningkatkan foto hingga resolusi master 4K / HD
- * Optimal untuk pengunggahan Status WhatsApp agar tidak pecah/burik.
+ * Penajaman dan peningkatan resolusi foto tanpa mengubah warna asli.
+ * Menggunakan transformasi ruang warna YCbCr (Rec. 601) sehingga hanya kanal
+ * luminansi (Y) yang dipertajam, sedangkan krominansi warna (Cb, Cr) tetap 100% identik.
  */
 
-// Multi-step bicubic scaling untuk meminimalisir aliasing
 function multiStepUpscale(sourceCanvas, targetWidth, targetHeight) {
   let curCanvas = sourceCanvas;
   let curW = sourceCanvas.width;
   let curH = sourceCanvas.height;
 
-  // Jika perbesaran lebih dari 2x, lakukan bertahap per 1.5x - 2x
+  // Lakukan perbesaran bertahap per 1.5x agar interpolasi piksel tetap halus
   while (curW * 1.5 < targetWidth || curH * 1.5 < targetHeight) {
     const nextW = Math.min(targetWidth, Math.round(curW * 1.5));
     const nextH = Math.min(targetHeight, Math.round(curH * 1.5));
@@ -29,7 +28,6 @@ function multiStepUpscale(sourceCanvas, targetWidth, targetHeight) {
     curH = nextH;
   }
 
-  // Final scale ke targetWidth & targetHeight
   const finalCanvas = document.createElement('canvas');
   finalCanvas.width = targetWidth;
   finalCanvas.height = targetHeight;
@@ -41,36 +39,66 @@ function multiStepUpscale(sourceCanvas, targetWidth, targetHeight) {
   return finalCanvas;
 }
 
-// Algoritma Unsharp Masking & Adaptive High-Frequency Edge Sharpening
-function applyUnsharpMask(ctx, width, height, amount = 1.35, radius = 1) {
+/**
+ * Penajaman Luminance dalam ruang warna YCbCr standar ITU-R BT.601.
+ * Menjaga warna asli (Cb dan Cr) tidak bergeser sama sekali.
+ */
+function applyColorPreservingSharpen(ctx, width, height, amount = 1.35) {
   const imgData = ctx.getImageData(0, 0, width, height);
   const data = imgData.data;
-  const copy = new Uint8ClampedArray(data);
+  const totalPixels = width * height;
 
-  // Kernel Laplacian Sharpening 3x3
-  //  0  -1   0
-  // -1   5  -1
-  //  0  -1   0
+  const yChan = new Float32Array(totalPixels);
+  const cbChan = new Float32Array(totalPixels);
+  const crChan = new Float32Array(totalPixels);
+
+  // 1. Konversi RGB ke YCbCr
+  for (let i = 0, p = 0; p < totalPixels; i += 4, p++) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+
+    yChan[p] = 0.299 * r + 0.587 * g + 0.114 * b;
+    cbChan[p] = -0.168736 * r - 0.331264 * g + 0.5 * b;
+    crChan[p] = 0.5 * r - 0.418688 * g - 0.081312 * b;
+  }
+
+  const strength = Math.min(2.2, Math.max(0.4, amount));
   const w = width;
   const h = height;
+  const noiseThreshold = 1.5;
 
-  const strength = Math.min(2.5, Math.max(0.5, amount));
-  const centerWeight = 1 + 4 * (0.22 * strength);
-  const neighborWeight = -0.22 * strength;
-
+  // 2. Unsharp masking pada kanal luminansi Y saja
   for (let y = 1; y < h - 1; y++) {
+    const rowOffset = y * w;
     for (let x = 1; x < w - 1; x++) {
-      const idx = (y * w + x) * 4;
+      const idx = rowOffset + x;
+      const centerY = yChan[idx];
+      const topY = yChan[idx - w];
+      const bottomY = yChan[idx + w];
+      const leftY = yChan[idx - 1];
+      const rightY = yChan[idx + 1];
 
-      for (let c = 0; c < 3; c++) {
-        const top = copy[((y - 1) * w + x) * 4 + c];
-        const bottom = copy[((y + 1) * w + x) * 4 + c];
-        const left = copy[(y * w + (x - 1)) * 4 + c];
-        const right = copy[(y * w + (x + 1)) * 4 + c];
-        const center = copy[idx + c];
+      // Laplacian kernel
+      const edgeDiff = (4 * centerY) - (topY + bottomY + leftY + rightY);
 
-        const sharpened = center * centerWeight + (top + bottom + left + right) * neighborWeight;
-        data[idx + c] = Math.min(255, Math.max(0, Math.round(sharpened)));
+      if (Math.abs(edgeDiff) > noiseThreshold) {
+        const deltaY = Math.max(-28, Math.min(28, edgeDiff * 0.22 * strength));
+        const newY = Math.max(0, Math.min(255, centerY + deltaY));
+
+        const cb = cbChan[idx];
+        const cr = crChan[idx];
+
+        // 3. Konversi kembali YCbCr ke RGB murni
+        const rNew = newY + 1.402 * cr;
+        const gNew = newY - 0.344136 * cb - 0.714136 * cr;
+        const bNew = newY + 1.772 * cb;
+
+        const pixelIdx = idx * 4;
+        data[pixelIdx] = Math.max(0, Math.min(255, Math.round(rNew)));
+        data[pixelIdx + 1] = Math.max(0, Math.min(255, Math.round(gNew)));
+        data[pixelIdx + 2] = Math.max(0, Math.min(255, Math.round(bNew)));
+        // Kanal alpha data[pixelIdx + 3] tetap dipertahankan
       }
     }
   }
@@ -78,51 +106,16 @@ function applyUnsharpMask(ctx, width, height, amount = 1.35, radius = 1) {
   ctx.putImageData(imgData, 0, 0);
 }
 
-// Peningkatan micro-contrast dan saturasi warna agar hasil foto tidak pucat
-function applyMicroContrastAndVibrance(ctx, width, height, contrastBoost = 1.08, vibranceBoost = 1.1) {
-  const imgData = ctx.getImageData(0, 0, width, height);
-  const data = imgData.data;
-
-  // Nilai tengah 128 untuk S-curve kontras
-  const factor = (259 * (contrastBoost * 255 + 255)) / (255 * (259 - contrastBoost * 255));
-
-  for (let i = 0; i < data.length; i += 4) {
-    let r = data[i];
-    let g = data[i + 1];
-    let b = data[i + 2];
-
-    // 1. Kontras lokal
-    r = factor * (r - 128) + 128;
-    g = factor * (g - 128) + 128;
-    b = factor * (b - 128) + 128;
-
-    // 2. Vibrance (meningkatkan warna yang kurang jenuh tanpa membuat over-saturasi kulit)
-    const max = Math.max(r, g, b);
-    const avg = (r + g + b) / 3;
-    const amt = ((Math.abs(max - avg) * 2) / 255) * (vibranceBoost - 1);
-
-    if (r !== max) r += (max - r) * amt;
-    if (g !== max) g += (max - g) * amt;
-    if (b !== max) b += (max - b) * amt;
-
-    data[i] = Math.min(255, Math.max(0, Math.round(r)));
-    data[i + 1] = Math.min(255, Math.max(0, Math.round(g)));
-    data[i + 2] = Math.min(255, Math.max(0, Math.round(b)));
-  }
-
-  ctx.putImageData(imgData, 0, 0);
-}
-
 /**
- * Fungsi Utama: Mengubah foto burik menjadi Super HD (Anti-Burik WhatsApp)
+ * Meningkatkan resolusi dan ketajaman detail tanpa merusak atau mengubah saturasi warna asli.
  * @param {HTMLImageElement} imgElement
  * @param {Object} options
  * @returns {Promise<{ dataUrl: string, width: number, height: number, sizeBytes: number }>}
  */
 export async function enhanceImageToSuperHd(imgElement, options = {}) {
   const {
-    upscaleFactor = 2, // 2x atau 4x
-    sharpenStrength = 1.45,
+    upscaleFactor = 2,
+    sharpenStrength = 1.35,
     targetFormat = 'image/jpeg',
     quality = 0.96
   } = options;
@@ -130,7 +123,6 @@ export async function enhanceImageToSuperHd(imgElement, options = {}) {
   const originalWidth = imgElement.naturalWidth || imgElement.width;
   const originalHeight = imgElement.naturalHeight || imgElement.height;
 
-  // Hitung target dimensi: minimal panjang sisi 2160px untuk kualitas 4K UHD WhatsApp
   let targetW = Math.round(originalWidth * upscaleFactor);
   let targetH = Math.round(originalHeight * upscaleFactor);
 
@@ -140,13 +132,12 @@ export async function enhanceImageToSuperHd(imgElement, options = {}) {
     targetW = Math.round(targetW * scaleRatio);
     targetH = Math.round(targetH * scaleRatio);
   } else if (maxDimension > 4096) {
-    // Batasi maksimum 4096px agar hemat memori browser
     const scaleRatio = 4096 / maxDimension;
     targetW = Math.round(targetW * scaleRatio);
     targetH = Math.round(targetH * scaleRatio);
   }
 
-  // 1. Gambar sumber ke canvas awal
+  // 1. Gambar ke canvas awal
   const baseCanvas = document.createElement('canvas');
   baseCanvas.width = originalWidth;
   baseCanvas.height = originalHeight;
@@ -157,16 +148,12 @@ export async function enhanceImageToSuperHd(imgElement, options = {}) {
   const scaledCanvas = multiStepUpscale(baseCanvas, targetW, targetH);
   const scaledCtx = scaledCanvas.getContext('2d');
 
-  // 3. Eksekusi Unsharp Masking
-  applyUnsharpMask(scaledCtx, targetW, targetH, sharpenStrength);
+  // 3. Penajaman berbasis kanal luminansi (menjamin warna tidak berubah)
+  applyColorPreservingSharpen(scaledCtx, targetW, targetH, sharpenStrength);
 
-  // 4. Eksekusi Micro-Contrast & Vibrance
-  applyMicroContrastAndVibrance(scaledCtx, targetW, targetH, 1.05, 1.12);
-
-  // 5. Generate high-quality data URL
+  // 4. Ekspor ke data URL
   const dataUrl = scaledCanvas.toDataURL(targetFormat, quality);
 
-  // Hitung ukuran byte
   const head = `data:${targetFormat};base64,`;
   const base64Str = dataUrl.substring(head.length);
   const sizeBytes = atob(base64Str).length;
@@ -178,4 +165,3 @@ export async function enhanceImageToSuperHd(imgElement, options = {}) {
     sizeBytes
   };
 }
-
