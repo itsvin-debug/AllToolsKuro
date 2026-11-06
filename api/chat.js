@@ -121,13 +121,25 @@ const KURO_TOOLS = {
       'remove bg', 'transparan', 'hapus latar', 'potong background', 'bikin png transparan'
     ],
     desc: 'Penghapus latar belakang gambar berbasis AI yang memotong subjek foto utama secara rapi dan otomatis menjadi PNG transparan.'
+  },
+  resolver: {
+    id: 'resolver',
+    name: 'Safelink & Link Resolver',
+    element_id: 'tool-resolver',
+    keywords: [
+      'resolver', 'safelink', 'shortlink', 'bypass link', 'lewati link', 'buka link',
+      'resolve link', 'ouo', 'bitly', 's.id', 'linkvertise', 'adf.ly', 'url resolver',
+      'sfl', 'sfl.gl', 'safelinku', 'bypass', 'lewati safelink', 'mediafire link',
+      'bypasser', 'link safelink', 'iklan link', 'lewati iklan', 'lewat link'
+    ],
+    desc: 'Fitur Safelink & Shortlink Resolver untuk melewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll), melewati countdown waktu dan iklan membingungkan agar langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan tanpa ribet.'
   }
 };
 
 const TOUR_ORDER = [
   'downloader', 'jjFinder', 'pngToPdf', 'linkToDoc',
   'imageToLink', 'compressor', 'qrStudio', 'audioMerger',
-  'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover'
+  'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover', 'resolver'
 ];
 
 function cleanSpeechText(text) {
@@ -169,7 +181,8 @@ function isStrictlyOutOfTopic(text) {
     'download', 'unduh', 'video', 'foto', 'gambar', 'musik', 'sound', 
     'lagu', 'pdf', 'ppt', 'doc', 'link', 'qr', 'barcode', 'kompres', 
     'potong', 'trim', 'background', 'transparan', 'jedag', 'jj', 'preset',
-    'status wa', 'sw', 'anti burik', 'gratis', 'cara pakai', 'panduan'
+    'status wa', 'sw', 'anti burik', 'gratis', 'cara pakai', 'panduan',
+    'safelink', 'bypass', 'shortlink', 'sfl', 'sfl.gl', 'resolver'
   ];
   if (webKeywords.some(kw => clean.includes(kw))) {
     return false;
@@ -208,7 +221,7 @@ export default async function handler(req, res) {
     if (isTourRequest) {
       const first = TOUR_ORDER[0];
       return res.status(200).json({
-        reply: 'Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 12 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!',
+        reply: 'Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 13 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!',
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
@@ -243,9 +256,9 @@ export default async function handler(req, res) {
 
     if (isGeneralWebFeaturesQuery) {
       const overviewText = 
-        'Fufufu~ Tentu saja! Kuro Studio (AllToolsKuro) punya 12 fitur hebat serbaguna yang terbagi dalam 4 kategori utama:\n\n' +
+        'Fufufu~ Tentu saja! Kuro Studio (AllToolsKuro) punya 13 fitur hebat serbaguna yang terbagi dalam 4 kategori utama:\n\n' +
         '1. Media & Audio: Media Downloader (Unduh video 4K & 1080p Status WA Anti-Burik tanpa watermark dari TikTok, IG, YT), Cari Link JJ (Preset AM & Sound viral), dan Audio Merger.\n\n' +
-        '2. Dokumen & Cloud: PNG to PDF (Satukan banyak foto jadi PDF rapi), Link to PDF/PPT (Ekstrak materi Scribd & SlideShare), dan File ke Link (Hosting gambar instan jadi tautan publik).\n\n' +
+        '2. Dokumen & Cloud: PNG to PDF (Satukan banyak foto jadi PDF rapi), Link to PDF/PPT (Ekstrak materi Scribd & SlideShare), File ke Link (Hosting gambar instan jadi tautan publik), dan Safelink Resolver (Bypass link bertingkat Sfl.gl, SafelinkU, dan iklan langsung ke file asli Mediafire/Drive).\n\n' +
         '3. Studio Kreatif & AI: Hapus Background AI (PNG transparan 1-klik), QR Code Studio (Kode QR neobrutalist dengan logo), dan Photo Studio.\n\n' +
         '4. Editor Video & Media: Kompres Media HD (Kecilkan file video/foto tanpa burik), Video Studio, dan Video Trimmer.\n\n' +
         'Kamu bisa klik tombol Tour Web di atas untuk panduan interaktif, atau sebutkan fitur yang ingin kamu coba!';
@@ -274,8 +287,9 @@ export default async function handler(req, res) {
 
     if (isGuidanceQuery && !detectToolMention(lowerMsg)) {
       const guideText = 
-        'Caranya sangat mudah! Kamu cukup pilih salah satu dari 12 kartu alat di halaman utama Kuro Studio:\n' +
+        'Caranya sangat mudah! Kamu cukup pilih salah satu dari 13 kartu alat di halaman utama Kuro Studio:\n' +
         '• Mau unduh video? Klik Media Downloader lalu tempel tautan video dari TikTok, IG, atau YT.\n' +
+        '• Mau lewati link iklan safelink? Klik Safelink Resolver lalu tempel link Sfl.gl atau SafelinkU untuk langsung membuka file aslinya.\n' +
         '• Mau satukan foto jadi dokumen? Klik PNG to PDF.\n' +
         '• Mau hilangkan latar foto? Klik Hapus Background.\n' +
         '• Mau bikin kode barcode? Klik QR Code Studio.\n\n' +
@@ -297,7 +311,7 @@ export default async function handler(req, res) {
     // 4. Deteksi Pertanyaan Biaya / Gratis
     if (lowerMsg.includes('gratis') || lowerMsg.includes('bayar') || lowerMsg.includes('biaya') || lowerMsg.includes('langganan') || lowerMsg.includes('tarif')) {
       return res.status(200).json({
-        reply: 'Semua 12 fitur di Kuro Studio 100% gratis tanpa biaya langganan apapun! Kamu bebas download video, convert dokumen, kompres file, hingga edit media sepuasnya tanpa watermark fufufu~',
+        reply: 'Semua 13 fitur di Kuro Studio 100% gratis tanpa biaya langganan apapun! Kamu bebas download video, convert dokumen, kompres file, lewati safelink, hingga edit media sepuasnya tanpa watermark fufufu~',
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
@@ -390,7 +404,7 @@ export default async function handler(req, res) {
 
     // 9. Respon Default yang Ramah & Menjelaskan Fitur (BUKAN Menolak)
     return res.status(200).json({
-      reply: 'Ada yang bisa Kuro bantu seputar website Kuro Studio? Kamu bisa tanyakan cara penggunaan 12 alat kami (seperti Media Downloader, PNG to PDF, Hapus Background, QR Studio) atau klik tombol Tour Web untuk berkeliling otomatis!',
+      reply: 'Ada yang bisa Kuro bantu seputar website Kuro Studio? Kamu bisa tanyakan cara penggunaan 13 alat kami (seperti Media Downloader, Safelink Resolver, PNG to PDF, Hapus Background, QR Studio) atau klik tombol Tour Web untuk berkeliling otomatis!',
       is_valid_context: true,
       isValidContext: true,
       animation: 'talking',
