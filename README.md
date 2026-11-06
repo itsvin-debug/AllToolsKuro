@@ -171,9 +171,6 @@ Struktur organisasi berkas utama proyek:
 <!-- AUTO-TREE-START -->
 ```text
 AllToolsKuro/
-├── .github/
-│   └── workflows/
-│       └── auto-readme.yml
 ├── .kilo/
 │   ├── .gitignore
 │   └── agent-manager.json
@@ -266,11 +263,11 @@ AllToolsKuro/
 5 riwayat pembaruan commit terakhir pada repositori:
 
 <!-- AUTO-CHANGELOG-START -->
+- [cc9ec02] feat: complete security audit, global CLI opkuro, env guard, dynamic zero-emoji docs, and UI fixes (2026-11-06)
 - [a3db3e5] feat: add Python script and JJ preset service for video extraction (2026-11-06)
 - [b9ebd6b] fix(all): resolve sfl bypass, 4-layer jj preset engine, clean downloader video preview & universal paste (2026-11-06)
 - [4b9ad9e] feat(resolver): implement hybrid python and js gateway with multi-link aggregator and deep scan (2026-11-06)
 - [32f95e1] fix(resolver): guarantee sfl safelink bypass to mediafire destination and enhance paste button (2026-11-06)
-- [155f23e] fix(resolver): enhance link resolver engine with cloud bypass fallback and improve mobile clipboard paste (2026-11-06)
 <!-- AUTO-CHANGELOG-END -->
 
 ---
