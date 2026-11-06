@@ -12,6 +12,7 @@ export const translations = {
       history: 'Riwayat',
       settings: 'Pengaturan',
       search: 'Cari',
+      downloadApk: 'Unduh APK',
       backToHome: 'Kembali ke Beranda',
       switchTool: 'Beralih Alat',
       tagline: 'Multi-Tool Platform'
@@ -508,6 +509,7 @@ export const translations = {
       history: 'History',
       settings: 'Settings',
       search: 'Search',
+      downloadApk: 'Download APK',
       backToHome: 'Back to Home',
       switchTool: 'Switch Tool',
       tagline: 'Multi-Tool Platform'

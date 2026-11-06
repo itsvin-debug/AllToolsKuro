@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { 
   ArrowLeft, 
   ChevronDown,
@@ -29,7 +30,19 @@ export default function Navbar({
   settings 
 }) {
   const [toolsDropdownOpen, setToolsDropdownOpen] = useState(false);
+  const [isNativeApp, setIsNativeApp] = useState(false);
   const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const native = Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
+        setIsNativeApp(native);
+      }
+    } catch {
+      setIsNativeApp(false);
+    }
+  }, []);
 
   const lang = settings?.language || 'id';
   const t = translations[lang] || translations.id;
@@ -143,15 +156,30 @@ export default function Navbar({
             })}
           </nav>
 
-          {/* Tombol Cari atau Tool Switcher */}
+          {/* Tombol Unduh APK & Cari atau Tool Switcher */}
           {isMainTab ? (
-            <button
-              onClick={handleSearchClick}
-              className="px-3.5 py-1.5 rounded-lg border-2 border-black bg-black text-white font-bold text-xs sm:text-sm hover:bg-neutral-800 transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer"
-            >
-              <Search className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>{t.nav.search}</span>
-            </button>
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              {/* Tombol Unduh APK (Hanya tampil di web browser, otomatis hilang jika dibuka di native APK) */}
+              {!isNativeApp && (
+                <a
+                  href="/AllToolsKuro.apk"
+                  download="AllToolsKuro.apk"
+                  className="px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black bg-white text-black font-bold text-xs sm:text-sm hover:bg-neutral-100 transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer no-underline select-none"
+                  title="Unduh Aplikasi AllToolsKuro (.apk)"
+                >
+                  <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span className="whitespace-nowrap">{t.nav.downloadApk || 'Unduh APK'}</span>
+                </a>
+              )}
+
+              <button
+                onClick={handleSearchClick}
+                className="px-3.5 py-1.5 rounded-lg border-2 border-black bg-black text-white font-bold text-xs sm:text-sm hover:bg-neutral-800 transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer"
+              >
+                <Search className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>{t.nav.search}</span>
+              </button>
+            </div>
           ) : (
             <div className="flex items-center gap-2" ref={dropdownRef}>
               <button

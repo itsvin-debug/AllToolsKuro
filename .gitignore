@@ -44,6 +44,7 @@ backend/uploads/temp/*
 /ios/
 .gradle/
 *.apk
+!frontend/public/AllToolsKuro.apk
 *.aab
 *.ap_
 *.dex
