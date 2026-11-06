@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import { 
   Link2, 
@@ -68,23 +68,35 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
   const [resolveResult, setResolveResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [isCopied, setIsCopied] = useState(false);
+  const inputRef = useRef(null);
 
   // Daftar sampel link untuk uji coba cepat
   const sampleLinks = [
-    { label: 'Bitly Redirect', url: 'https://bit.ly/3yLqm' },
-    { label: 'S.id Shortlink', url: 'https://s.id/' },
+    { label: 'Safelink Mediafire', url: 'https://safelink.blogger.com/go?url=aHR0cHM6Ly93d3cubWVkaWFmaXJlLmNvbS9maWxlL3NhbXBsZS56aXA=' },
+    { label: 'S.id Shortlink', url: 'https://s.id/1x' },
     { label: 'Safelink Base64', url: 'https://example.com/safelink?url=aHR0cHM6Ly9naXRodWIuY29t' }
   ];
 
   const handlePaste = async () => {
+    let text = '';
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setUrlInput(text.trim());
-        setErrorMessage('');
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        text = await navigator.clipboard.readText();
       }
     } catch {
-      onShowToast?.('Gagal menempel dari papan klip.');
+      // Izin clipboard dibatasi browser
+    }
+
+    if (text && text.trim()) {
+      setUrlInput(text.trim());
+      setErrorMessage('');
+      if (inputRef.current) inputRef.current.focus();
+    } else {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        try { document.execCommand('paste'); } catch {}
+      }
+      setErrorMessage('Izin akses papan klip dibatasi browser. Silakan tekan lama kolom teks lalu pilih "Tempel".');
     }
   };
 
@@ -190,6 +202,7 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         <div className="space-y-4">
           <div className="relative">
             <input
+              ref={inputRef}
               type="url"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
@@ -198,26 +211,25 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
               placeholder="Tempel tautan safelink di sini (misal: sfl.gl, safelinku, ouo.io, bit.ly, s.id...)"
               className="w-full pl-4 pr-24 py-3 sm:py-3.5 bg-neutral-50 rounded-xl border-2 border-black text-xs sm:text-sm font-mono text-black placeholder:text-neutral-400 focus:outline-none focus:bg-white focus:shadow-[3px_3px_0px_#000000] disabled:bg-neutral-100 transition-all"
             />
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-              {urlInput ? (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+              {urlInput && (
                 <button
                   type="button"
-                  onClick={() => setUrlInput('')}
+                  onClick={() => { setUrlInput(''); setErrorMessage(''); }}
                   disabled={isLoading}
                   className="px-2 py-1 text-xs font-mono text-neutral-500 hover:text-black cursor-pointer"
                 >
                   Clear
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handlePaste}
-                  disabled={isLoading}
-                  className="px-2.5 py-1 text-[11px] font-mono font-bold bg-neutral-200 hover:bg-neutral-300 rounded border border-black text-black transition-colors cursor-pointer"
-                >
-                  Paste
-                </button>
               )}
+              <button
+                type="button"
+                onClick={handlePaste}
+                disabled={isLoading}
+                className="px-2.5 py-1 text-[11px] font-mono font-bold bg-neutral-100 hover:bg-neutral-200 rounded border border-black text-black transition-all cursor-pointer shadow-[1px_1px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5"
+              >
+                Tempel
+              </button>
             </div>
           </div>
 
@@ -307,9 +319,9 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
                       {RESOLVER_STEPS[activeStepIndex]?.title}
                     </span>
                     <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-black shrink-0 ${
-                      resolveResult ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-200 text-amber-900 animate-pulse'
+                      resolveResult ? 'bg-emerald-200 text-emerald-900' : errorMessage ? 'bg-rose-200 text-rose-900' : 'bg-amber-200 text-amber-900 animate-pulse'
                     }`}>
-                      {resolveResult ? 'Selesai' : 'Sedang Proses'}
+                      {resolveResult ? 'Selesai' : errorMessage ? 'Gagal' : 'Sedang Proses'}
                     </span>
                   </div>
                   <p className="text-[11px] sm:text-xs text-neutral-600 font-mono truncate mt-0.5">

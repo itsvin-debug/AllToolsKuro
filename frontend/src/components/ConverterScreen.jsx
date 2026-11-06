@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import CosmicBackButton from './CosmicBackButton';
 import { 
@@ -37,6 +37,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   const [errorMsg, setErrorMsg] = useState('');
   const [suggestedPlatform, setSuggestedPlatform] = useState(null);
   const [selectedFormat, setSelectedFormat] = useState('1080p');
+  const inputRef = useRef(null);
 
   useEffect(() => {
     setActivePlatform(initialPlatform);
@@ -198,15 +199,25 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   const CurrentIcon = currentMeta.icon;
 
   const handlePasteClipboard = async () => {
+    let pastedText = '';
     try {
       if (navigator.clipboard && navigator.clipboard.readText) {
-        const text = await navigator.clipboard.readText();
-        if (text) {
-          handleUrlChange(text);
-        }
+        pastedText = await navigator.clipboard.readText();
       }
     } catch {
-      // Browser permissions error fallback
+      // Permission API browser dibatasi atau butuh gestur manual
+    }
+
+    if (pastedText && pastedText.trim()) {
+      handleUrlChange(pastedText.trim());
+      setErrorMsg('');
+      if (inputRef.current) inputRef.current.focus();
+    } else {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        try { document.execCommand('paste'); } catch {}
+      }
+      setErrorMsg('Izin akses papan klip dibatasi browser. Silakan tekan lama kolom teks lalu pilih "Tempel".');
     }
   };
 
@@ -430,6 +441,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
               </div>
               
               <input
+                ref={inputRef}
                 type="text"
                 value={urlInput}
                 onChange={(e) => handleUrlChange(e.target.value)}

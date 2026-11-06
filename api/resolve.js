@@ -39,7 +39,7 @@ function extractFromQueryParams(targetUrl) {
 
     const candidateKeys = [
       'url', 'u', 'link', 'r', 'redirect', 'target', 'go', 'destination', 
-      'dest', 'data', 'href', 'dl', 'file', 'out', 'to', 'next'
+      'dest', 'data', 'href', 'dl', 'file', 'out', 'to', 'next', 'download'
     ];
 
     for (const key of candidateKeys) {
@@ -78,6 +78,17 @@ function extractFromQueryParams(targetUrl) {
   return null;
 }
 
+const FILE_HOST_PATTERNS = [
+  /https?:\/\/(?:www\.)?mediafire\.com\/file\/[^\s"'<>]+/i,
+  /https?:\/\/drive\.google\.com\/(?:file\/d\/|open\?id=)[^\s"'<>]+/i,
+  /https?:\/\/(?:www\.)?mega\.nz\/(?:file|folder)\/[^\s"'<>]+/i,
+  /https?:\/\/(?:www\.)?dropbox\.com\/s\/[^\s"'<>]+/i,
+  /https?:\/\/pixeldrain\.com\/u\/[^\s"'<>]+/i,
+  /https?:\/\/gofile\.io\/d\/[^\s"'<>]+/i,
+  /https?:\/\/krakenfiles\.com\/view\/[^\s"'<>]+/i,
+  /https?:\/\/zippyshare\.day\/[^\s"'<>]+/i
+];
+
 export default async function handler(req, res) {
   applySecurityHeaders(res);
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -101,7 +112,7 @@ export default async function handler(req, res) {
 
   const cleanUrl = rawUrl.trim();
 
-  // 1. Fast-Path: Periksa query decoding
+  // 1. Fast-Path: Periksa query decoding langsung
   const paramUrl = extractFromQueryParams(cleanUrl);
   if (paramUrl) {
     return res.status(200).json({
@@ -113,22 +124,30 @@ export default async function handler(req, res) {
     });
   }
 
-  // 2. Fast-Path: Cek redirect header HTTP
+  let is404 = false;
+  let is403 = false;
+
+  // 2. Fast-Path: Cek redirect header HTTP & DOM HTML
   try {
     const httpRes = await axios.get(cleanUrl, {
-      maxRedirects: 5,
-      timeout: 4500,
+      maxRedirects: 8,
+      timeout: 7000,
       headers: {
         'User-Agent': UA_DESKTOP,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
       },
-      validateStatus: (status) => status >= 200 && status < 400
+      validateStatus: (status) => {
+        if (status === 404) is404 = true;
+        if (status === 403) is403 = true;
+        return status >= 200 && status < 400;
+      }
     });
 
     const finalUrl = httpRes.request?.res?.responseUrl || httpRes.config?.url;
     if (finalUrl && finalUrl !== cleanUrl && isValidPublicUrl(finalUrl)) {
-      const origHost = new URL(cleanUrl).hostname;
-      const finalHost = new URL(finalUrl).hostname;
+      const origHost = new URL(cleanUrl).hostname.toLowerCase();
+      const finalHost = new URL(finalUrl).hostname.toLowerCase();
 
       if (origHost !== finalHost) {
         return res.status(200).json({
@@ -141,9 +160,11 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. Cek meta refresh atau redirect script di DOM
     if (typeof httpRes.data === 'string') {
-      const $ = cheerio.load(httpRes.data);
+      const html = httpRes.data;
+      const $ = cheerio.load(html);
+
+      // Cek meta refresh
       const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
       if (metaRefresh) {
         const m = metaRefresh.match(/url=([^"'>\s]+)/i);
@@ -163,10 +184,56 @@ export default async function handler(req, res) {
           }
         }
       }
+
+      // Cek redirect JavaScript di DOM
+      const jsMatch = html.match(/(?:window\.|document\.)?location(?:\.href)?\s*=\s*['"](https?:\/\/[^'"]+)['"]/i);
+      if (jsMatch && jsMatch[1] && isValidPublicUrl(jsMatch[1])) {
+        return res.status(200).json({
+          status: 'success',
+          original_url: cleanUrl,
+          resolved_url: jsMatch[1],
+          engine: 'nodejs-fast',
+          elapsed_ms: Math.max(1, Date.now() - startTime)
+        });
+      }
+
+      // Cek direct file host links di dalam halaman
+      for (const pattern of FILE_HOST_PATTERNS) {
+        const found = html.match(pattern);
+        if (found && found[0] && isValidPublicUrl(found[0])) {
+          return res.status(200).json({
+            status: 'success',
+            original_url: cleanUrl,
+            resolved_url: found[0],
+            engine: 'dom-scanner',
+            elapsed_ms: Math.max(1, Date.now() - startTime)
+          });
+        }
+      }
+    }
+  } catch (err) {
+    if (err.response?.status === 404) is404 = true;
+    if (err.response?.status === 403) is403 = true;
+  }
+
+  // 3. Cloud Resolver Fallback (menangani shortlink / safelink tingkat lanjut)
+  try {
+    const cloudRes = await axios.post('https://bypass.web.id/api/bypass', { url: cleanUrl }, {
+      timeout: 9000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (cloudRes.data?.success && cloudRes.data?.destination && isValidPublicUrl(cloudRes.data.destination)) {
+      return res.status(200).json({
+        status: 'success',
+        original_url: cleanUrl,
+        resolved_url: cloudRes.data.destination,
+        engine: 'cloud-resolver',
+        elapsed_ms: Math.max(1, Date.now() - startTime)
+      });
     }
   } catch {}
 
-  // 3. Teruskan ke remote Python Microservice jika dikonfigurasi
+  // 4. Remote Python Microservice (jika env disetel)
   const pythonUrl = process.env.PYTHON_RESOLVER_URL;
   if (pythonUrl) {
     try {
@@ -174,8 +241,8 @@ export default async function handler(req, res) {
         timeout: 25000,
         headers: { 'Content-Type': 'application/json' }
       });
-      if (pyRes.data && (pyRes.data.status === 'success' || pyRes.data.status === 'error')) {
-        return res.status(pyRes.data.status === 'success' ? 200 : 422).json({
+      if (pyRes.data && pyRes.data.status === 'success') {
+        return res.status(200).json({
           ...pyRes.data,
           elapsed_ms: pyRes.data.elapsed_ms || Math.max(1, Date.now() - startTime)
         });
@@ -183,9 +250,16 @@ export default async function handler(req, res) {
     } catch {}
   }
 
+  let errorMessage = 'Link tujuan tidak ditemukan atau dilindungi Captcha.';
+  if (is404) {
+    errorMessage = 'Tautan safelink ini sudah kedaluwarsa atau tidak ditemukan di server penyedia (Error 404 Not Found).';
+  } else if (is403) {
+    errorMessage = 'Akses ditolak atau dilindungi sistem Cloudflare / Captcha penyedia.';
+  }
+
   return res.status(422).json({
     status: 'error',
-    message: 'Link tujuan tidak ditemukan atau dilindungi Captcha.',
+    message: errorMessage,
     engine: 'nodejs-fast',
     elapsed_ms: Math.max(1, Date.now() - startTime)
   });
