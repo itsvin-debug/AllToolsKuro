@@ -5,7 +5,7 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/*.js": {
-      "maxDuration": 30
+      "maxDuration": 15
     }
   },
   "headers": [
