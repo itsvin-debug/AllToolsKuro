@@ -56,7 +56,17 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     try {
-      const { toolId, action, lockedTools, updatedAt, isRehydrate } = req.body || {};
+      const { toolId, action, lockedTools, updatedAt, isRehydrate, password } = req.body || {};
+
+      // Penanganan verifikasi kata sandi admin (merangkap endpoint /api/verify-admin)
+      if (typeof password === 'string' || (req.url && req.url.includes('verify-admin'))) {
+        const expectedPassword = (process.env.ADMIN_PASSWORD || 'VINZ6767').trim();
+        if (password && String(password).trim() === expectedPassword) {
+          return res.status(200).json({ success: true, message: 'Autentikasi admin berhasil.' });
+        }
+        return res.status(401).json({ success: false, message: 'Kata sandi admin tidak valid.' });
+      }
+
       const newTimestamp = typeof updatedAt === 'number' ? updatedAt : Date.now();
 
       // Kasus re-hidrasi dari client saat server baru menyala ulang

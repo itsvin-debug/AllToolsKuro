@@ -32,6 +32,18 @@
   ],
   "rewrites": [
     {
+      "source": "/api/jj/find",
+      "destination": "/api/jj-finder"
+    },
+    {
+      "source": "/api/system-battery",
+      "destination": "/api/ping?action=battery"
+    },
+    {
+      "source": "/api/verify-admin",
+      "destination": "/api/locked-tools"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
