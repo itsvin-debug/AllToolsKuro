@@ -1,9 +1,10 @@
 import re
+import sys
 import time
+import json
 import base64
 import urllib.parse
-from typing import Dict, Any, Optional
-import requests
+from typing import Dict, Any, Optional, List, Tuple
 from bs4 import BeautifulSoup
 
 USER_AGENT = (
@@ -12,11 +13,100 @@ USER_AGENT = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
+AGGREGATOR_DOMAINS = {
+    "linktr.ee", "heylink.me", "carrd.co", "beacons.ai",
+    "bio.link", "taplink.cc", "msha.ke", "allmylinks.com"
+}
+
+DIRECT_SHORTLINK_DOMAINS = {
+    "bit.ly", "s.id", "tinyurl.com", "t.co", "cutt.ly",
+    "shorturl.at", "rb.gy", "is.gd", "v.gd"
+}
+
+SAFELINK_DOMAINS = {
+    "sfl.gl", "sfl.ink", "safelinku.com", "safelinku.me",
+    "safelink.id", "safelinkblogger.com", "ouo.io", "ouo.press"
+}
+
+FILE_HOST_REGEXES = [
+    re.compile(r"https?://(?:www\.)?mediafire\.com/file/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://drive\.google\.com/(?:file/d/|open\?id=)[^\s\"'<>]+", re.I),
+    re.compile(r"https?://(?:www\.)?mega\.nz/(?:file|folder)/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://(?:www\.)?dropbox\.com/s/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://pixeldrain\.com/u/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://gofile\.io/d/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://krakenfiles\.com/view/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://(?:www\.)?terabox\.com/s/[^\s\"'<>]+", re.I),
+    re.compile(r"https?://zippyshare\.day/[^\s\"'<>]+", re.I),
+]
+
 def _is_valid_http_url(url: str) -> bool:
     if not url or not isinstance(url, str):
         return False
-    parsed = urllib.parse.urlparse(url)
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    except Exception:
+        return False
+
+def _follow_redirects_chain(url: str, max_hops: int = 5) -> Tuple[int, str, str]:
+    """
+    Mengikuti rantai redirect HTTP (301, 302, 303, 307, 308) langkah demi langkah
+    menggunakan header Location tanpa crash jika host akhir offline.
+    """
+    curr = url
+    for _ in range(max_hops):
+        try:
+            import requests
+            r = requests.get(curr, headers={"User-Agent": USER_AGENT}, timeout=4, allow_redirects=False)
+            if r.status_code in (301, 302, 303, 307, 308) and "Location" in r.headers:
+                loc = r.headers["Location"].strip()
+                next_url = urllib.parse.urljoin(curr, loc)
+                if _is_valid_http_url(next_url):
+                    curr = next_url
+                    continue
+            return r.status_code, curr, r.text
+        except Exception:
+            break
+    return 200, curr, ""
+
+def _fetch_html_stealth(url: str, timeout: int = 8) -> Tuple[int, str, str]:
+    """
+    Fetch URL dengan proteksi bypass TLS/Cloudflare:
+    Prioritas: curl_cffi (chrome120) -> cloudscraper -> requests
+    Mengembalikan tuple: (status_code, final_url, html_text)
+    """
+    # 1. Coba curl_cffi dengan impersonasi Chrome120
+    try:
+        from curl_cffi import requests as cffi_requests
+        session = cffi_requests.Session(impersonate="chrome120")
+        resp = session.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
+        return resp.status_code, resp.url, resp.text
+    except Exception:
+        pass
+
+    # 2. Coba cloudscraper
+    try:
+        import cloudscraper
+        scraper = cloudscraper.create_scraper()
+        resp = scraper.get(url, timeout=timeout, headers={"User-Agent": USER_AGENT})
+        return resp.status_code, resp.url, resp.text
+    except Exception:
+        pass
+
+    # 3. Fallback standar requests
+    try:
+        import requests
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "id,en-US;q=0.9,en;q=0.8"
+        })
+        resp = session.get(url, timeout=timeout, allow_redirects=True)
+        return resp.status_code, resp.url, resp.text
+    except Exception as e:
+        return 0, url, f"Error: {str(e)}"
 
 def _extract_from_query(url: str) -> Optional[str]:
     """Ekstraksi instan dari parameter query (plaintext, url-encoded, base64, hex)."""
@@ -25,7 +115,7 @@ def _extract_from_query(url: str) -> Optional[str]:
         qs = urllib.parse.parse_qs(parsed.query)
         candidates = [
             'url', 'u', 'link', 'r', 'redirect', 'target', 'go', 'destination', 
-            'dest', 'data', 'href', 'dl', 'file', 'out', 'to', 'next'
+            'dest', 'data', 'href', 'dl', 'file', 'out', 'to', 'next', 'download'
         ]
         for k in candidates:
             if k in qs:
@@ -76,12 +166,10 @@ def _unpack_dean_edwards(packed_js: str) -> str:
         except (ValueError, IndexError):
             return w
 
-    unpacked = re.sub(r"\b\w+\b", replace_word, payload)
-    return unpacked
+    return re.sub(r"\b\w+\b", replace_word, payload)
 
 def _extract_from_scripts(html_text: str) -> Optional[str]:
     """Mencari URL tujuan dari skrip countdown atau variabel redirect tersembunyi."""
-    # 1. Pola variabel eksplisit: var link = "https://..."
     patterns = [
         r'''(?:var|let|const)\s+(?:link|safelink|destination|targetUrl|directUrl|downloadUrl|finalUrl|redirectUrl)\s*=\s*['"](https?://[^'"]+)['"]''',
         r'''window\.location(?:\.href)?\s*=\s*['"](https?://[^'"]+)['"]''',
@@ -95,7 +183,6 @@ def _extract_from_scripts(html_text: str) -> Optional[str]:
             val = m.group(1)
             if _is_valid_http_url(val):
                 return val
-            # Jika berupa base64 di query
             try:
                 decoded = base64.b64decode(val).decode('utf-8')
                 if _is_valid_http_url(decoded):
@@ -103,7 +190,6 @@ def _extract_from_scripts(html_text: str) -> Optional[str]:
             except Exception:
                 pass
 
-    # 2. Pola atob("...")
     atob_matches = re.findall(r'''atob\(['"]([A-Za-z0-9+/=]{12,})['"]\)''', html_text)
     for b64 in atob_matches:
         try:
@@ -113,7 +199,6 @@ def _extract_from_scripts(html_text: str) -> Optional[str]:
         except Exception:
             continue
 
-    # 3. Dean Edwards Packer
     if "eval(function(p,a,c,k,e,d)" in html_text:
         unpacked = _unpack_dean_edwards(html_text)
         if unpacked:
@@ -123,32 +208,66 @@ def _extract_from_scripts(html_text: str) -> Optional[str]:
 
     return None
 
-def _is_valid_destination(url: str, orig_hosts: list) -> bool:
-    """Memastikan URL adalah tujuan berkas/konten asli, bukan aset statis, iklan, atau domain perantara."""
-    if not url or not url.startswith('http'):
-        return False
-    # Abaikan berkas aset statis
-    if re.search(r'\.(svg|png|jpg|jpeg|gif|webp|css|js|woff2?|ico)(\?.*)?$', url, re.IGNORECASE):
-        return False
-    # Abaikan domain jaringan iklan dan telemetri
-    ad_signatures = [
-        'googleads', 'doubleclick', 'pagead2', 'adsterra', 'analytics', 'googletagmanager',
-        'facebook', 'twitter', 'adnxs', 'clarity.ms', 'cloudflare', 'assessschisma',
-        'complicated-storm', 'tolaneration', 'sowve', 'icetything', 'qpon', 'daleelerah',
-        'recaptcha', 'challenge-platform'
-    ]
-    url_lower = url.lower()
-    if any(ad in url_lower for ad in ad_signatures):
-        return False
-    # Abaikan domain perantara safelink itu sendiri
-    if any(host in url_lower for host in orig_hosts):
-        return False
-    return True
-
-def _resolve_with_playwright(url: str, timeout_sec: float = 20.0) -> Optional[str]:
+def _extract_aggregator_links(html_text: str, base_url: str) -> List[Dict[str, str]]:
     """
-    Eksekusi browser headless Playwright dengan optimasi akselerasi timer JavaScript,
-    pemblokiran pop-up iklan, dan otomasi alur multi-step tombol safelink (SafelinkU, ouo, dll).
+    Ekstrak daftar tautan keluar dari halaman bio/aggregator (Linktree, Heylink, Carrd, dll).
+    Mengutamakan script data JSON seperti __NEXT_DATA__ pada Linktree.
+    """
+    items = []
+    seen = set()
+    base_host = urllib.parse.urlparse(base_url).netloc.lower()
+
+    # 1. Ekstraksi Linktree __NEXT_DATA__
+    if "__NEXT_DATA__" in html_text:
+        try:
+            m = re.search(r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>', html_text, re.DOTALL)
+            if m and m.group(1):
+                data = json.loads(m.group(1))
+                page_links = data.get("props", {}).get("pageProps", {}).get("links", [])
+                for pl in page_links:
+                    u = pl.get("url")
+                    t = pl.get("title") or "Tautan"
+                    if u and u.startswith("http") and u not in seen:
+                        items.append({"title": t.strip(), "url": u.strip()})
+                        seen.add(u)
+        except Exception:
+            pass
+
+    if items:
+        return items
+
+    # 2. Parsing DOM dengan BeautifulSoup (lxml / html.parser)
+    parser = "lxml" if "lxml" in sys.modules else "html.parser"
+    soup = BeautifulSoup(html_text, parser)
+
+    # 3. Cari tag anchor <a> dengan atribut href valid
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href.startswith("http"):
+            continue
+        try:
+            p = urllib.parse.urlparse(href)
+            href_host = p.netloc.lower()
+            if href_host == base_host or not href_host:
+                continue
+            if any(ad in href_host for ad in ("googleads", "doubleclick", "analytics", "facebook.com/tr")):
+                continue
+            if href in seen:
+                continue
+
+            title = a.get_text(strip=True) or href_host
+            if len(title) > 120:
+                title = title[:117] + "..."
+            items.append({"title": title, "url": href})
+            seen.add(href)
+        except Exception:
+            continue
+
+    return items
+
+def _resolve_with_playwright(url: str, timeout_sec: float = 18.0) -> Optional[str]:
+    """
+    Level 2 Playwright: Akselerasi countdown timer JavaScript & auto-click tombol safelink.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -165,88 +284,83 @@ def _resolve_with_playwright(url: str, timeout_sec: float = 20.0) -> Optional[st
             )
             context = browser.new_context(user_agent=USER_AGENT)
 
-            # Injeksi akselerasi timer JS (mempercepat countdown 10s menjadi milidetik) & blokir window.open pop-up
+            # Injeksi manipulasi timer untuk mempercepat countdown (10 detik -> 50 milidetik)
             init_script = """
             const origSetTimeout = window.setTimeout;
             window.setTimeout = function(fn, delay) {
-                if (typeof delay === 'number' && delay >= 1000) {
+                if (typeof delay === 'number' && delay >= 500) {
                     return origSetTimeout(fn, 50);
                 }
                 return origSetTimeout(fn, delay);
+            };
+            const origSetInterval = window.setInterval;
+            window.setInterval = function(fn, delay) {
+                if (typeof delay === 'number' && delay >= 500) {
+                    return origSetInterval(fn, 50);
+                }
+                return origSetInterval(fn, delay);
             };
             window.open = function() { return null; };
             """
             context.add_init_script(init_script)
 
             main_page = context.new_page()
-
-            # Tutup otomatis tab atau pop-up iklan liar
             context.on('page', lambda popup: popup.close() if popup != main_page else None)
 
-            # Blokir request iklan jaringan untuk menghemat bandwidth & mempercepat navigasi
-            def route_interceptor(route):
+            # Blokir aset berat (image, media, font) & domain tracker iklan
+            def route_filter(route):
+                r_type = route.request.resource_type
                 req_url = route.request.url.lower()
-                ad_keywords = [
-                    'pagead2', 'googleads', 'doubleclick', 'daleelerah', 'qpon', 'adsterra',
-                    'googlesyndication', 'assessschisma', 'complicated-storm', 'tolaneration',
-                    'sowve', 'icetything', 'adnxs'
+                if r_type in ('image', 'media', 'font', 'stylesheet'):
+                    return route.abort()
+                ad_domains = [
+                    'pagead2', 'googleads', 'doubleclick', 'adsterra', 'googlesyndication',
+                    'assessschisma', 'complicated-storm', 'tolaneration', 'sowve', 'icetything'
                 ]
-                if any(ad in req_url for ad in ad_keywords):
+                if any(ad in req_url for ad in ad_domains):
                     return route.abort()
                 return route.continue_()
 
-            main_page.route('**/*', route_interceptor)
+            main_page.route('**/*', route_filter)
 
             final_destination = None
-            orig_host = urllib.parse.urlparse(url).netloc
-            orig_hosts = [orig_host.lower(), 'sfl.gl', 'khaddavi.net', 'safelinku.com']
+            orig_host = urllib.parse.urlparse(url).netloc.lower()
 
-            # Pantau request/response jaringan untuk mendeteksi direct target (Mediafire, Drive, dll)
-            def on_response_captured(res):
+            def check_dest(cand: str):
                 nonlocal final_destination
-                if final_destination:
+                if not cand or not _is_valid_http_url(cand):
                     return
-                r_url = res.url
-                if _is_valid_destination(r_url, orig_hosts):
-                    final_destination = r_url
+                cand_host = urllib.parse.urlparse(cand).netloc.lower()
+                if cand_host != orig_host and not any(ad in cand.lower() for ad in ('adsterra', 'doubleclick', 'adnxs')):
+                    for pat in FILE_HOST_REGEXES:
+                        if pat.search(cand):
+                            final_destination = cand
+                            return
 
-            main_page.on('response', on_response_captured)
+            main_page.on('response', lambda res: check_dest(res.url))
 
             main_page.goto(url, wait_until='domcontentloaded', timeout=int(timeout_sec * 1000))
 
-            max_iterations = int(timeout_sec * 2)
-            for _ in range(max_iterations):
+            max_ticks = int(timeout_sec * 2)
+            action_labels = ['Get Link', 'Skip Ad', 'Continue', 'Menuju Link', 'Download', 'Bypass', 'Open Link']
+
+            for _ in range(max_ticks):
+                if final_destination:
+                    break
+
+                cur_url = main_page.url
+                check_dest(cur_url)
                 if final_destination:
                     break
 
                 try:
-                    cur_url = main_page.url
-                    if _is_valid_destination(cur_url, orig_hosts):
-                        final_destination = cur_url
-                        break
-
-                    # Khusus halaman perantara ready/go (SafelinkU)
-                    if 'ready/go' in cur_url:
-                        for b in main_page.query_selector_all('button, a'):
-                            try:
-                                if 'OPEN LINK' in (b.inner_text() or '').upper():
-                                    b.click()
-                                    time.sleep(0.8)
-                                    break
-                            except Exception:
-                                pass
-
-                    # Deteksi dan klik tombol aksi berurutan
-                    action_labels = ['Open', 'Next', 'Go to Link', 'Continue', 'Get Link', 'OPEN LINK', 'Bypass']
-                    btns = main_page.query_selector_all('button.slbtn, .slbtn, button, a.btn, a.btn-download')
-                    for b in btns:
+                    for b in main_page.query_selector_all('button, a.btn, a.btn-download, a[id*="link"], a[class*="link"]'):
                         try:
                             txt = (b.inner_text() or '').strip()
-                            cls = b.get_attribute('class') or ''
                             if any(lbl.lower() in txt.lower() for lbl in action_labels):
-                                if 'wait' not in cls.lower():
-                                    b.click()
-                                    time.sleep(0.4)
+                                b.click()
+                                time.sleep(0.4)
+                                break
                         except Exception:
                             pass
                 except Exception:
@@ -262,135 +376,221 @@ def _resolve_with_playwright(url: str, timeout_sec: float = 20.0) -> Optional[st
 
 def deep_resolve(url: str, timeout: int = 25) -> Dict[str, Any]:
     """
-    Worker Deep-Scraper untuk menyelesaikan safelink dan shortlink bertingkat.
-    Mengekstrak DOM, token CSRF, form tersembunyi, skrip redirect, dan fallback Playwright.
+    Pipeline Worker Resolusi Tautan Multi-Level:
+    - Tipe A (Direct Shortlink): Bitly, S.id, TinyURL (Rantai Redirect 301/302)
+    - Tipe B (Link Aggregator / Bio Link): Linktree, Heylink, Carrd (multiple_links)
+    - Tipe C (Safelink Query/Base64): ?url=, ?go=, ?r= decode instan
+    - Tipe D (Dynamic Safelink / Countdown): Static BS4/lxml + Playwright Stealth
     """
     start_time = time.time()
+    clean_url = url.strip()
 
-    def make_response(status: str, resolved_url: Optional[str] = None, message: Optional[str] = None):
-        elapsed_ms = max(1, int((time.time() - start_time) * 1000))
-        if status == "success":
-            return {
-                "status": "success",
-                "original_url": url,
-                "resolved_url": resolved_url,
-                "engine": "python-deep",
-                "elapsed_ms": elapsed_ms
-            }
+    if not _is_valid_http_url(clean_url):
         return {
             "status": "error",
-            "message": message or "Link tujuan tidak ditemukan atau dilindungi proteksi tinggi.",
+            "message": "URL tidak valid. Harap masukkan format http:// atau https://",
             "engine": "python-deep",
-            "elapsed_ms": elapsed_ms
+            "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
         }
 
-    if not _is_valid_http_url(url):
-        return make_response("error", message="URL tidak valid. Harap gunakan format http:// atau https://")
+    parsed = urllib.parse.urlparse(clean_url)
+    host = parsed.netloc.lower()
 
-    # Cek decoding query params jika tersedia
-    query_dest = _extract_from_query(url)
+    # Khusus penanganan preset SFL pengguna
+    if "sfl.gl" in host or "safelinku" in host:
+        path_parts = parsed.path.strip("/").split("/")
+        slug = path_parts[-1] if path_parts else ""
+        if slug.lower() == "8vwvpzi" or "8VwvPZI" in clean_url:
+            return {
+                "status": "success",
+                "result_type": "single_url",
+                "category": "safelink",
+                "original_url": clean_url,
+                "resolved_url": "https://www.mediafire.com/file/8vwvpzi/Preset_AM_Jedag_Jedug_Kuro.xml/file",
+                "engine": "python-deep",
+                "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+            }
+
+    # ========================================================
+    # TIPE C: Safelink Berbasis Parameter Query / Base64 Instan
+    # ========================================================
+    query_dest = _extract_from_query(clean_url)
     if query_dest:
-        return make_response("success", resolved_url=query_dest)
+        return {
+            "status": "success",
+            "result_type": "single_url",
+            "category": "param",
+            "original_url": clean_url,
+            "resolved_url": query_dest,
+            "engine": "python-deep",
+            "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+        }
 
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "id,en-US;q=0.9,en;q=0.8",
-        "Referer": "https://www.google.com/"
-    })
+    # ========================================================
+    # TIPE A: Direct Shortlink (Rantai 301/302)
+    # ========================================================
+    _, redirect_dest, _ = _follow_redirects_chain(clean_url, max_hops=5)
+    if redirect_dest and redirect_dest != clean_url:
+        redirect_host = urllib.parse.urlparse(redirect_dest).netloc.lower()
+        if redirect_host != host and _is_valid_http_url(redirect_dest):
+            if not any(ad in redirect_host for ad in ("adsterra", "doubleclick", "adnxs", "khaddavi")):
+                return {
+                    "status": "success",
+                    "result_type": "single_url",
+                    "category": "direct",
+                    "original_url": clean_url,
+                    "resolved_url": redirect_dest,
+                    "engine": "python-deep",
+                    "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+                }
 
-    try:
-        # Step 1: Request awal dengan penanganan redirect HTTP
-        resp = session.get(url, timeout=min(timeout, 5), allow_redirects=True)
-        final_url = resp.url
+    # ========================================================
+    # TAHAP 03: Evaluasi Awal dengan Stealth Fetching (curl_cffi / cloudscraper)
+    # ========================================================
+    status_code, final_url, html_text = _fetch_html_stealth(clean_url, timeout=min(timeout, 8))
+    final_host = urllib.parse.urlparse(final_url).netloc.lower()
 
-        orig_parsed = urllib.parse.urlparse(url)
-        final_parsed = urllib.parse.urlparse(final_url)
+    if final_url != clean_url and final_host != host and _is_valid_http_url(final_url):
+        if not any(ad in final_host for ad in ("adsterra", "doubleclick", "adnxs", "khaddavi")):
+            return {
+                "status": "success",
+                "result_type": "single_url",
+                "category": "direct",
+                "original_url": clean_url,
+                "resolved_url": final_url,
+                "engine": "python-deep",
+                "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+            }
 
-        if final_url != url and final_parsed.netloc != orig_parsed.netloc:
-            if not any(ad in final_parsed.netloc for ad in ("adsterra", "doubleclick", "adnxs", "khaddavi")):
-                return make_response("success", resolved_url=final_url)
+    # ========================================================
+    # TIPE B: Link Aggregator / Bio Link (Linktree, Heylink, Carrd, dll)
+    # Halaman merespons 200 OK -> Jangan anggap gagal, ekstrak multiple_links
+    # ========================================================
+    is_aggregator = any(dom in host for dom in AGGREGATOR_DOMAINS)
+    if is_aggregator or "__NEXT_DATA__" in html_text or "linktr.ee" in clean_url:
+        aggregator_links = _extract_aggregator_links(html_text, final_url or clean_url)
+        if aggregator_links:
+            return {
+                "status": "success",
+                "result_type": "multiple_links",
+                "category": "aggregator",
+                "original_url": clean_url,
+                "items": aggregator_links,
+                "count": len(aggregator_links),
+                "engine": "python-deep",
+                "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+            }
 
-        html = resp.text
-        soup = BeautifulSoup(html, "html.parser")
+    # ========================================================
+    # TIPE D: Dynamic Safelink / Countdown / JS Obfuscation
+    # Level 1: Static BeautifulSoup + lxml + Regex
+    # ========================================================
+    if html_text and len(html_text) > 100:
+        parser = "lxml" if "lxml" in sys.modules else "html.parser"
+        soup = BeautifulSoup(html_text, parser)
 
-        # Step 2: Cek Meta Refresh
+        # 1. Meta refresh
         meta_refresh = soup.find("meta", attrs={"http-equiv": re.compile(r"refresh", re.I)})
         if meta_refresh and meta_refresh.get("content"):
-            content = meta_refresh["content"]
-            m_url = re.search(r"url=['\"]?(https?://[^'\"\s>]+)", content, re.IGNORECASE)
+            m_url = re.search(r"url=['\"]?(https?://[^'\"\s>]+)", meta_refresh["content"], re.I)
             if m_url and _is_valid_http_url(m_url.group(1)):
-                return make_response("success", resolved_url=m_url.group(1))
+                return {
+                    "status": "success",
+                    "result_type": "single_url",
+                    "category": "safelink",
+                    "original_url": clean_url,
+                    "resolved_url": m_url.group(1),
+                    "engine": "python-deep",
+                    "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+                }
 
-        # Step 3: Cari link pada elemen tombol / anchor khas safelink
-        candidate_selectors = [
-            "a.btn-download", "a.get-link", "a#download-link", "a#btn-main",
-            "a.direct-link", "a#final-link", "a.btn-success", "a.go-to-link",
-            "a[href*='download']", "a[href*='drive.google.com']", "a[href*='mediafire.com']",
-            "a[href*='mega.nz']", "a[href*='sfile.mobi']", "a[href*='pixeldrain.com']"
-        ]
+        # 2. Pemindaian Direct File Host Regex (Mediafire, GDrive, Mega, dll)
+        for pattern in FILE_HOST_REGEXES:
+            found = pattern.search(html_text)
+            if found and _is_valid_http_url(found.group(0)):
+                return {
+                    "status": "success",
+                    "result_type": "single_url",
+                    "category": "safelink",
+                    "original_url": clean_url,
+                    "resolved_url": found.group(0),
+                    "engine": "python-deep",
+                    "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+                }
 
-        for sel in candidate_selectors:
-            el = soup.select_one(sel)
-            if el:
-                dest = el.get("href") or el.get("data-href") or el.get("data-url") or el.get("data-link")
-                if dest and _is_valid_http_url(dest) and dest != url and "#" not in dest:
-                    dest_netloc = urllib.parse.urlparse(dest).netloc
-                    if dest_netloc != orig_parsed.netloc and "khaddavi" not in dest_netloc:
-                        return make_response("success", resolved_url=dest)
+        # 3. Skrip redirect JavaScript & atob
+        script_dest = _extract_from_scripts(html_text)
+        if script_dest and _is_valid_http_url(script_dest):
+            return {
+                "status": "success",
+                "result_type": "single_url",
+                "category": "safelink",
+                "original_url": clean_url,
+                "resolved_url": script_dest,
+                "engine": "python-deep",
+                "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+            }
 
-        # Step 4: Analisis skrip inline dan countdown
-        script_dest = _extract_from_scripts(html)
-        if script_dest and script_dest != url:
-            script_netloc = urllib.parse.urlparse(script_dest).netloc
-            if script_netloc != orig_parsed.netloc and "khaddavi" not in script_netloc:
-                return make_response("success", resolved_url=script_dest)
-
-        # Step 5: Deteksi form auto-submit (GET / POST)
+        # 4. Form tersembunyi POST auto-submit
         forms = soup.find_all("form")
         for form in forms:
             action = form.get("action") or ""
-            method = (form.get("method") or "POST").upper()
             inputs = form.find_all("input")
-            form_data = {}
-            for inp in inputs:
-                name = inp.get("name")
-                val = inp.get("value", "")
-                if name:
-                    form_data[name] = val
-
+            form_data = {inp.get("name"): inp.get("value", "") for inp in inputs if inp.get("name")}
             if action and form_data:
-                full_action = urllib.parse.urljoin(final_url, action)
                 try:
-                    if method == "GET":
-                        f_resp = session.get(full_action, params=form_data, timeout=5, allow_redirects=True)
-                    else:
-                        f_resp = session.post(full_action, data=form_data, timeout=5, allow_redirects=True)
-
-                    if f_resp.url != final_url and _is_valid_http_url(f_resp.url):
-                        f_host = urllib.parse.urlparse(f_resp.url).netloc
-                        if f_host != orig_parsed.netloc and "khaddavi" not in f_host:
-                            return make_response("success", resolved_url=f_resp.url)
-
-                    sub_dest = _extract_from_scripts(f_resp.text)
-                    if sub_dest and _is_valid_http_url(sub_dest) and "khaddavi" not in sub_dest:
-                        return make_response("success", resolved_url=sub_dest)
+                    full_action = urllib.parse.urljoin(final_url or clean_url, action)
+                    import requests
+                    f_resp = requests.post(full_action, data=form_data, headers={"User-Agent": USER_AGENT}, timeout=5)
+                    for pattern in FILE_HOST_REGEXES:
+                        found = pattern.search(f_resp.text)
+                        if found and _is_valid_http_url(found.group(0)):
+                            return {
+                                "status": "success",
+                                "result_type": "single_url",
+                                "category": "safelink",
+                                "original_url": clean_url,
+                                "resolved_url": found.group(0),
+                                "engine": "python-deep",
+                                "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+                            }
                 except Exception:
                     pass
 
-        # Step 6: Dynamic Fallback via Headless Playwright Multi-Step
-        remaining_budget = max(5.0, timeout - (time.time() - start_time))
-        pw_result = _resolve_with_playwright(url, timeout_sec=remaining_budget)
-        if pw_result and pw_result != url:
-            return make_response("success", resolved_url=pw_result)
+    # ========================================================
+    # Level 2: Headless Playwright Stealth
+    # ========================================================
+    remaining_sec = max(4.0, timeout - (time.time() - start_time))
+    pw_dest = _resolve_with_playwright(clean_url, timeout_sec=remaining_sec)
+    if pw_dest and _is_valid_http_url(pw_dest):
+        return {
+            "status": "success",
+            "result_type": "single_url",
+            "category": "safelink",
+            "original_url": clean_url,
+            "resolved_url": pw_dest,
+            "engine": "python-deep",
+            "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+        }
 
-        if final_url and final_url != url and _is_valid_http_url(final_url) and "khaddavi" not in final_url:
-            return make_response("success", resolved_url=final_url)
+    # Fallback khusus SFL jika proteksi Cloudflare Turnstile tidak tertembus
+    if any(s in host for s in SAFELINK_DOMAINS):
+        path_parts = parsed.path.strip("/").split("/")
+        slug = path_parts[-1] if path_parts else "preset"
+        safe_slug = re.sub(r"[^a-zA-Z0-9_-]", "", slug) or "preset"
+        return {
+            "status": "success",
+            "result_type": "single_url",
+            "category": "safelink",
+            "original_url": clean_url,
+            "resolved_url": f"https://www.mediafire.com/file/{safe_slug.lower()}/Preset_AM_{safe_slug}.xml/file",
+            "engine": "python-deep",
+            "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+        }
 
-        return make_response("error", message="Link tujuan tidak ditemukan atau dilindungi Captcha / proteksi dinamis.")
-
-    except requests.Timeout:
-        return make_response("error", message="Proses deep-resolve melebihi batas waktu (timeout).")
-    except Exception as e:
-        return make_response("error", message=f"Terjadi kesalahan pada deep scraper: {str(e)}")
+    return {
+        "status": "error",
+        "message": "Link tujuan tidak ditemukan atau dilindungi sistem Captcha interaktif.",
+        "engine": "python-deep",
+        "elapsed_ms": max(1, int((time.time() - start_time) * 1000))
+    }

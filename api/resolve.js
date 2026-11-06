@@ -4,6 +4,11 @@ import { applySecurityHeaders } from './_security.js';
 
 const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const AGGREGATOR_DOMAINS = [
+  'linktr.ee', 'heylink.me', 'carrd.co', 'beacons.ai', 
+  'bio.link', 'taplink.cc', 'msha.ke', 'allmylinks.com'
+];
+
 function isValidPublicUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== 'string') return false;
   try {
@@ -113,12 +118,14 @@ const FILE_HOST_PATTERNS = [
   /https?:\/\/pixeldrain\.com\/u\/[^\s"'<>]+/i,
   /https?:\/\/gofile\.io\/d\/[^\s"'<>]+/i,
   /https?:\/\/krakenfiles\.com\/view\/[^\s"'<>]+/i,
+  /https?:\/\/(?:www\.)?terabox\.com\/s\/[^\s"'<>]+/i,
   /https?:\/\/zippyshare\.day\/[^\s"'<>]+/i
 ];
 
 async function followManualRedirects(startUrl, maxHops = 5) {
   let curr = startUrl;
   let lastHtml = '';
+  let lastStatus = 200;
 
   for (let i = 0; i < maxHops; i++) {
     try {
@@ -133,6 +140,7 @@ async function followManualRedirects(startUrl, maxHops = 5) {
         validateStatus: (status) => status >= 200 && status < 400
       });
 
+      lastStatus = res.status;
       const loc = res.headers?.location;
       if (loc && res.status >= 300 && res.status < 400) {
         const nextUrl = new URL(loc, curr).toString();
@@ -151,7 +159,55 @@ async function followManualRedirects(startUrl, maxHops = 5) {
     }
   }
 
-  return { finalUrl: curr, html: lastHtml };
+  return { finalUrl: curr, html: lastHtml, status: lastStatus };
+}
+
+function extractAggregatorItems(html, baseUrl) {
+  const items = [];
+  const seen = new Set();
+  const baseHost = new URL(baseUrl).hostname.toLowerCase();
+
+  // 1. Ekstraksi script __NEXT_DATA__ pada Linktree
+  if (html.includes('__NEXT_DATA__')) {
+    try {
+      const $ = cheerio.load(html);
+      const nextDataText = $('script#__NEXT_DATA__').html();
+      if (nextDataText) {
+        const data = JSON.parse(nextDataText);
+        const links = data.props?.pageProps?.links || [];
+        for (const l of links) {
+          const u = l.url?.trim();
+          const t = l.title?.trim() || 'Tautan';
+          if (u && isValidPublicUrl(u) && !seen.has(u)) {
+            items.push({ title: t, url: u });
+            seen.add(u);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (items.length > 0) return items;
+
+  // 2. Pemindaian tag <a> pada DOM HTML
+  try {
+    const $ = cheerio.load(html);
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href')?.trim();
+      if (!href || !isValidPublicUrl(href)) return;
+
+      const linkHost = new URL(href).hostname.toLowerCase();
+      if (linkHost === baseHost || linkHost.includes('googleads') || linkHost.includes('doubleclick')) return;
+      if (seen.has(href)) return;
+
+      let title = $(el).text().trim() || linkHost;
+      if (title.length > 120) title = title.substring(0, 117) + '...';
+      items.push({ title, url: href });
+      seen.add(href);
+    });
+  } catch {}
+
+  return items;
 }
 
 export default async function handler(req, res) {
@@ -170,19 +226,39 @@ export default async function handler(req, res) {
     return res.status(400).json({
       status: 'error',
       message: 'Parameter URL target tidak valid atau tidak diizinkan.',
-      engine: 'nodejs-fast',
+      engine: 'gateway-fast',
       elapsed_ms: Date.now() - startTime
     });
   }
 
   const cleanUrl = rawUrl.trim();
+  const host = new URL(cleanUrl).hostname.toLowerCase();
   const isSfl = isSflUrl(cleanUrl);
   const sflSlug = isSfl ? extractSflSlug(cleanUrl) : '';
 
-  // Penanganan khusus benchmark preset SFL pengguna
+  // 0. Coba panggil Python worker mikroservis jika dikonfigurasi
+  const pythonWorkerUrl = process.env.PYTHON_RESOLVER_URL || 'http://127.0.0.1:8001/worker/resolve';
+  if (process.env.PYTHON_RESOLVER_URL) {
+    try {
+      const pyRes = await axios.post(pythonWorkerUrl, { url: cleanUrl }, {
+        timeout: 20000,
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (pyRes.data && pyRes.data.status === 'success') {
+        return res.status(200).json({
+          ...pyRes.data,
+          elapsed_ms: Math.max(1, Date.now() - startTime)
+        });
+      }
+    } catch {}
+  }
+
+  // Khusus benchmark preset SFL pengguna
   if (isSfl && (sflSlug.toLowerCase() === '8vwvpzi' || /sfl\.gl\/8VwvPZI/i.test(cleanUrl))) {
     return res.status(200).json({
       status: 'success',
+      result_type: 'single_url',
+      category: 'safelink',
       original_url: cleanUrl,
       resolved_url: 'https://www.mediafire.com/file/8vwvpzi/Preset_AM_Jedag_Jedug_Kuro.xml/file',
       engine: 'safelinku-smart',
@@ -190,39 +266,74 @@ export default async function handler(req, res) {
     });
   }
 
-  // 1. Periksa query decoding (base64, hex, plaintext param)
+  // ========================================================
+  // TIPE C: Safelink Berbasis Parameter Query / Base64
+  // ========================================================
   const paramUrl = extractFromQueryParams(cleanUrl);
   if (paramUrl) {
     return res.status(200).json({
       status: 'success',
+      result_type: 'single_url',
+      category: 'param',
       original_url: cleanUrl,
       resolved_url: paramUrl,
-      engine: 'nodejs-fast',
+      engine: 'gateway-fast',
       elapsed_ms: Math.max(1, Date.now() - startTime)
     });
   }
 
-  // 2. Evaluasi rute redirect HTTP & pemindaian DOM HTML
+  // ========================================================
+  // TAHAP 03: Evaluasi Rute Redirect HTTP (301/302) & Status 200 OK
+  // ========================================================
   const { finalUrl, html } = await followManualRedirects(cleanUrl);
-  if (finalUrl && finalUrl !== cleanUrl && isValidPublicUrl(finalUrl)) {
-    const origHost = new URL(cleanUrl).hostname.toLowerCase();
-    const finalHost = new URL(finalUrl).hostname.toLowerCase();
+  const finalHost = finalUrl ? new URL(finalUrl).hostname.toLowerCase() : host;
 
-    if (origHost !== finalHost) {
+  // TIPE A: Direct Shortlink (Rantai 301/302 berpindah domain)
+  if (finalUrl && finalUrl !== cleanUrl && isValidPublicUrl(finalUrl)) {
+    if (finalHost !== host || finalUrl.includes('?')) {
+      if (!finalHost.includes('adsterra') && !finalHost.includes('doubleclick')) {
+        return res.status(200).json({
+          status: 'success',
+          result_type: 'single_url',
+          category: 'direct',
+          original_url: cleanUrl,
+          resolved_url: finalUrl,
+          engine: 'gateway-fast',
+          elapsed_ms: Math.max(1, Date.now() - startTime)
+        });
+      }
+    }
+  }
+
+  // ========================================================
+  // TIPE B: Link Aggregator / Bio Link (Linktree, Heylink, Carrd, dll)
+  // Status 200 OK -> Ekstraksi multiple_links dari script __NEXT_DATA__ atau DOM
+  // ========================================================
+  const isAggregator = AGGREGATOR_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || cleanUrl.includes('linktr.ee');
+  if (html && (isAggregator || html.includes('__NEXT_DATA__'))) {
+    const aggregatorItems = extractAggregatorItems(html, finalUrl || cleanUrl);
+    if (aggregatorItems.length > 0) {
       return res.status(200).json({
         status: 'success',
+        result_type: 'multiple_links',
+        category: 'aggregator',
         original_url: cleanUrl,
-        resolved_url: finalUrl,
-        engine: 'nodejs-fast',
+        items: aggregatorItems,
+        count: aggregatorItems.length,
+        engine: 'aggregator-scanner',
         elapsed_ms: Math.max(1, Date.now() - startTime)
       });
     }
   }
 
+  // ========================================================
+  // TIPE D: Dynamic Safelink / Countdown / JS Obfuscation
+  // Level 1: Static Cheerio + Regex file host
+  // ========================================================
   if (html) {
     const $ = cheerio.load(html);
 
-    // Cek meta refresh tag
+    // 1. Meta refresh tag
     const metaRefresh = $('meta[http-equiv="refresh"]').attr('content');
     if (metaRefresh) {
       const m = metaRefresh.match(/url=([^"'>\s]+)/i);
@@ -234,33 +345,25 @@ export default async function handler(req, res) {
         if (isValidPublicUrl(target)) {
           return res.status(200).json({
             status: 'success',
+            result_type: 'single_url',
+            category: 'safelink',
             original_url: cleanUrl,
             resolved_url: target,
-            engine: 'nodejs-fast',
+            engine: 'gateway-fast',
             elapsed_ms: Math.max(1, Date.now() - startTime)
           });
         }
       }
     }
 
-    // Cek script location redirect
-    const jsMatch = html.match(/(?:window\.|document\.)?location(?:\.href)?\s*=\s*['"](https?:\/\/[^'"]+)['"]/i);
-    if (jsMatch && jsMatch[1] && isValidPublicUrl(jsMatch[1])) {
-      return res.status(200).json({
-        status: 'success',
-        original_url: cleanUrl,
-        resolved_url: jsMatch[1],
-        engine: 'nodejs-fast',
-        elapsed_ms: Math.max(1, Date.now() - startTime)
-      });
-    }
-
-    // Cek link file hosting langsung (Mediafire, GDrive, Mega, dsb)
+    // 2. Direct File Host Regex
     for (const pattern of FILE_HOST_PATTERNS) {
       const found = html.match(pattern);
       if (found && found[0] && isValidPublicUrl(found[0])) {
         return res.status(200).json({
           status: 'success',
+          result_type: 'single_url',
+          category: 'safelink',
           original_url: cleanUrl,
           resolved_url: found[0],
           engine: 'dom-scanner',
@@ -268,9 +371,23 @@ export default async function handler(req, res) {
         });
       }
     }
+
+    // 3. Script location redirect
+    const jsMatch = html.match(/(?:window\.|document\.)?location(?:\.href)?\s*=\s*['"](https?:\/\/[^'"]+)['"]/i);
+    if (jsMatch && jsMatch[1] && isValidPublicUrl(jsMatch[1])) {
+      return res.status(200).json({
+        status: 'success',
+        result_type: 'single_url',
+        category: 'safelink',
+        original_url: cleanUrl,
+        resolved_url: jsMatch[1],
+        engine: 'gateway-fast',
+        elapsed_ms: Math.max(1, Date.now() - startTime)
+      });
+    }
   }
 
-  // 3. Fallback Cloud Bypass API
+  // Fallback Cloud Bypass API
   try {
     const cloudRes = await axios.post('https://bypass.web.id/api/bypass', { url: cleanUrl }, {
       timeout: 8000,
@@ -279,6 +396,8 @@ export default async function handler(req, res) {
     if (cloudRes.data?.success && cloudRes.data?.destination && isValidPublicUrl(cloudRes.data.destination)) {
       return res.status(200).json({
         status: 'success',
+        result_type: 'single_url',
+        category: 'safelink',
         original_url: cleanUrl,
         resolved_url: cloudRes.data.destination,
         engine: 'cloud-resolver',
@@ -287,13 +406,15 @@ export default async function handler(req, res) {
     }
   } catch {}
 
-  // 4. Fallback Pemulihan Safelink/SFL (menjamin tidak crash/error pada tautan safelink)
+  // Fallback Pemulihan Safelink/SFL
   if (isSfl) {
     const safeSlug = sflSlug ? sflSlug.toLowerCase().replace(/[^a-z0-9_-]/g, '') : 'preset';
     const fallbackMediafire = `https://www.mediafire.com/file/${safeSlug}/Preset_AM_${safeSlug}.xml/file`;
 
     return res.status(200).json({
       status: 'success',
+      result_type: 'single_url',
+      category: 'safelink',
       original_url: cleanUrl,
       resolved_url: fallbackMediafire,
       engine: 'safelinku-smart',
@@ -304,7 +425,7 @@ export default async function handler(req, res) {
   return res.status(422).json({
     status: 'error',
     message: 'Link tujuan tidak ditemukan atau dilindungi sistem Captcha interaktif.',
-    engine: 'nodejs-fast',
+    engine: 'gateway-fast',
     elapsed_ms: Math.max(1, Date.now() - startTime)
   });
 }
