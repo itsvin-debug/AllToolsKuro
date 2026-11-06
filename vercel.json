@@ -1,13 +1,7 @@
 {
-  "framework": "vite",
   "installCommand": "npm install && npm --prefix frontend install",
   "buildCommand": "npm --prefix frontend run build",
   "outputDirectory": "frontend/dist",
-  "functions": {
-    "api/*.js": {
-      "maxDuration": 15
-    }
-  },
   "headers": [
     {
       "source": "/(.*)",
@@ -37,15 +31,7 @@
   ],
   "rewrites": [
     {
-      "source": "/(\\.env.*|\\.git.*|\\.aws.*|\\.ssh.*|config\\.json|package\\.json|composer\\.json|web\\.config)",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
-    },
-    {
-      "source": "/(.*)",
+      "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
   ]
