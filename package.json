@@ -15,10 +15,14 @@
     "audit:secrets": "node scripts/audit-secrets.js"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
     "axios": "^1.7.9",
     "cheerio": "^1.0.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
     "concurrently": "^10.0.6"
   }
 }

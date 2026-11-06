@@ -22,7 +22,8 @@ import {
   Film,
   Sparkles,
   Layers,
-  Zap
+  Zap,
+  Maximize2
 } from 'lucide-react';
 
 export default function ResultsSection({ result, preferredFormat = '1080p', onReset, onBack, lang = 'id' }) {
@@ -820,12 +821,30 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     setTouchStartX(null);
   };
 
+  const [videoAspectRatio, setVideoAspectRatio] = useState(null);
+
   const handleVideoMetadata = (e) => {
-    const sec = e.target.duration;
+    const vid = e.target;
+    const sec = vid.duration;
     if (sec && !isNaN(sec)) {
       const m = Math.floor(sec / 60);
       const s = Math.floor(sec % 60);
       setDetectedDuration(`${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`);
+    }
+    if (vid.videoWidth && vid.videoHeight) {
+      setVideoAspectRatio(vid.videoWidth / vid.videoHeight);
+    }
+  };
+
+  const handleToggleFullscreen = () => {
+    if (videoRef.current) {
+      if (videoRef.current.requestFullscreen) {
+        videoRef.current.requestFullscreen();
+      } else if (videoRef.current.webkitRequestFullscreen) {
+        videoRef.current.webkitRequestFullscreen();
+      } else if (videoRef.current.msRequestFullscreen) {
+        videoRef.current.msRequestFullscreen();
+      }
     }
   };
 
@@ -1225,7 +1244,18 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       {!isMultiContentPost && hasVideo && (
         <div className="w-full bg-white border-2 border-black rounded-xl p-5 sm:p-6 shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row gap-5 items-start text-black">
           
-          <div className="w-full max-w-[320px] sm:max-w-[360px] h-[380px] sm:h-[440px] rounded-xl bg-neutral-950 border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[3px_3px_0px_#000000]">
+          <div 
+            className="rounded-xl bg-black border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[3px_3px_0px_#000000] transition-all"
+            style={{
+              width: videoAspectRatio
+                ? (videoAspectRatio < 1
+                    ? `min(100%, ${Math.round(480 * videoAspectRatio)}px)`
+                    : 'min(100%, 460px)')
+                : 'min(100%, 280px)',
+              aspectRatio: videoAspectRatio ? `${videoAspectRatio}` : '9/16',
+              maxHeight: '480px'
+            }}
+          >
             {videoPreviewUrl ? (
               <video
                 ref={videoRef}
@@ -1236,13 +1266,13 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                 controls
                 playsInline
                 onLoadedMetadata={handleVideoMetadata}
-                className="w-full h-full object-contain"
+                className="w-full h-full object-cover"
               />
             ) : result.thumbnail ? (
               <img
                 src={result.thumbnail}
                 alt={result.title}
-                className="w-full h-full object-contain"
+                className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
               />
             ) : (
@@ -1252,12 +1282,24 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
               </div>
             )}
 
-            <div className="absolute top-2.5 left-2.5 bg-white text-black font-mono font-bold text-[10px] px-2 py-0.5 rounded border border-black shadow-xs">
+            <div className="absolute top-2.5 left-2.5 bg-white text-black font-mono font-bold text-[10px] px-2 py-0.5 rounded border border-black shadow-xs z-10 pointer-events-none">
               {isEn ? 'No Watermark' : 'Tanpa Watermark'}
             </div>
 
+            {videoPreviewUrl && (
+              <button
+                type="button"
+                onClick={handleToggleFullscreen}
+                className="absolute top-2.5 right-2.5 bg-black/80 hover:bg-black text-white px-2 py-1 rounded-md border border-white/30 transition-all cursor-pointer flex items-center gap-1 text-[10px] font-mono font-bold z-10 shadow-xs"
+                title="Tampilkan Layar Penuh (Fullscreen)"
+              >
+                <Maximize2 className="w-3 h-3 stroke-[2.5]" />
+                <span className="hidden sm:inline">Fullscreen</span>
+              </button>
+            )}
+
             {displayDuration && (
-              <div className="absolute bottom-2.5 right-2.5 bg-black text-white font-mono text-[10px] px-2 py-0.5 rounded border border-white/20 flex items-center gap-1">
+              <div className="absolute bottom-2.5 right-2.5 bg-black text-white font-mono text-[10px] px-2 py-0.5 rounded border border-white/20 flex items-center gap-1 z-10 pointer-events-none">
                 <Clock className="w-3 h-3" />
                 <span>{displayDuration}</span>
               </div>

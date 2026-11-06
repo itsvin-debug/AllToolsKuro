@@ -1,0 +1,12 @@
+{
+  "appId": "com.kuro.alltools",
+  "appName": "AllToolsKuro",
+  "webDir": "frontend/dist",
+  "server": {
+    "url": "https://alltoolskuro.vercel.app",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

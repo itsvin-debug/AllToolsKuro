@@ -174,6 +174,27 @@ AllToolsKuro/
 ├── .kilo/
 │   ├── .gitignore
 │   └── agent-manager.json
+├── android/
+│   ├── app/
+│   │   ├── src/
+│   │   ├── .gitignore
+│   │   ├── build.gradle
+│   │   ├── capacitor.build.gradle
+│   │   └── proguard-rules.pro
+│   ├── capacitor-cordova-android-plugins/
+│   │   ├── src/
+│   │   ├── build.gradle
+│   │   └── cordova.variables.gradle
+│   ├── gradle/
+│   │   └── wrapper/
+│   ├── .gitignore
+│   ├── build.gradle
+│   ├── capacitor.settings.gradle
+│   ├── gradle.properties
+│   ├── gradlew
+│   ├── gradlew.bat
+│   ├── settings.gradle
+│   └── variables.gradle
 ├── api/
 │   ├── _envGuard.js
 │   ├── _security.js
@@ -187,6 +208,12 @@ AllToolsKuro/
 │   ├── proxy-download.js
 │   ├── proxy-stream.js
 │   └── resolve.js
+├── assets/
+│   ├── icon-background.png
+│   ├── icon-foreground.png
+│   ├── icon-only.png
+│   ├── logo.png
+│   └── splash.png
 ├── backend/
 │   ├── bin/
 │   │   └── yt-dlp.exe
@@ -220,6 +247,7 @@ AllToolsKuro/
 │   └── opkuro.js
 ├── frontend/
 │   ├── public/
+│   │   ├── photos/
 │   │   ├── videos/
 │   │   ├── favicon.svg
 │   │   └── icons.svg
@@ -239,12 +267,23 @@ AllToolsKuro/
 │   ├── package.json
 │   ├── README.md
 │   └── vite.config.js
+├── icons/
+│   ├── icon-128.webp
+│   ├── icon-192.webp
+│   ├── icon-256.webp
+│   ├── icon-48.webp
+│   ├── icon-512.webp
+│   ├── icon-72.webp
+│   └── icon-96.webp
+├── photos/
+│   └── apkicon.jpeg
 ├── scripts/
 │   ├── audit-secrets.js
 │   └── generate-readme.js
 ├── .gitignore
 ├── .vercelignore
 ├── AGENTS.md
+├── capacitor.config.json
 ├── GEMINI.md
 ├── install.ps1
 ├── install.sh
@@ -263,11 +302,11 @@ AllToolsKuro/
 5 riwayat pembaruan commit terakhir pada repositori:
 
 <!-- AUTO-CHANGELOG-START -->
+- [ee38381] feat: add clipboard utility for reading text with browser fallbacks (2026-11-06)
+- [7da8ad4] fix(ui): prevent video preview clipping and implement universal clipboard paste (2026-11-06)
 - [4ed5e96] chore: remove bot workflow to maintain solo developer contribution history (2026-11-06)
 - [cc9ec02] feat: complete security audit, global CLI opkuro, env guard, dynamic zero-emoji docs, and UI fixes (2026-11-06)
 - [a3db3e5] feat: add Python script and JJ preset service for video extraction (2026-11-06)
-- [b9ebd6b] fix(all): resolve sfl bypass, 4-layer jj preset engine, clean downloader video preview & universal paste (2026-11-06)
-- [4b9ad9e] feat(resolver): implement hybrid python and js gateway with multi-link aggregator and deep scan (2026-11-06)
 <!-- AUTO-CHANGELOG-END -->
 
 ---

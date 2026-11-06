@@ -39,3 +39,14 @@ backend/uploads/*
 backend/uploads/temp/*
 !backend/uploads/temp/.gitkeep
 
+# Capacitor & Android/iOS Native Build Outputs
+/android/
+/ios/
+.gradle/
+*.apk
+*.aab
+*.ap_
+*.dex
+capacitor-cordova-android-plugins/
+
+
