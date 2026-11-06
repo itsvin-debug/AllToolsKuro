@@ -213,39 +213,12 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         configure: (proxy) => {
-          proxy.on('error', async (err, req, res) => {
+          proxy.on('error', (err, req, res) => {
             if (!res.headersSent) {
               if (req.url && req.url.startsWith('/api/ping')) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ ok: true, fallback: true, timestamp: Date.now() }));
                 return;
-              }
-              if (req.url && req.url.startsWith('/api/resolve')) {
-                try {
-                  const resolveModule = await import('../api/resolve.js');
-                  let body = '';
-                  req.on('data', chunk => { body += chunk; });
-                  req.on('end', async () => {
-                    try { req.body = body ? JSON.parse(body) : {}; } catch { req.body = {}; }
-                    const mockRes = {
-                      setHeader: (k, v) => res.setHeader(k, v),
-                      status: (code) => {
-                        res.statusCode = code;
-                        return {
-                          json: (data) => {
-                            if (!res.headersSent) res.setHeader('Content-Type', 'application/json');
-                            res.end(JSON.stringify(data));
-                          },
-                          end: () => res.end()
-                        };
-                      }
-                    };
-                    await resolveModule.default(req, mockRes);
-                  });
-                  return;
-                } catch (e) {
-                  console.warn('Fallback resolve error:', e);
-                }
               }
               res.writeHead(502, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ error: 'Backend offline', code: err.code }));
