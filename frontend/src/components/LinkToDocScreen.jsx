@@ -104,13 +104,30 @@ export default function LinkToDocScreen({ onBack }) {
   const [previewTab, setPreviewTab] = useState('visual');      // 'visual' | 'fulltext'
   const [copied, setCopied] = useState(false);
 
-  // Paste dari clipboard
+  // Paste dari clipboard dengan fallback prompt
   const handlePaste = async () => {
+    let text = '';
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) setUrl(text.trim());
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        text = await navigator.clipboard.readText();
+      }
     } catch {
-      // fallback jika clipboard permission ditolak
+      // Permission API browser dibatasi
+    }
+
+    if (text && text.trim()) {
+      setUrl(text.trim());
+      setErrorMessage('');
+      onShowToast?.('Tautan dokumen berhasil ditempel!');
+    } else {
+      try {
+        const manual = window.prompt('Tempel link dokumen di sini:', '');
+        if (manual && manual.trim()) {
+          setUrl(manual.trim());
+          setErrorMessage('');
+          onShowToast?.('Tautan dokumen berhasil ditempel!');
+        }
+      } catch {}
     }
   };
 
@@ -844,7 +861,7 @@ export default function LinkToDocScreen({ onBack }) {
               className="absolute right-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container border border-outline-variant/30 text-xs text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest transition-all cursor-pointer"
             >
               <Clipboard className="w-3.5 h-3.5" />
-              <span>Paste</span>
+              <span>Tempel</span>
             </button>
           </div>
 

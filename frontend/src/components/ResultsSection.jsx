@@ -225,26 +225,8 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       });
     }
 
-    if (activeAudio) {
-      options.push({
-        id: 'audio',
-        key: 'audio',
-        label: isEn ? 'Audio MP3' : 'Audio MP3',
-        badge: isEn ? 'Extract' : 'Ekstrak Suara',
-        quality: '320kbps MP3',
-        sizeEst: isEn ? '~3-6 MB' : '~3-6 MB (Trek Bersih)',
-        desc: isEn ? 'Clean standalone sound track' : 'Trek audio jernih tanpa video',
-        url: activeAudio.url,
-        streamUrl: activeAudio.streamUrl,
-        proxyUrl: activeAudio.proxyUrl,
-        type: 'audio',
-        extension: 'mp3',
-        filename: activeAudio.filename || `${baseName}_audio_${mediaId}.mp3`
-      });
-    }
-
     return options;
-  }, [regularVideoLinks, activeAudio, hasVideo, result, isEn]);
+  }, [regularVideoLinks, hasVideo, result, isEn]);
 
   // Kategori filter aktif: 'photo' | 'video' | 'live_wallpaper' | 'all'
   const [contentTypeFilter, setContentTypeFilter] = useState(() => {
@@ -1243,17 +1225,18 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       {!isMultiContentPost && hasVideo && (
         <div className="w-full bg-white border-2 border-black rounded-xl p-5 sm:p-6 shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row gap-5 items-start text-black">
           
-          <div className="w-full md:w-72 aspect-[9/16] sm:aspect-[3/4] max-h-[380px] rounded-lg bg-black border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[2px_2px_0px_#000000]">
+          <div className="w-full max-w-[280px] sm:max-w-[320px] aspect-[9/16] rounded-xl bg-black border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[3px_3px_0px_#000000]">
             {videoPreviewUrl ? (
               <video
                 ref={videoRef}
                 key={videoPreviewUrl}
                 src={videoPreviewUrl}
                 poster={result.thumbnail || undefined}
+                preload="metadata"
                 controls
                 playsInline
                 onLoadedMetadata={handleVideoMetadata}
-                className="w-full h-full object-contain"
+                className="w-full h-full object-cover"
               />
             ) : result.thumbnail ? (
               <img

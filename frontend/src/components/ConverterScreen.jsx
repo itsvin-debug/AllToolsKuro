@@ -19,7 +19,8 @@ import {
   FolderDown,
   Flame,
   Radio,
-  ExternalLink
+  ExternalLink,
+  ArrowDown
 } from 'lucide-react';
 import ResultsSection from './ResultsSection';
 import { translations } from '../utils/translations';
@@ -226,6 +227,13 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
           onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
         }
       } catch {}
+    }
+  };
+
+  const scrollToInput = () => {
+    if (inputRef.current) {
+      inputRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      inputRef.current.focus();
     }
   };
 
@@ -551,6 +559,16 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
         )}
 
       </div>
+
+      {/* Floating Bouncing Scroll-to-Input Button for Mobile */}
+      <button
+        type="button"
+        onClick={scrollToInput}
+        aria-label="Scroll to download form"
+        className="fixed bottom-24 right-4 z-40 md:hidden flex items-center justify-center w-11 h-11 rounded-full bg-black text-white border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 animate-bounce cursor-pointer hover:bg-neutral-800 transition-colors"
+      >
+        <ArrowDown className="w-5 h-5 stroke-[2.5]" />
+      </button>
 
     </main>
   );

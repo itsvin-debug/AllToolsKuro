@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import CosmicBackButton from './CosmicBackButton';
 import { addGalleryItem } from '../services/storageService';
 import { 
@@ -14,23 +14,94 @@ import {
   ExternalLink, 
   Play, 
   Pause, 
-  AlertCircle,
-  FolderDown,
-  XCircle,
-  Smartphone,
-  Clapperboard
+  AlertCircle, 
+  FolderDown, 
+  Smartphone, 
+  Clapperboard,
+  Sparkles,
+  Clipboard,
+  ShieldCheck,
+  Radio,
+  FileCode
 } from 'lucide-react';
 
-export default function JjFinderScreen({ onBack }) {
+// 5 Langkah alur deteksi mesin pencari preset JJ
+const JJ_SEARCH_STEPS = [
+  {
+    id: 1,
+    num: '01',
+    title: 'Validasi Link Video',
+    desc: 'Menganalisis format URL TikTok JJ'
+  },
+  {
+    id: 2,
+    num: '02',
+    title: 'Scan Anchor Video',
+    desc: 'Mendeteksi tombol template CapCut resmi'
+  },
+  {
+    id: 3,
+    num: '03',
+    title: 'Analisis Caption & Komentar',
+    desc: 'Memindai link Alight Motion & Google Drive XML'
+  },
+  {
+    id: 4,
+    num: '04',
+    title: 'Sound Fingerprinting',
+    desc: 'Pencocokan trek sound & reverse search JJ identik'
+  },
+  {
+    id: 5,
+    num: '05',
+    title: 'Preset Siap Digunakan',
+    desc: 'Menyiapkan tautan direct template & audio'
+  }
+];
+
+export default function JjFinderScreen({ onBack, onShowToast }) {
   const [inputQuery, setInputQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [hasStartedSearch, setHasStartedSearch] = useState(false);
   const [error, setError] = useState('');
   const [resultData, setResultData] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
-  const [toastMessage, setToastMessage] = useState('');
-  const [activeFilter, setActiveFilter] = useState('all');
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [audioElement, setAudioElement] = useState(null);
+  const inputRef = useRef(null);
+
+  // Penempelan dari clipboard dengan fallback prompt
+  const handlePaste = async () => {
+    let text = '';
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        text = await navigator.clipboard.readText();
+      }
+    } catch {
+      // Permission API browser dibatasi
+    }
+
+    if (text && text.trim()) {
+      setInputQuery(text.trim());
+      setError('');
+      if (inputRef.current) inputRef.current.focus();
+      if (onShowToast) onShowToast('Tautan video berhasil ditempel!');
+    } else {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        try { document.execCommand('paste'); } catch {}
+      }
+      try {
+        const manual = window.prompt('Tempel link TikTok JJ di sini:', '');
+        if (manual && manual.trim()) {
+          setInputQuery(manual.trim());
+          setError('');
+          if (onShowToast) onShowToast('Tautan video berhasil ditempel!');
+        }
+      } catch {}
+    }
+  };
 
   const handleSearch = async (e, directQuery = null) => {
     if (e) e.preventDefault();
@@ -42,12 +113,19 @@ export default function JjFinderScreen({ onBack }) {
     }
 
     setLoading(true);
+    setHasStartedSearch(true);
+    setActiveStepIndex(0);
     setError('');
     setResultData(null);
     setIsPlayingAudio(false);
     if (audioElement) {
       audioElement.pause();
     }
+
+    // Animasi bertahap visual 5 langkah
+    const timer1 = setTimeout(() => setActiveStepIndex(1), 250);
+    const timer2 = setTimeout(() => setActiveStepIndex(2), 650);
+    const timer3 = setTimeout(() => setActiveStepIndex(3), 1100);
 
     try {
       let res = await fetch('/api/jj-finder', {
@@ -67,58 +145,64 @@ export default function JjFinderScreen({ onBack }) {
         }
       }
 
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
+      setActiveStepIndex(3);
+      await new Promise((r) => setTimeout(r, 200));
+
       const contentType = res.headers.get('content-type') || '';
       let data = null;
 
       if (contentType.includes('application/json')) {
         data = await res.json();
       } else {
-        // Jika server mengembalikan teks atau html
         const rawText = await res.text();
         try {
           data = JSON.parse(rawText);
         } catch {
-          throw new Error('Layanan sedang menyinkronkan data TikTok. Pastikan video bersifat publik dan coba klik "Cari Preset" sekali lagi.');
+          throw new Error('Layanan sedang memproses data TikTok. Coba klik "Cari Preset" sekali lagi.');
         }
       }
 
       if (res.ok && data?.success && data?.data) {
+        setActiveStepIndex(4);
         setResultData(data.data);
         const jj = data.data;
 
-        // Otomatis simpan ke galeri perangkat
-        addGalleryItem({
-          title: jj.title || 'Jedag Jedug TikTok Preset',
-          type: 'document',
-          category: 'Cari Link JJ',
-          extension: 'XML',
-          size: jj.xmlSize || '5MB',
-          previewUrl: jj.cover || jj.videoUrl || null,
-          downloadData: jj.xmlUrl || jj.alightMotionLink || jj.capcutLink || null,
-          filename: `jj_preset_${Date.now()}.xml`
-        });
+        // Otomatis simpan ke riwayat galeri lokal
+        try {
+          addGalleryItem({
+            title: jj.video_info?.title || jj.capcut?.title || 'Preset Jedag Jedug TikTok',
+            type: 'document',
+            category: 'Cari Link JJ',
+            extension: 'XML',
+            size: jj.xml_gdrive?.file_size || '5MB',
+            previewUrl: jj.video_info?.cover || jj.capcut?.cover_url || null,
+            downloadData: jj.xml_gdrive?.download_url || jj.alight_motion?.url || jj.capcut?.url || null,
+            filename: `jj_preset_${Date.now()}.xml`
+          });
+        } catch {}
+
+        if (onShowToast) onShowToast('Preset Jedag-Jedug berhasil ditemukan!');
       } else {
-        throw new Error(data?.message || 'Gagal mengekstrak preset dari tautan TikTok ini. Pastikan video dapat diakses publik.');
+        throw new Error(data?.message || 'Gagal mengekstrak preset dari tautan TikTok ini.');
       }
     } catch (err) {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+      clearTimeout(timer3);
       setError(err.message || 'Terjadi kendala saat menghubungkan ke server pencarian JJ.');
     } finally {
       setLoading(false);
     }
   };
 
-  const showToast = (msg) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage('');
-    }, 2500);
-  };
-
   const handleCopy = (text, id) => {
     if (!text) return;
     navigator.clipboard.writeText(text);
     setCopiedId(id);
-    showToast('Tautan berhasil disalin');
+    if (onShowToast) onShowToast('Tautan berhasil disalin ke papan klip!');
     setTimeout(() => setCopiedId(null), 2000);
   };
 
@@ -151,16 +235,12 @@ export default function JjFinderScreen({ onBack }) {
     });
   };
 
-  const allTemplates = resultData?.templates || [];
-  const filteredTemplates = allTemplates.filter((t) => {
-    if (activeFilter === 'all') return true;
-    if (activeFilter === 'capcut') return t.category === 'capcut' || t.platform === 'CapCut';
-    if (activeFilter === 'gdrive') return t.category === 'gdrive' || t.platform === 'Google Drive' || t.type === 'XML';
-    if (activeFilter === '5mb') return t.category === '5mb' || t.platform === 'Alight Motion' || t.type === '5MB';
-    return true;
-  });
-
-  const detection = resultData?.detectionSummary;
+  const capcut = resultData?.capcut;
+  const alight = resultData?.alight_motion;
+  const gdrive = resultData?.xml_gdrive;
+  const audio = resultData?.audio;
+  const video = resultData?.video_info;
+  const confidence = resultData?.source_confidence || 'Cocok via Sound JJ Identik';
 
   return (
     <main className="flex-grow w-full max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 text-black">
@@ -171,495 +251,413 @@ export default function JjFinderScreen({ onBack }) {
       </div>
 
       {/* ─── 1. KARTU PENCARIAN & INPUT LINK TIKTOK JJ ─── */}
-      <div className="rounded-xl p-5 sm:p-6 border-2 border-black bg-white shadow-[4px_4px_0px_#000000] mb-6">
+      <div className="rounded-2xl p-5 sm:p-7 border-2 border-black bg-white shadow-[4px_4px_0px_#000000] mb-6">
         
-        <div className="flex items-center gap-3 pb-3 border-b-2 border-black">
-          <div className="w-10 h-10 rounded-md border-2 border-black bg-black text-white flex items-center justify-center shrink-0">
-            <Flame className="w-5 h-5 stroke-[2.2]" />
+        <div className="flex items-center gap-3.5 pb-4 border-b-2 border-black">
+          <div className="w-11 h-11 rounded-xl border-2 border-black bg-black text-white flex items-center justify-center shrink-0 shadow-[2px_2px_0px_#000000]">
+            <Flame className="w-6 h-6 stroke-[2.2] text-amber-400" />
           </div>
           <div>
-            <h1 className="text-base sm:text-xl font-black tracking-tight font-display text-black">
+            <h1 className="text-lg sm:text-2xl font-black tracking-tight font-display text-black">
               Cari Link JJ (Jedag-Jedug)
             </h1>
-            <p className="text-xs text-neutral-600">
-              Salin dan tempel tautan video TikTok JJ untuk mengekstrak template CapCut, preset 5MB Alight Motion, berkas XML Google Drive, dan trek sound audio secara langsung.
+            <p className="text-xs sm:text-sm text-neutral-600 font-mono mt-0.5">
+              Temukan direct link Template CapCut, Preset 5MB Alight Motion, berkas XML Google Drive, dan Sound Audio asli dari video TikTok JJ.
             </p>
           </div>
         </div>
 
-        {/* Form Input Link (Contoh chip dihapus sesuai instruksi) */}
-        <form onSubmit={handleSearch} className="mt-4">
+        {/* Form Input: Tombol Tempel di dalam Input, Tombol Cari Preset di Bawah Input */}
+        <form onSubmit={handleSearch} className="mt-5 space-y-4">
+          
+          {/* Kolom Input dengan Tombol Tempel di Kanan Dalam */}
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-black stroke-[2.5]" />
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-500 stroke-[2.5]" />
             <input
+              ref={inputRef}
               type="text"
               value={inputQuery}
               onChange={(e) => {
                 setInputQuery(e.target.value);
                 setError('');
               }}
-              placeholder="Tempel tautan video TikTok JJ (contoh: https://vt.tiktok.com/... atau https://www.tiktok.com/@.../video/...)"
-              className="w-full pl-10 pr-28 py-3.5 rounded-lg border-2 border-black bg-white text-black text-xs sm:text-sm font-medium outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-500 shadow-[2px_2px_0px_#000000]"
-            />
-            <button
-              type="submit"
               disabled={loading}
-              className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-2 rounded border border-black bg-black text-white font-extrabold text-xs hover:bg-neutral-800 disabled:opacity-50 transition-all cursor-pointer shadow-[1px_1px_0px_#000000]"
-            >
-              {loading ? (
-                <span className="flex items-center gap-1.5">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Mendeteksi...</span>
-                </span>
-              ) : (
-                <span>Cari Preset</span>
+              placeholder="Tempel link TikTok JJ (misal: https://vt.tiktok.com/... atau https://www.tiktok.com/@.../video/...)"
+              className="w-full pl-10 pr-24 py-3.5 rounded-xl border-2 border-black bg-neutral-50 text-black text-xs sm:text-sm font-mono outline-none focus:bg-white focus:shadow-[3px_3px_0px_#000000] placeholder:text-neutral-400 transition-all disabled:bg-neutral-100"
+            />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+              {inputQuery && (
+                <button
+                  type="button"
+                  onClick={() => { setInputQuery(''); setError(''); }}
+                  disabled={loading}
+                  className="px-2 py-1 text-xs font-mono text-neutral-500 hover:text-black cursor-pointer"
+                >
+                  Clear
+                </button>
               )}
-            </button>
+              <button
+                type="button"
+                onClick={handlePaste}
+                disabled={loading}
+                className="px-2.5 py-1 text-[11px] font-mono font-bold bg-neutral-100 hover:bg-neutral-200 text-black rounded border border-black shadow-[1px_1px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer flex items-center gap-1"
+              >
+                <Clipboard className="w-3 h-3 stroke-[2.5]" />
+                <span>Tempel</span>
+              </button>
+            </div>
           </div>
+
+          {/* Tombol Cari Preset di Bawah Input Sesuai Permintaan */}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full sm:w-auto px-7 py-3.5 rounded-xl border-2 border-black bg-black text-white font-extrabold text-xs sm:text-sm shadow-[3px_3px_0px_#000000] hover:bg-neutral-800 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>Memindai 4-Layer Preset...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Cari Preset</span>
+              </>
+            )}
+          </button>
         </form>
+
+        {/* ─── ANIMASI 5-STEP SEARCHING STATE ─── */}
+        {(loading || resultData || hasStartedSearch) && (
+          <div className="mt-5 space-y-3 pt-3 border-t-2 border-black animate-in fade-in duration-200">
+            
+            {/* Indikator 5 Kotak */}
+            <div className="grid grid-cols-5 gap-1.5 sm:gap-2.5">
+              {JJ_SEARCH_STEPS.map((st, idx) => {
+                const isDone = !!resultData || idx < activeStepIndex;
+                const isActive = loading && idx === activeStepIndex;
+
+                return (
+                  <div
+                    key={st.id}
+                    className={`relative flex flex-col items-center justify-center p-2 sm:p-2.5 rounded-xl border-2 transition-all duration-200 min-h-[48px] sm:min-h-[52px] select-none ${
+                      isDone
+                        ? 'bg-emerald-100 border-black text-black shadow-[2px_2px_0px_#000000]'
+                        : isActive
+                        ? 'bg-amber-100 border-black text-black shadow-[3px_3px_0px_#000000] scale-[1.03] ring-2 ring-black'
+                        : 'bg-neutral-100 border-neutral-300 text-neutral-400 opacity-60'
+                    }`}
+                  >
+                    <span className="font-mono font-black text-xs sm:text-sm">
+                      {st.num}
+                    </span>
+
+                    {isDone && (
+                      <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-emerald-500 text-white rounded-full border border-black flex items-center justify-center text-[9px] font-black shadow-[1px_1px_0px_#000000]">
+                        ✓
+                      </span>
+                    )}
+
+                    {isActive && (
+                      <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-amber-400 text-black rounded-full border border-black flex items-center justify-center text-[9px] font-black shadow-[1px_1px_0px_#000000] animate-pulse">
+                        •
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Status Tahap Aktif */}
+            <div className="p-3 sm:p-3.5 rounded-xl border-2 border-black bg-neutral-50 shadow-[2px_2px_0px_#000000] flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-black text-white flex items-center justify-center font-mono font-black text-xs shrink-0 shadow-[1px_1px_0px_#000000]">
+                {JJ_SEARCH_STEPS[activeStepIndex]?.num || '01'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs sm:text-sm font-black font-mono text-black truncate">
+                    {JJ_SEARCH_STEPS[activeStepIndex]?.title}
+                  </span>
+                  <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border border-black shrink-0 ${
+                    resultData
+                      ? 'bg-emerald-200 text-emerald-900'
+                      : error
+                      ? 'bg-rose-200 text-rose-900'
+                      : 'bg-amber-200 text-amber-900 animate-pulse'
+                  }`}>
+                    {resultData ? 'Selesai' : error ? 'Gagal' : 'Sedang Proses'}
+                  </span>
+                </div>
+                <p className="text-[11px] sm:text-xs text-neutral-600 font-mono truncate mt-0.5">
+                  {JJ_SEARCH_STEPS[activeStepIndex]?.desc}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Pesan Kesalahan */}
         {error && (
-          <div className="mt-4 p-3.5 rounded-lg border-2 border-black bg-neutral-100 text-black text-xs font-semibold flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 stroke-[2.5]" />
+          <div className="mt-4 p-4 rounded-xl border-2 border-rose-500 bg-rose-50 text-rose-950 text-xs font-mono flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 shrink-0 stroke-[2.5] text-rose-600" />
             <span>{error}</span>
           </div>
         )}
       </div>
 
-      {/* ─── 2. OUTPUT HASIL DETEKSI PRESET JJ TIKTOK ─── */}
+      {/* ─── 2. OUTPUT 4 KARTU TERSTRUKTUR PRESET JJ ─── */}
       {resultData && (
-        <div className="space-y-5 animate-fadeIn">
+        <div className="space-y-6 animate-in fade-in duration-200">
           
-          {/* Status Deteksi Isi Video TikTok */}
-          <div className="rounded-xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_#000000]">
-            <h2 className="text-xs font-mono font-bold uppercase tracking-wider text-neutral-500 mb-3">
-              Status Deteksi Isi JJ
-            </h2>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-              {/* CapCut Template */}
-              <div className={`p-3 rounded-lg border-2 border-black flex items-center gap-2.5 ${
-                detection?.hasCapcut ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-700'
-              }`}>
-                {detection?.hasCapcut ? (
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                ) : (
-                  <XCircle className="w-4 h-4 shrink-0" />
-                )}
-                <div className="min-w-0">
-                  <div className="text-[11px] font-mono font-extrabold uppercase">Template CapCut</div>
-                  <div className="text-[10px] opacity-80 truncate">
-                    {detection?.hasCapcut ? 'Terdeteksi di Video' : 'Tidak Disertakan'}
-                  </div>
-                </div>
+          {/* Header Ringkasan & Badge Confidence */}
+          <div className="p-4 sm:p-5 rounded-2xl border-2 border-black bg-white shadow-[4px_4px_0px_#000000] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-black text-white flex items-center justify-center border-2 border-black shadow-[1px_1px_0px_#000000]">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
               </div>
-
-              {/* Google Drive XML */}
-              <div className={`p-3 rounded-lg border-2 border-black flex items-center gap-2.5 ${
-                detection?.hasGdrive ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-700'
-              }`}>
-                {detection?.hasGdrive ? (
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                ) : (
-                  <XCircle className="w-4 h-4 shrink-0" />
-                )}
-                <div className="min-w-0">
-                  <div className="text-[11px] font-mono font-extrabold uppercase">Google Drive (XML)</div>
-                  <div className="text-[10px] opacity-80 truncate">
-                    {detection?.hasGdrive ? 'Terdeteksi di Video' : 'Tidak Disertakan'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Preset 5MB Alight Motion */}
-              <div className={`p-3 rounded-lg border-2 border-black flex items-center gap-2.5 ${
-                detection?.has5mb ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-700'
-              }`}>
-                {detection?.has5mb ? (
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                ) : (
-                  <XCircle className="w-4 h-4 shrink-0" />
-                )}
-                <div className="min-w-0">
-                  <div className="text-[11px] font-mono font-extrabold uppercase">Preset 5MB (Alight)</div>
-                  <div className="text-[10px] opacity-80 truncate">
-                    {detection?.has5mb ? 'Terdeteksi di Video' : 'Tidak Disertakan'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Sound JJ MP3 */}
-              <div className={`p-3 rounded-lg border-2 border-black flex items-center gap-2.5 ${
-                detection?.hasAudio ? 'bg-black text-white' : 'bg-neutral-100 text-neutral-700'
-              }`}>
-                {detection?.hasAudio ? (
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                ) : (
-                  <XCircle className="w-4 h-4 shrink-0" />
-                )}
-                <div className="min-w-0">
-                  <div className="text-[11px] font-mono font-extrabold uppercase">Sound JJ MP3</div>
-                  <div className="text-[10px] opacity-80 truncate">
-                    {detection?.hasAudio ? 'Audio Tersedia' : 'Audio Nihil'}
-                  </div>
-                </div>
+              <div>
+                <h2 className="text-sm sm:text-base font-black text-black">
+                  Hasil Penemuan Preset JJ
+                </h2>
+                <p className="text-[11px] font-mono text-neutral-600">
+                  {video?.author ? `Kreator: ${video.author}` : 'Preset berhasil dipetakan'}
+                </p>
               </div>
             </div>
 
-            {/* Pemberitahuan Bio Kreator */}
-            {detection?.bioNotice && (
-              <div className="mt-3 p-3 rounded-lg border border-black bg-neutral-50 flex items-center justify-between gap-3 text-xs">
-                <span className="font-medium text-neutral-800">{detection.bioNotice}</span>
-                {resultData.videoInfo?.profileUrl && (
-                  <a
-                    href={resultData.videoInfo.profileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1 rounded border border-black bg-white hover:bg-black hover:text-white font-mono font-bold text-[10px] shrink-0 transition-colors"
-                  >
-                    Buka Profil TikTok
-                  </a>
-                )}
-              </div>
-            )}
+            {/* Confidence Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border-2 border-black text-xs font-mono font-bold shadow-[2px_2px_0px_#000000] bg-emerald-100 text-emerald-950">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
+              <span>{confidence}</span>
+            </div>
           </div>
 
-          {/* Ringkasan Video & Trek Audio TikTok */}
-          <div className="rounded-xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row gap-5 items-start">
+          {/* Grid 4 Kartu Terstruktur */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
             
-            {/* Thumbnail Video */}
-            <div className="w-full md:w-44 aspect-[9/16] max-h-[200px] rounded-lg border-2 border-black bg-neutral-100 overflow-hidden relative shrink-0 mx-auto md:mx-0 shadow-[2px_2px_0px_#000000]">
-              {resultData.videoInfo?.thumbnail ? (
-                <img 
-                  src={resultData.videoInfo.thumbnail.startsWith('/') ? `https://www.tikwm.com${resultData.videoInfo.thumbnail}` : resultData.videoInfo.thumbnail} 
-                  alt={resultData.videoInfo.title}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center text-xs font-mono font-bold">
-                  <Film className="w-8 h-8 mb-1" />
-                  <span>Pratinjau Video</span>
-                </div>
-              )}
+            {/* KARTU 1: TEMPLATE CAPCUT */}
+            {capcut && (
+              <div className="rounded-2xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_#000000] flex flex-col justify-between gap-4">
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-black bg-black text-white text-[10px] font-mono font-bold">
+                      <Clapperboard className="w-3 h-3 text-amber-400" />
+                      <span>Template CapCut</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-neutral-500">
+                      Rasio {capcut.ratio || '9:16'} • {capcut.duration || '15s'}
+                    </span>
+                  </div>
 
-              <span className="absolute top-2 left-2 px-2 py-0.5 rounded border border-black bg-white text-black font-mono font-bold text-[9px]">
-                {resultData.videoInfo?.aspectRatio || '9:16'}
-              </span>
+                  <h3 className="text-sm sm:text-base font-black text-black line-clamp-2">
+                    {capcut.title || 'Template CapCut Jedag Jedug'}
+                  </h3>
 
-              {resultData.videoInfo?.duration && (
-                <span className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded border border-black bg-black text-white font-mono text-[9px] font-bold">
-                  {resultData.videoInfo.duration}
-                </span>
-              )}
-            </div>
-
-            {/* Info Lengkap Video, Audio, dan Aksi */}
-            <div className="flex-1 min-w-0 space-y-3 w-full">
-              <div>
-                <div className="flex items-center gap-2 flex-wrap mb-1">
-                  <span className="px-2 py-0.5 rounded border border-black bg-black text-white font-mono text-[10px] font-bold">
-                    TikTok JJ
-                  </span>
-                  <span className="px-2 py-0.5 rounded border border-black bg-neutral-100 text-black font-mono text-[10px] font-bold">
-                    Kreator: {resultData.videoInfo?.author}
-                  </span>
+                  <p className="text-xs text-neutral-600 font-mono">
+                    Template ID: <span className="font-bold text-black">{capcut.template_id}</span>
+                  </p>
                 </div>
 
-                <h3 className="text-base sm:text-lg font-extrabold text-black line-clamp-2 leading-snug font-sans">
-                  {resultData.videoInfo?.title}
-                </h3>
+                <div className="pt-2 border-t border-neutral-200 flex flex-col gap-2">
+                  <a
+                    href={capcut.deep_link || capcut.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
+                  >
+                    <Clapperboard className="w-4 h-4 text-emerald-400" />
+                    <span>Pakai di CapCut</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={capcut.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 py-2 px-3 rounded-lg border border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-bold text-center"
+                    >
+                      Buka Web CapCut
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(capcut.url, 'capcut')}
+                      className="py-2 px-3 rounded-lg border border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedId === 'capcut' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>Salin</span>
+                    </button>
+                  </div>
+                </div>
               </div>
+            )}
 
-              {/* Sound JJ Info */}
-              <div className="p-3 rounded-lg border border-black bg-neutral-50 flex items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Music className="w-4 h-4 shrink-0 text-black" />
-                  <span className="font-mono font-bold truncate">
-                    {resultData.videoInfo?.audioTitle || 'Sound JJ Asli'}
-                  </span>
+            {/* KARTU 2: PRESET 5MB ALIGHT MOTION */}
+            {alight && (
+              <div className="rounded-2xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_#000000] flex flex-col justify-between gap-4">
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-black bg-black text-white text-[10px] font-mono font-bold">
+                      <Smartphone className="w-3 h-3 text-cyan-400" />
+                      <span>{alight.badge || 'Preset 5MB'}</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-neutral-500 font-bold">
+                      {alight.file_size || '4.8 MB'}
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm sm:text-base font-black text-black line-clamp-2">
+                    {alight.title || 'Preset 5MB Alight Motion'}
+                  </h3>
+
+                  <p className="text-xs text-neutral-600 font-mono">
+                    Tautan impor langsung ke aplikasi Alight Motion tanpa kuota XML.
+                  </p>
                 </div>
 
-                {resultData.videoInfo?.audioUrl && (
+                <div className="pt-2 border-t border-neutral-200 flex flex-col gap-2">
+                  <a
+                    href={alight.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
+                  >
+                    <Smartphone className="w-4 h-4 text-cyan-400" />
+                    <span>Buka Alight Motion</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+
                   <button
                     type="button"
-                    onClick={() => togglePlayAudio(resultData.videoInfo.audioUrl)}
-                    className="px-3 py-1.5 rounded border border-black bg-white hover:bg-black hover:text-white font-mono text-[11px] font-bold shrink-0 transition-colors flex items-center gap-1 cursor-pointer"
+                    onClick={() => handleCopy(alight.url, 'alight')}
+                    className="w-full py-2 px-3 rounded-lg border border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-bold flex items-center justify-center gap-1 cursor-pointer"
                   >
-                    {isPlayingAudio ? (
-                      <>
-                        <Pause className="w-3 h-3" />
-                        <span>Jeda</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-3 h-3" />
-                        <span>Putar</span>
-                      </>
-                    )}
+                    {copiedId === 'alight' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>Salin Link Preset 5MB</span>
                   </button>
-                )}
+                </div>
               </div>
+            )}
 
-              {/* Tombol Aksi Video & Trek Audio JJ */}
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                {resultData.videoInfo?.audioUrl && (
+            {/* KARTU 3: XML PRESET GOOGLE DRIVE */}
+            {gdrive && (
+              <div className="rounded-2xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_#000000] flex flex-col justify-between gap-4">
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-black bg-black text-white text-[10px] font-mono font-bold">
+                      <FolderDown className="w-3 h-3 text-emerald-400" />
+                      <span>{gdrive.badge || 'XML Preset'}</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-neutral-500 font-bold">
+                      {gdrive.file_size || '210 KB'}
+                    </span>
+                  </div>
+
+                  <h3 className="text-sm sm:text-base font-black text-black line-clamp-2">
+                    {gdrive.title || 'XML Preset Google Drive'}
+                  </h3>
+
+                  <p className="text-xs text-neutral-600 font-mono">
+                    Berkas XML murni, kompatibel dengan semua versi Alight Motion lawas & baru.
+                  </p>
+                </div>
+
+                <div className="pt-2 border-t border-neutral-200 flex flex-col gap-2">
                   <a
-                    href={resultData.videoInfo.proxyAudioUrl || resultData.videoInfo.audioUrl}
-                    download="sound_jedag_jedug.mp3"
+                    href={gdrive.download_url || gdrive.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="min-h-[44px] px-3.5 py-2 rounded-lg border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold text-xs flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] cursor-pointer"
+                    className="w-full py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
                   >
-                    <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Unduh Sound MP3</span>
+                    <Download className="w-4 h-4 text-emerald-400" />
+                    <span>Unduh XML Langsung</span>
                   </a>
-                )}
 
-                {resultData.videoInfo?.videoUrl && (
-                  <a
-                    href={resultData.videoInfo.proxyVideoUrl || resultData.videoInfo.videoUrl}
-                    download="video_jedag_jedug.mp4"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="min-h-[44px] px-3.5 py-2 rounded-lg border-2 border-black bg-black hover:bg-neutral-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Unduh Video JJ</span>
-                  </a>
-                )}
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={gdrive.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 py-2 px-3 rounded-lg border border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-bold text-center"
+                    >
+                      Buka Drive
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(gdrive.download_url || gdrive.url, 'gdrive')}
+                      className="py-2 px-3 rounded-lg border border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedId === 'gdrive' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>Salin</span>
+                    </button>
+                  </div>
+                </div>
               </div>
+            )}
 
-            </div>
+            {/* KARTU 4: SOUND / AUDIO ASLI */}
+            {audio && (
+              <div className="rounded-2xl border-2 border-black bg-white p-5 shadow-[4px_4px_0px_#000000] flex flex-col justify-between gap-4">
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-black bg-black text-white text-[10px] font-mono font-bold">
+                      <Music className="w-3 h-3 text-pink-400" />
+                      <span>Audio JJ Asli</span>
+                    </span>
+                    <span className="text-[11px] font-mono text-neutral-500 font-bold">
+                      {audio.duration || '00:15'}
+                    </span>
+                  </div>
 
-          </div>
+                  <h3 className="text-sm sm:text-base font-black text-black line-clamp-2">
+                    {audio.title || 'Sound Jedag Jedug TikTok'}
+                  </h3>
 
-          {/* ─── 3. TAB FILTER KATEGORI PRESET ─── */}
-          <div className="flex items-center justify-between pb-2 border-b-2 border-black">
-            <h3 className="font-extrabold text-sm sm:text-base tracking-tight font-sans">
-              Daftar Template & Preset Terdeteksi ({filteredTemplates.length})
-            </h3>
+                  <p className="text-xs text-neutral-600 font-mono">
+                    Artis/Kreator: <span className="font-bold text-black">{audio.author || 'TikTok Music'}</span>
+                  </p>
+                </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {[
-                { id: 'all', label: 'Semua' },
-                ...(detection?.hasCapcut ? [{ id: 'capcut', label: 'CapCut' }] : []),
-                ...(detection?.hasGdrive ? [{ id: 'gdrive', label: 'Google Drive XML' }] : []),
-                ...(detection?.has5mb ? [{ id: '5mb', label: 'Preset 5MB' }] : [])
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveFilter(tab.id)}
-                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold border border-black cursor-pointer transition-all ${
-                    activeFilter === tab.id
-                      ? 'bg-black text-white shadow-[1.5px_1.5px_0px_#000000]'
-                      : 'bg-white text-black hover:bg-neutral-100'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ─── 4. KARTU PRESET / TEMPLATE JJ YANG MENYESUAIKAN ISI ─── */}
-          <div className="space-y-3">
-            {filteredTemplates.length === 0 ? (
-              <div className="p-6 rounded-xl border-2 border-black bg-white text-center text-xs text-neutral-600 font-mono">
-                Tidak ada preset pada kategori ini.
-              </div>
-            ) : (
-              filteredTemplates.map((item) => {
-                const isCopied = copiedId === item.id;
-                const isXML = item.type === 'XML';
-                const is5MB = item.type === '5MB';
-                const isCapcut = item.type === 'CapCut' || item.category === 'capcut';
-                const isGdrive = item.category === 'gdrive' || item.platform === 'Google Drive';
-
-                return (
-                  <div
-                    key={item.id}
-                    className="rounded-xl p-4 sm:p-5 border-2 border-black bg-white shadow-[3px_3px_0px_#000000] flex flex-col sm:flex-row gap-4 sm:items-center justify-between"
-                  >
-                    {/* Kolom Kiri: Detail Preset / Template */}
-                    <div className="flex items-start gap-3.5 flex-1 min-w-0">
-                      <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-neutral-100 border-2 border-black flex flex-col items-center justify-center p-1 shrink-0">
-                        {isCapcut ? (
-                          <>
-                            <Clapperboard className="w-5 h-5 text-black mb-0.5" />
-                            <span className="text-[9px] font-mono font-black text-black">
-                              CapCut
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-xs font-mono font-black text-black">
-                              {item.aspectRatio || '9:16'}
-                            </span>
-                            <span className="text-[9px] font-mono text-neutral-600 font-bold truncate max-w-full text-center">
-                              {item.platform}
-                            </span>
-                          </>
-                        )}
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-sm sm:text-base font-extrabold text-black truncate font-sans mb-1">
-                          {item.title}
-                        </h4>
-
-                        {/* Badges: Kategori, Tipe Berkas, dan Status */}
-                        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
-                          {isCapcut && (
-                            <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded border border-black bg-black text-white">
-                              CapCut Template
-                            </span>
-                          )}
-                          {isXML && (
-                            <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded border border-black bg-black text-white">
-                              XML
-                            </span>
-                          )}
-                          {is5MB && (
-                            <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded border border-black bg-black text-white">
-                              Preset 5MB
-                            </span>
-                          )}
-                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-black bg-neutral-100 text-black">
-                            {item.platform}
-                          </span>
-                          <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-black bg-neutral-100 text-neutral-700">
-                            {item.size}
-                          </span>
-                          {item.isDirectLink ? (
-                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-black bg-white text-black">
-                              Tautan di Video
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded border border-neutral-300 bg-neutral-50 text-neutral-600">
-                              Terdeteksi
-                            </span>
-                          )}
-                        </div>
-
-                        <p className="text-xs text-neutral-600 leading-relaxed">
-                          {item.description}
-                        </p>
-
-                        <p className="text-[11px] font-mono text-neutral-500 truncate mt-1">
-                          {item.link}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Kolom Kanan: Tombol Buka / Pakai Template Langsung */}
-                    <div className="flex items-center gap-2 sm:self-center shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-black/15 flex-wrap">
-                      
-                      {/* Tombol Khusus CapCut */}
-                      {isCapcut && (
-                        <>
-                          <a
-                            href={item.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="min-h-[44px] px-3.5 py-2.5 rounded-lg text-xs font-extrabold bg-black hover:bg-neutral-800 text-white border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>Pakai di CapCut</span>
-                          </a>
-
-                          {item.inAppUrl && (
-                            <a
-                              href={item.inAppUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="min-h-[44px] px-3 py-2.5 rounded-lg text-xs font-bold bg-white hover:bg-neutral-100 text-black border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                              title="Buka video di aplikasi TikTok untuk menekan tombol template langsung"
-                            >
-                              <Smartphone className="w-3.5 h-3.5 stroke-[2.5]" />
-                              <span>Buka di TikTok</span>
-                            </a>
-                          )}
-                        </>
-                      )}
-
-                      {/* Tombol Utama Alight Motion */}
-                      {is5MB && (
-                        <a
-                          href={item.downloadUrl || item.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="min-h-[44px] px-3.5 py-2.5 rounded-lg text-xs font-extrabold bg-black hover:bg-neutral-800 text-white border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
-                          <span>Buka Alight</span>
-                        </a>
-                      )}
-
-                      {/* Tombol Utama Google Drive */}
-                      {isGdrive && (
-                        <>
-                          <a
-                            href={item.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="min-h-[44px] px-3.5 py-2.5 rounded-lg text-xs font-extrabold bg-black hover:bg-neutral-800 text-white border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>Buka Drive</span>
-                          </a>
-
-                          {item.downloadUrl && (
-                            <a
-                              href={item.downloadUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              download
-                              className="min-h-[44px] px-3 py-2.5 rounded-lg text-xs font-bold bg-white hover:bg-neutral-100 text-black border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                              title="Unduh berkas XML langsung"
-                            >
-                              <FolderDown className="w-3.5 h-3.5 stroke-[2.5]" />
-                              <span>Unduh XML</span>
-                            </a>
-                          )}
-                        </>
-                      )}
-
-                      {/* Tombol Salin Tautan */}
+                <div className="pt-2 border-t border-neutral-200 flex flex-col gap-2">
+                  {audio.audio_url ? (
+                    <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => handleCopy(item.link, item.id)}
-                        className="min-h-[44px] px-3.5 py-2.5 rounded-lg text-xs font-bold bg-white hover:bg-neutral-100 text-black border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                        title="Salin tautan preset atau template"
+                        onClick={() => togglePlayAudio(audio.audio_url)}
+                        className="py-2.5 px-4 rounded-xl border-2 border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-black flex items-center justify-center gap-1.5 cursor-pointer shadow-[1px_1px_0px_#000000]"
                       >
-                        {isCopied ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>Disalin</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5 stroke-[2.5]" />
-                            <span>Salin</span>
-                          </>
-                        )}
+                        {isPlayingAudio ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                        <span>{isPlayingAudio ? 'Jeda Suara' : 'Pratinjau'}</span>
                       </button>
-                    </div>
 
-                  </div>
-                );
-              })
+                      <a
+                        href={audio.audio_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        download="sound_jj_kuro.mp3"
+                        className="flex-1 py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
+                      >
+                        <Download className="w-4 h-4 text-emerald-400" />
+                        <span>Unduh MP3</span>
+                      </a>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(inputQuery, 'audio')}
+                      className="w-full py-2.5 px-4 rounded-xl border-2 border-black bg-neutral-100 hover:bg-neutral-200 text-black text-xs font-mono font-bold flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      {copiedId === 'audio' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>Salin Info Sound</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
+
           </div>
 
-        </div>
-      )}
-
-      {/* Floating Toast Alert */}
-      {toastMessage && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-lg bg-black text-white border-2 border-black text-xs font-bold font-mono shadow-[4px_4px_0px_#000000] flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-white" />
-          <span>{toastMessage}</span>
         </div>
       )}
 

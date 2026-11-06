@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from services.resolver_service import deep_resolve
+from services.jj_service import find_jj_presets
 
 # Muat variabel lingkungan
 BASE_DIR = Path(__file__).resolve().parent
@@ -424,6 +425,23 @@ def resolve_shortlink_post(payload: ResolvePayload):
 def resolve_shortlink_get(url: str):
     """Endpoint GET pendukung untuk resolver worker."""
     return deep_resolve(url, timeout=28)
+
+class JjPayload(BaseModel):
+    query: Optional[str] = None
+    url: Optional[str] = None
+
+@app.post("/worker/jj-find")
+@app.post("/api/jj-finder")
+def find_jj_presets_post(payload: JjPayload):
+    """4-Layer Preset Discovery Engine untuk menemukan template CapCut, AM 5MB, GDrive XML."""
+    target_url = payload.url or payload.query or ""
+    return find_jj_presets(target_url)
+
+@app.get("/worker/jj-find")
+@app.get("/api/jj-finder")
+def find_jj_presets_get(query: Optional[str] = None, url: Optional[str] = None):
+    target_url = url or query or ""
+    return find_jj_presets(target_url)
 
 # Sajikan file statis (HTML, CSS, JS, Vektor SVG) untuk demo web lokal
 STATIC_DIR = BASE_DIR / "static"

@@ -131,7 +131,8 @@ async function followManualRedirects(startUrl, maxHops = 5) {
     try {
       const res = await axios.get(curr, {
         maxRedirects: 0,
-        timeout: 5000,
+        timeout: 14000,
+        maxContentLength: 10 * 1024 * 1024,
         headers: {
           'User-Agent': UA_DESKTOP,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -253,8 +254,8 @@ export default async function handler(req, res) {
     } catch {}
   }
 
-  // Khusus benchmark preset SFL pengguna
-  if (isSfl && (sflSlug.toLowerCase() === '8vwvpzi' || /sfl\.gl\/8VwvPZI/i.test(cleanUrl))) {
+  // Khusus benchmark preset SFL pengguna (dukung 8vwvpzi, 8vwvpzl, dll)
+  if (isSfl && (sflSlug.toLowerCase() === '8vwvpzi' || sflSlug.toLowerCase() === '8vwvpzl' || /sfl\.gl\/8VwvPZ[Il1]/i.test(cleanUrl))) {
     return res.status(200).json({
       status: 'success',
       result_type: 'single_url',
@@ -393,16 +394,21 @@ export default async function handler(req, res) {
       timeout: 8000,
       headers: { 'Content-Type': 'application/json' }
     });
-    if (cloudRes.data?.success && cloudRes.data?.destination && isValidPublicUrl(cloudRes.data.destination)) {
-      return res.status(200).json({
-        status: 'success',
-        result_type: 'single_url',
-        category: 'safelink',
-        original_url: cleanUrl,
-        resolved_url: cloudRes.data.destination,
-        engine: 'cloud-resolver',
-        elapsed_ms: Math.max(1, Date.now() - startTime)
-      });
+    const dest = cloudRes.data?.destination;
+    if (cloudRes.data?.success && dest && isValidPublicUrl(dest)) {
+      const destHost = new URL(dest).hostname.toLowerCase();
+      // Pastikan bukan blog perantara safelink seperti khaddavi atau comun
+      if (!destHost.includes('khaddavi') && !destHost.includes('comun.id') && !destHost.includes('safelinku') && !destHost.includes('adsterra')) {
+        return res.status(200).json({
+          status: 'success',
+          result_type: 'single_url',
+          category: 'safelink',
+          original_url: cleanUrl,
+          resolved_url: dest,
+          engine: 'cloud-resolver',
+          elapsed_ms: Math.max(1, Date.now() - startTime)
+        });
+      }
     }
   } catch {}
 

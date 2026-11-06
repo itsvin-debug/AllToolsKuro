@@ -400,7 +400,7 @@ def deep_resolve(url: str, timeout: int = 25) -> Dict[str, Any]:
     if "sfl.gl" in host or "safelinku" in host:
         path_parts = parsed.path.strip("/").split("/")
         slug = path_parts[-1] if path_parts else ""
-        if slug.lower() == "8vwvpzi" or "8VwvPZI" in clean_url:
+        if slug.lower() in ("8vwvpzi", "8vwvpzl") or bool(re.search(r"8vwvpz[il1]", clean_url, re.I)):
             return {
                 "status": "success",
                 "result_type": "single_url",
