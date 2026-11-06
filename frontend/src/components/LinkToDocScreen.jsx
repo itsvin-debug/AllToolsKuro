@@ -3,6 +3,7 @@ import axios from 'axios';
 import jsPDF from 'jspdf';
 import PptxGenJS from 'pptxgenjs';
 import CosmicBackButton from './CosmicBackButton';
+import { readClipboardText } from '../utils/clipboard';
 import { 
   FileText, 
   Presentation, 
@@ -107,26 +108,15 @@ export default function LinkToDocScreen({ onBack }) {
 
   // Tempel tautan dari clipboard tanpa popup prompt browser
   const handlePaste = async () => {
-    let text = '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        text = await navigator.clipboard.readText();
-      }
-    } catch {
-      // Permission API browser dibatasi
-    }
-
-    if (text && text.trim()) {
-      setUrl(text.trim());
+    const res = await readClipboardText();
+    if (res.success && res.text) {
+      setUrl(res.text);
       setErrorMessage('');
       if (inputRef.current) inputRef.current.focus();
       onShowToast?.('Tautan dokumen berhasil ditempel!');
     } else {
-      if (inputRef.current) {
-        inputRef.current.focus();
-        try { document.execCommand('paste'); } catch {}
-      }
-      onShowToast?.('Tekan lama pada kolom input untuk menempel tautan.');
+      if (inputRef.current) inputRef.current.focus();
+      onShowToast?.(res.message || 'Papan klip masih kosong.');
     }
   };
 

@@ -1225,7 +1225,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       {!isMultiContentPost && hasVideo && (
         <div className="w-full bg-white border-2 border-black rounded-xl p-5 sm:p-6 shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row gap-5 items-start text-black">
           
-          <div className="w-full max-w-[280px] sm:max-w-[320px] aspect-[9/16] rounded-xl bg-black border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[3px_3px_0px_#000000]">
+          <div className="w-full max-w-[320px] sm:max-w-[360px] h-[380px] sm:h-[440px] rounded-xl bg-neutral-950 border-2 border-black overflow-hidden relative shrink-0 flex items-center justify-center mx-auto md:mx-0 shadow-[3px_3px_0px_#000000]">
             {videoPreviewUrl ? (
               <video
                 ref={videoRef}
@@ -1236,13 +1236,13 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                 controls
                 playsInline
                 onLoadedMetadata={handleVideoMetadata}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain"
               />
             ) : result.thumbnail ? (
               <img
                 src={result.thumbnail}
                 alt={result.title}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain"
                 referrerPolicy="no-referrer"
               />
             ) : (

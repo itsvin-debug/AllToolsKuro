@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import CosmicBackButton from './CosmicBackButton';
 import { logHistoryItem } from '../services/storageService';
+import { readClipboardText } from '../utils/clipboard';
 
 // Definisi 5 tahapan alur kerja bypass safelink (sesuai indikator step-by-step)
 const RESOLVER_STEPS = [
@@ -85,26 +86,15 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
   ];
 
   const handlePaste = async () => {
-    let text = '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        text = await navigator.clipboard.readText();
-      }
-    } catch {
-      // Permission clipboard dibatasi oleh browser
-    }
-
-    if (text && text.trim()) {
-      setUrlInput(text.trim());
+    const res = await readClipboardText();
+    if (res.success && res.text) {
+      setUrlInput(res.text);
       setErrorMessage('');
       if (inputRef.current) inputRef.current.focus();
       onShowToast?.('Tautan berhasil ditempel!');
     } else {
-      if (inputRef.current) {
-        inputRef.current.focus();
-        try { document.execCommand('paste'); } catch {}
-      }
-      onShowToast?.('Tekan lama pada kolom input untuk menempel tautan.');
+      if (inputRef.current) inputRef.current.focus();
+      onShowToast?.(res.message || 'Papan klip masih kosong.');
     }
   };
 

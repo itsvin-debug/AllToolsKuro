@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import ResultsSection from './ResultsSection';
 import { translations } from '../utils/translations';
+import { readClipboardText } from '../utils/clipboard';
 
 export default function ConverterScreen({ activePlatform: initialPlatform = 'tiktok', onSelectPlatform, onBack, lang = 'id', onShowToast }) {
   const isEn = lang === 'en';
@@ -221,26 +222,15 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   }, []);
 
   const handlePasteClipboard = async () => {
-    let pastedText = '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        pastedText = await navigator.clipboard.readText();
-      }
-    } catch {
-      // Permission API clipboard browser dibatasi
-    }
-
-    if (pastedText && pastedText.trim()) {
-      handleUrlChange(pastedText.trim());
+    const res = await readClipboardText();
+    if (res.success && res.text) {
+      handleUrlChange(res.text);
       setErrorMsg('');
       if (inputRef.current) inputRef.current.focus();
       onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
     } else {
-      if (inputRef.current) {
-        inputRef.current.focus();
-        try { document.execCommand('paste'); } catch {}
-      }
-      onShowToast?.(isEn ? 'Tekan lama pada kolom input untuk menempel tautan.' : 'Tekan lama pada kolom input untuk menempel tautan.');
+      if (inputRef.current) inputRef.current.focus();
+      onShowToast?.(res.message || (isEn ? 'Clipboard is empty.' : 'Papan klip masih kosong.'));
     }
   };
 

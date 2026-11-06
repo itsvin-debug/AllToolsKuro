@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import CosmicBackButton from './CosmicBackButton';
 import { addGalleryItem } from '../services/storageService';
+import { readClipboardText } from '../utils/clipboard';
 import { 
   Flame, 
   Search, 
@@ -73,26 +74,15 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
 
   // Penempelan dari clipboard langsung tanpa prompt sekunder
   const handlePaste = async () => {
-    let text = '';
-    try {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        text = await navigator.clipboard.readText();
-      }
-    } catch {
-      // Permission API browser dibatasi
-    }
-
-    if (text && text.trim()) {
-      setInputQuery(text.trim());
+    const res = await readClipboardText();
+    if (res.success && res.text) {
+      setInputQuery(res.text);
       setError('');
       if (inputRef.current) inputRef.current.focus();
       if (onShowToast) onShowToast('Tautan video berhasil ditempel!');
     } else {
-      if (inputRef.current) {
-        inputRef.current.focus();
-        try { document.execCommand('paste'); } catch {}
-      }
-      if (onShowToast) onShowToast('Tekan lama pada kolom input untuk menempel tautan.');
+      if (inputRef.current) inputRef.current.focus();
+      if (onShowToast) onShowToast(res.message || 'Papan klip masih kosong.');
     }
   };
 
