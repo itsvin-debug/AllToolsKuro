@@ -231,7 +231,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { message = '' } = req.body || {};
+    let rawBody = req.body;
+    if (typeof rawBody === 'string') {
+      try {
+        rawBody = JSON.parse(rawBody);
+      } catch {
+        rawBody = {};
+      }
+    }
+
+    const message = (rawBody && typeof rawBody === 'object' && typeof rawBody.message === 'string')
+      ? rawBody.message
+      : (req.query && typeof req.query.message === 'string' ? req.query.message : '');
+
     const cleanMsg = message.trim();
     const lowerMsg = cleanMsg.toLowerCase();
 
@@ -375,8 +387,9 @@ export default async function handler(req, res) {
     });
 
   } catch (err) {
-    return res.status(500).json({
+    return res.status(200).json({
       reply: '? Maaf, terjadi kendala teknis sesaat. Silakan tanyakan kembali seputar fitur AllToolsKuro!',
+      error: err.message,
       is_valid_context: false,
       isValidContext: false,
       animation: 'confused',
