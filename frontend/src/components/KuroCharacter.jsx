@@ -16,6 +16,7 @@ export default function KuroCharacter({ state = 'idle', size = 80, className = '
   const isWaving = state === 'wave';
   const isConfused = state === 'confused';
   const isThinking = state === 'thinking';
+  const isAngry = state === 'angry';
 
   return (
     <div 
@@ -54,6 +55,10 @@ export default function KuroCharacter({ state = 'idle', size = 80, className = '
           0%, 100% { transform: translateY(0px) scale(1); }
           50% { transform: translateY(-3px) scale(1.08); }
         }
+        @keyframes kuro-anger-vein {
+          0%, 100% { transform: scale(1) rotate(0deg); }
+          50% { transform: scale(1.18) rotate(5deg); }
+        }
         .anim-kuro-body {
           animation: kuro-float 3.5s ease-in-out infinite;
           transform-origin: center bottom;
@@ -78,6 +83,10 @@ export default function KuroCharacter({ state = 'idle', size = 80, className = '
         }
         .anim-kuro-question {
           animation: kuro-question 1.5s ease-in-out infinite;
+          transform-origin: center;
+        }
+        .anim-kuro-anger {
+          animation: kuro-anger-vein 0.75s ease-in-out infinite;
           transform-origin: center;
         }
       `}</style>
@@ -263,6 +272,15 @@ export default function KuroCharacter({ state = 'idle', size = 80, className = '
           ) : isThinking ? (
             /* Mulut Sedikit Terbuka Memikirkan Jawaban */
             <ellipse cx="120" cy="149" rx="2.5" ry="3.5" fill="#be123c" stroke="#1e1826" strokeWidth="1.5" />
+          ) : isAngry ? (
+            /* Mulut Cemberut / Pout Marah */
+            <path
+              d="M 114 151 Q 120 146 126 151"
+              fill="none"
+              stroke="#1e1826"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            />
           ) : (
             /* Senyum Manis Default */
             <path
@@ -417,6 +435,14 @@ export default function KuroCharacter({ state = 'idle', size = 80, className = '
             <g transform="translate(56, 80)" className="anim-kuro-sparkle" style={{ animationDelay: '0.6s' }}>
               <polygon points="0,-5 1.5,-1.5 5,0 1.5,1.5 0,5 -1.5,1.5 -5,0 -1.5,-1.5" fill="#f472b6" stroke="#db2777" strokeWidth="1" />
             </g>
+          </g>
+        )}
+
+        {/* ─── 11. EFEK VISUAL EKSPRESI: MARAH / NGAMBEK (ANGRY) ─── */}
+        {isAngry && (
+          <g transform="translate(182, 70)" className="anim-kuro-anger">
+            <rect x="-3" y="-3" width="26" height="26" rx="6" fill="#fee2e2" stroke="#dc2626" strokeWidth="2" />
+            <text x="10" y="17" textAnchor="middle" fontSize="16" fontWeight="900" fill="#dc2626" fontFamily="sans-serif">💢</text>
           </g>
         )}
       </svg>

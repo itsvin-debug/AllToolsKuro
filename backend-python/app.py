@@ -186,16 +186,21 @@ TOUR_ORDER = [
 
 class ChatRequest(BaseModel):
     message: str
+    user_name: Optional[str] = "Kawan"
     history: Optional[List[Dict[str, str]]] = []
+    warning_count: Optional[int] = 1
+    device_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     reply: str
     is_valid_context: bool
-    animation: str  # 'idle' | 'wave' | 'talking' | 'confused' | 'thinking'
+    animation: str  # 'idle' | 'wave' | 'talking' | 'confused' | 'thinking' | 'angry'
     action: str     # 'none' | 'navigate_tool' | 'start_tour'
     target_element: Optional[str] = None
     target_tool: Optional[str] = None
     tour_sequence: Optional[List[str]] = None
+    warning_level: Optional[int] = None
+    is_abusive: Optional[bool] = None
 
 def clean_speech_text(text: str) -> str:
     """Membersihkan format markdown mentah agar ucapan bot natural."""
@@ -248,26 +253,36 @@ def is_gibberish_or_random(text: str) -> bool:
         return True
     return False
 
+def is_friendly_greeting(text: str) -> bool:
+    """Mendeteksi apakah pesan merupakan sapaan ramah."""
+    clean = text.lower().strip()
+    if clean in ["p", "halo", "hai", "hi", "hei"]:
+        return True
+    return bool(re.search(r'\b(halo|hai|hi|hei|salam|assalamualaikum|pagi|siang|sore|malam|halo kuro|hai kuro|kurobot|kuro)\b', clean))
+
 def is_alltoolskuro_topic(text: str) -> bool:
-    """Memastikan pertanyaan berkaitan langsung dengan ekosistem AllToolsKuro."""
+    """Memastikan pertanyaan berkaitan langsung dengan ekosistem AllToolsKuro atau sapaan."""
     clean = text.lower()
     
+    if is_friendly_greeting(clean):
+        return True
+
     full_keywords = [
         "kuro", "kurobot", "alltoolskuro", "alltools", "studio", "fitur", "alat", "tool", 
-        "menu", "panduan", "cara pakai", "cara menggunakan", "bantuan", "tour", "tur",
-        "safelink", "bypass", "bypasser", "sfl", "sfl.gl", "safelinku", "ouo", "bitly", "shortlink", "resolver",
+        "menu", "panduan", "cara pakai", "cara menggunakan", "gmn cara", "gimana cara", "cara pakenya", "bantuan", "tour", "tur",
+        "safelink", "bypass", "bypasser", "sfl", "sfl.gl", "safelinku", "ouo", "bitly", "shortlink", "resolver", "lewati", "iklan",
         "capcut", "template", "template capcut", "jedag jedug", "jedag-jedug",
         "preset", "alight motion", "preset am", "xml", "google drive", "drive xml",
-        "download", "downloader", "unduh", "tiktok", "instagram", "youtube", "status wa", "anti burik",
-        "png to pdf", "pdf", "ppt", "dokumen", "scribd", "slideshare", "doc",
-        "image to link", "file ke link", "kompres", "compress", "qrcode",
+        "download", "downloader", "unduh", "donlod", "tiktok", "instagram", "youtube", "status wa", "anti burik",
+        "png to pdf", "pdf", "ppt", "dokumen", "scribd", "slideshare", "doc", "bikin pdf",
+        "image to link", "file ke link", "kompres", "compress", "kecilkan", "qrcode",
         "audio", "musik", "lagu", "merger", "photo studio", "video studio", "trimmer", "potong video",
-        "hapus background", "bg remover", "transparan", "gratis", "update", "pembaruan", "apk", "aplikasi"
+        "hapus background", "bg remover", "hapus bg", "transparan", "gratis", "update", "pembaruan", "apk", "aplikasi"
     ]
     if any(kw in clean for kw in full_keywords):
         return True
 
-    short_keywords = ["ig", "yt", "am", "sw", "jj", "qr"]
+    short_keywords = ["ig", "yt", "am", "sw", "jj", "qr", "tt"]
     for sk in short_keywords:
         if re.search(r'\b' + re.escape(sk) + r'\b', clean):
             return True
@@ -286,20 +301,43 @@ def health_check():
 def handle_chat(req: ChatRequest):
     message = req.message.strip()
     lower_msg = message.lower()
+    user_name = (req.user_name or "Kawan").strip()
+    w_count = req.warning_count if req.warning_count and 1 <= req.warning_count <= 3 else 1
 
-    # 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN
+    # 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN (SISTEM ANGER BERJENJANG)
     if is_profane_or_abusive(lower_msg):
+        if w_count == 2:
+            anger_reply = f"? Heh! Masih berani berkata seperti itu?! Ini peringatan ke-2 ya, {user_name}! Kalau sekali lagi kamu kasar, aku bakal ngambek dan nggak mau bicara sama kamu selama 30 menit (2/3)!"
+        elif w_count >= 3:
+            anger_reply = f"? Hmph! Kamu keterlaluan banget, {user_name}! Aku ngambek total dan nggak mau ngobrol sama kamu selama 30 menit! Hmph! (3/3)"
+        else:
+            anger_reply = f"? Eh... tolong jangan berkata kasar atau tidak sopan ya, {user_name}! Aku beri peringatan pertama nih (1/3)!"
+
         return ChatResponse(
-            reply="? Maaf, kata-kata tersebut tidak pantas. Saya hanya asisten khusus untuk membantu fitur dan panduan navigasi di AllToolsKuro!",
+            reply=anger_reply,
             is_valid_context=False,
-            animation="confused",
+            animation="angry",
+            action="none",
+            target_tool=None,
+            target_element=None,
+            tour_sequence=None,
+            warning_level=w_count,
+            is_abusive=True
+        )
+
+    # 2. DETEKSI SAPAAN RAMAH
+    if is_friendly_greeting(lower_msg):
+        return ChatResponse(
+            reply=f"Halo {user_name}! Kuro siap menemani petualanganmu di AllToolsKuro! Mau dibantu unduh video tanpa watermark, lewati tautan safelink iklan, cari template CapCut & preset AM, atau konversi dokumen? Tanyakan saja pada Kuro!",
+            is_valid_context=True,
+            animation="wave",
             action="none",
             target_tool=None,
             target_element=None,
             tour_sequence=None
         )
 
-    # 2. FILTER TEKS ACAK / RANDOM GIBBERISH
+    # 3. FILTER TEKS ACAK / RANDOM GIBBERISH
     if is_gibberish_or_random(message):
         return ChatResponse(
             reply="? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!",
@@ -311,7 +349,7 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 3. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
+    # 4. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
     if not is_alltoolskuro_topic(lower_msg):
         return ChatResponse(
             reply="? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya.",
@@ -323,7 +361,7 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 4. Deteksi Permintaan Tour Lengkap
+    # 5. DETEKSI TOUR FITUR LENGKAP
     tour_patterns = [r'\btour\b', r'\btur\b', r'semua fitur', r'jelaskan semua', r'keliling', r'panduan lengkap', r'demo semua']
     if any(re.search(pat, lower_msg) for pat in tour_patterns):
         first_tool = TOUR_ORDER[0]
@@ -335,6 +373,39 @@ def handle_chat(req: ChatRequest):
             target_tool=first_tool,
             target_element=f"tool-{first_tool}",
             tour_sequence=TOUR_ORDER
+        )
+
+    # 6. DETEKSI SINGKATAN CARA PAKE / PANDUAN
+    if any(re.search(r'\b' + re.escape(g) + r'\b', lower_msg) for g in ["gmn cara", "cara pakenya", "cara pakai", "gimana cara", "cara gunain", "bingung", "panduan"]):
+        guide_text = (
+            "Caranya sangat mudah! Pilih alat yang kamu butuhkan di beranda AllToolsKuro:\n"
+            "• Unduh video? Gunakan Media Downloader.\n"
+            "• Lewati iklan bertingkat? Gunakan Safelink Bypasser.\n"
+            "• Cari sound jedag-jedug viral? Gunakan Cari Link JJ.\n"
+            "• Satukan foto jadi PDF? Gunakan PNG to PDF.\n"
+            "Klik tombol 'Tour Web' jika ingin Kuro ajak keliling otomatis!"
+        )
+        return ChatResponse(
+            reply=guide_text,
+            is_valid_context=True,
+            animation="talking",
+            action="none",
+            target_tool=None,
+            target_element=None,
+            tour_sequence=None
+        )
+
+    # 7. DETEKSI SINGKATAN BIKIN PDF DARI FOTO
+    if any(re.search(r'\b' + re.escape(b) + r'\b', lower_msg) for b in ["bikin pdf", "foto ke pdf", "foto jd pdf", "gambar ke pdf", "png to pdf"]):
+        t_info = KURO_TOOLS["pngToPdf"]
+        return ChatResponse(
+            reply=f"Tentu saja! Fitur {t_info['name']} siap membantumu menyatukan banyak foto/gambar menjadi satu file PDF berkualitas tinggi dengan cepat.",
+            is_valid_context=True,
+            animation="talking",
+            action="navigate_tool",
+            target_tool="pngToPdf",
+            target_element=t_info["element_id"],
+            tour_sequence=None
         )
 
     # 5. Deteksi Fitur Safelink Bypasser / Resolver

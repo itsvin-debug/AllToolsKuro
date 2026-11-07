@@ -22,7 +22,13 @@ import {
   GitBranch,
   Clock
 } from 'lucide-react';
-import { getDeviceUserName, setDeviceUserName, setAdminAuth, isAdminAuthenticated } from '../services/storageService';
+import { 
+  getDeviceUserName, 
+  setDeviceUserName, 
+  validateNickname,
+  setAdminAuth, 
+  isAdminAuthenticated 
+} from '../services/storageService';
 import { translations } from '../utils/translations';
 
 /**
@@ -173,6 +179,29 @@ export default function KuroIdentityCard({
   });
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
+  const [nameError, setNameError] = useState('');
+  const nameInputRef = useRef(null);
+
+  // Auto-focus & scroll ke form nama saat diarahkan dari Chatbot atau aksi lain
+  useEffect(() => {
+    const handleFocusRequest = () => {
+      setIsEditingName(true);
+      setTimeout(() => {
+        const inputEl = document.getElementById('device-username-input') || nameInputRef.current;
+        if (inputEl) {
+          inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          inputEl.focus();
+          inputEl.classList.add('ring-2', 'ring-rose-500', 'animate-pulse');
+          setTimeout(() => {
+            inputEl.classList.remove('ring-2', 'ring-rose-500', 'animate-pulse');
+          }, 2000);
+        }
+      }, 150);
+    };
+
+    window.addEventListener('kuro_focus_username_input', handleFocusRequest);
+    return () => window.removeEventListener('kuro_focus_username_input', handleFocusRequest);
+  }, []);
 
   /**
    * Format jam lokal dengan deteksi zona waktu Indonesia (WIB, WITA, WIT)
@@ -576,6 +605,7 @@ export default function KuroIdentityCard({
                     type="button"
                     onClick={() => {
                       setNameInput(deviceUserName);
+                      setNameError('');
                       setIsEditingName(true);
                     }}
                     className="p-1 rounded border border-black bg-white hover:bg-neutral-200 text-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer"
@@ -589,12 +619,19 @@ export default function KuroIdentityCard({
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
-                  const trimmed = nameInput.trim();
-                  if (trimmed) {
-                    setDeviceUserName(trimmed);
-                    setDeviceUserNameState(trimmed);
-                    setIsEditingName(false);
+                  const validation = validateNickname(nameInput);
+                  if (!validation.isValid) {
+                    setNameError(validation.error);
+                    if (onShowToast) onShowToast(validation.error);
+                    return;
                   }
+
+                  setNameError('');
+                  setDeviceUserName(validation.sanitized);
+                  setDeviceUserNameState(validation.sanitized);
+                  setIsEditingName(false);
+                  window.dispatchEvent(new CustomEvent('kuro_username_updated', { detail: { name: validation.sanitized } }));
+                  if (onShowToast) onShowToast(`Nama panggilan "${validation.sanitized}" berhasil disimpan!`);
                 }}
                 className="p-2.5 rounded-lg border-2 border-black bg-neutral-50 shadow-[2px_2px_0px_#000000] space-y-2"
               >
@@ -606,14 +643,22 @@ export default function KuroIdentityCard({
                     {t.identity.deviceDetected}
                   </span>
                 </div>
+
                 <div className="flex items-center gap-1.5">
                   <input
+                    id="device-username-input"
+                    ref={nameInputRef}
                     type="text"
                     value={nameInput}
-                    onChange={(e) => setNameInput(e.target.value)}
-                    placeholder={t.identity.enterUsername}
-                    maxLength={30}
-                    className="flex-1 px-2.5 py-1.5 rounded border border-black text-xs font-semibold text-black placeholder:text-neutral-400 focus:outline-none focus:ring-1 focus:ring-black bg-white shadow-inner"
+                    onChange={(e) => {
+                      setNameInput(e.target.value);
+                      if (nameError) setNameError('');
+                    }}
+                    placeholder="Contoh: Vin (1 kata)"
+                    maxLength={15}
+                    className={`flex-1 px-2.5 py-1.5 rounded border text-xs font-semibold text-black placeholder:text-neutral-400 focus:outline-none bg-white shadow-inner ${
+                      nameError ? 'border-rose-500 ring-2 ring-rose-400' : 'border-black focus:ring-1 focus:ring-black'
+                    }`}
                     autoFocus={isEditingName}
                   />
                   <button
@@ -626,13 +671,23 @@ export default function KuroIdentityCard({
                   {isEditingName && (
                     <button
                       type="button"
-                      onClick={() => setIsEditingName(false)}
+                      onClick={() => {
+                        setNameError('');
+                        setIsEditingName(false);
+                      }}
                       className="px-2 py-1.5 rounded border border-black bg-white hover:bg-neutral-100 text-xs font-bold text-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer shrink-0"
                     >
                       {t.identity.adminCancel}
                     </button>
                   )}
                 </div>
+
+                {/* Pesan Error Validasi Neobrutalist */}
+                {nameError && (
+                  <div className="p-1.5 rounded bg-rose-50 border border-rose-500 text-rose-700 text-[10px] font-mono font-bold animate-in fade-in">
+                    ⚠️ {nameError}
+                  </div>
+                )}
               </form>
             )}
 

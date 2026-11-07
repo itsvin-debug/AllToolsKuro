@@ -51,6 +51,150 @@ export function setDeviceUserName(name) {
   localStorage.setItem('kuro_device_user_name', name);
 }
 
+/**
+ * Validasi ketat nama panggilan pengguna
+ * Aturan:
+ * - Hanya 1 kata pendek (tanpa spasi kalimat)
+ * - 2 - 15 karakter huruf alfabet
+ * - Tidak boleh mengandung angka atau simbol
+ * - Dilarang keras kata toxic, kata kotor, kelamin, dan nama binatang
+ */
+export function validateNickname(rawName) {
+  if (!rawName || typeof rawName !== 'string') {
+    return { isValid: false, error: 'Silakan masukkan nama panggilan Anda terlebih dahulu.' };
+  }
+
+  const trimmed = rawName.trim();
+
+  if (!trimmed) {
+    return { isValid: false, error: 'Nama panggilan tidak boleh kosong.' };
+  }
+
+  // Dilarang mengandung spasi (hanya boleh 1 kata nama panggilan pendek)
+  if (/\s/.test(trimmed)) {
+    return { isValid: false, error: 'Gunakan satu kata panggilan saja (bukan nama panjang atau kalimat).' };
+  }
+
+  // Dilarang angka
+  if (/\d/.test(trimmed)) {
+    return { isValid: false, error: 'Nama panggilan tidak boleh mengandung angka.' };
+  }
+
+  // Dilarang simbol / karakter khusus (hanya huruf alfabet a-z / A-Z)
+  if (!/^[a-zA-Z]+$/.test(trimmed)) {
+    return { isValid: false, error: 'Nama panggilan hanya boleh berisi huruf alfabet biasa.' };
+  }
+
+  // Batas panjang 2 - 15 karakter
+  if (trimmed.length < 2) {
+    return { isValid: false, error: 'Nama panggilan terlalu pendek (minimal 2 karakter).' };
+  }
+  if (trimmed.length > 15) {
+    return { isValid: false, error: 'Nama panggilan terlalu panjang (maksimal 15 karakter).' };
+  }
+
+  // Filter nama binatang
+  const animalPattern = /\b(anjing|asu|asw|babi|monyet|kunyuk|kampret|kucing|tikus|ular|celeng|buaya)\b/i;
+  if (animalPattern.test(trimmed)) {
+    return { isValid: false, error: 'Dilarang menggunakan nama binatang atau sebutan tidak wajar.' };
+  }
+
+  // Filter kata toxic, kelamin, rasisme, dan makian
+  const toxicPattern = /\b(kontol|memek|jembut|peler|pepek|itil|pantek|ngentot|ngentd|bangsat|bajingan|goblok|tolol|bego|idiot|bodoh|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|nigga|nigger|negro)\b/i;
+  if (toxicPattern.test(trimmed)) {
+    return { isValid: false, error: 'Nama mengandung kata tidak pantas atau dilarang. Harap gunakan nama yang sopan.' };
+  }
+
+  // Format huruf kapital di awal kata (Title Case)
+  const formatted = trimmed.charAt(0).toUpperCase() + trimmed.slice(1).toLowerCase();
+  return { isValid: true, sanitized: formatted };
+}
+
+function getDeviceAngerKey() {
+  return 'kuro_anger_state_' + getDeviceId();
+}
+
+/**
+ * Status sistem ngambek KuroBot (3-Strike System & 30 Menit Cooldown)
+ */
+export function getDeviceAngerState() {
+  if (typeof window === 'undefined') {
+    return { strikes: 0, angryUntil: 0, isAngry: false, remainingMs: 0 };
+  }
+
+  try {
+    const raw = localStorage.getItem(getDeviceAngerKey());
+    if (!raw) return { strikes: 0, angryUntil: 0, isAngry: false, remainingMs: 0 };
+
+    const parsed = JSON.parse(raw);
+    const strikes = Number(parsed.strikes) || 0;
+    const angryUntil = Number(parsed.angryUntil) || 0;
+    const now = Date.now();
+
+    if (angryUntil > now) {
+      return {
+        strikes,
+        angryUntil,
+        isAngry: true,
+        remainingMs: angryUntil - now
+      };
+    }
+
+    // Jika waktu ngambek sudah habis, reset status kembali normal
+    if (angryUntil > 0 && angryUntil <= now) {
+      resetDeviceAngerState();
+      return { strikes: 0, angryUntil: 0, isAngry: false, remainingMs: 0 };
+    }
+
+    return { strikes, angryUntil: 0, isAngry: false, remainingMs: 0 };
+  } catch {
+    return { strikes: 0, angryUntil: 0, isAngry: false, remainingMs: 0 };
+  }
+}
+
+/**
+ * Mencatat pelanggaran kata kasar / makian per perangkat
+ * Strike 1 & 2: Peringatan
+ * Strike 3: Ngambek total selama 30 menit
+ */
+export function recordDeviceStrike() {
+  if (typeof window === 'undefined') return { strikes: 1, isAngry: false, angryUntil: 0 };
+
+  const current = getDeviceAngerState();
+  const nextStrikes = Math.min((current.strikes || 0) + 1, 3);
+  let angryUntil = current.angryUntil || 0;
+
+  // Pelanggaran ke-3 memicu ngambek 30 menit
+  if (nextStrikes >= 3) {
+    angryUntil = Date.now() + 30 * 60 * 1000;
+  }
+
+  const payload = {
+    strikes: nextStrikes,
+    angryUntil,
+    lastViolationTime: Date.now()
+  };
+
+  try {
+    localStorage.setItem(getDeviceAngerKey(), JSON.stringify(payload));
+  } catch (e) {
+    console.warn('[Storage] Gagal menyimpan status ngambek:', e);
+  }
+
+  return {
+    strikes: nextStrikes,
+    isAngry: nextStrikes >= 3,
+    angryUntil
+  };
+}
+
+export function resetDeviceAngerState() {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(getDeviceAngerKey());
+  } catch {}
+}
+
 // Pengaturan default aplikasi
 export const DEFAULT_SETTINGS = {
   // A. General

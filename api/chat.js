@@ -182,25 +182,35 @@ function isGibberishOrRandom(text) {
   return false;
 }
 
-// Cek apakah pesan berkaitan langsung dengan ekosistem AllToolsKuro
+// Cek apakah pesan merupakan sapaan ramah
+function isFriendlyGreeting(text) {
+  const clean = text.toLowerCase().trim();
+  if (clean === 'p' || clean === 'halo' || clean === 'hai' || clean === 'hi' || clean === 'hei') return true;
+  return /\b(halo|hai|hi|hei|salam|assalamualaikum|pagi|siang|sore|malam|halo kuro|hai kuro|kurobot|kuro)\b/i.test(clean);
+}
+
+// Cek apakah pesan berkaitan langsung dengan ekosistem AllToolsKuro atau sapaan
 function isAllToolsKuroTopic(text) {
   const clean = text.toLowerCase();
 
+  // Sapaan ramah diizinkan
+  if (isFriendlyGreeting(clean)) return true;
+
   const fullKeywords = [
     'kuro', 'kurobot', 'alltoolskuro', 'alltools', 'studio', 'fitur', 'alat', 'tool', 
-    'menu', 'panduan', 'cara pakai', 'cara menggunakan', 'bantuan', 'tour', 'tur',
-    'safelink', 'bypass', 'bypasser', 'sfl', 'sfl.gl', 'safelinku', 'ouo', 'bitly', 'shortlink', 'resolver',
+    'menu', 'panduan', 'cara pakai', 'cara menggunakan', 'gmn cara', 'gimana cara', 'cara pakenya', 'bantuan', 'tour', 'tur',
+    'safelink', 'bypass', 'bypasser', 'sfl', 'sfl.gl', 'safelinku', 'ouo', 'bitly', 'shortlink', 'resolver', 'lewati', 'iklan',
     'capcut', 'template', 'template capcut', 'jedag jedug', 'jedag-jedug',
     'preset', 'alight motion', 'preset am', 'xml', 'google drive', 'drive xml',
-    'download', 'downloader', 'unduh', 'tiktok', 'instagram', 'youtube', 'status wa', 'anti burik',
-    'png to pdf', 'pdf', 'ppt', 'dokumen', 'scribd', 'slideshare', 'doc',
-    'image to link', 'file ke link', 'kompres', 'compress', 'qrcode',
+    'download', 'downloader', 'unduh', 'donlod', 'tiktok', 'instagram', 'youtube', 'status wa', 'anti burik',
+    'png to pdf', 'pdf', 'ppt', 'dokumen', 'scribd', 'slideshare', 'doc', 'bikin pdf',
+    'image to link', 'file ke link', 'kompres', 'compress', 'kecilkan', 'qrcode',
     'audio', 'musik', 'lagu', 'merger', 'photo studio', 'video studio', 'trimmer', 'potong video',
-    'hapus background', 'bg remover', 'transparan', 'gratis', 'update', 'pembaruan', 'apk', 'aplikasi'
+    'hapus background', 'bg remover', 'hapus bg', 'transparan', 'gratis', 'update', 'pembaruan', 'apk', 'aplikasi'
   ];
 
   // Kata kunci pendek wajib menggunakan word boundary agar tidak cocok dengan substring kata lain (misal "ig" di dalam "nigga")
-  const shortKeywords = ['ig', 'yt', 'am', 'sw', 'jj', 'qr'];
+  const shortKeywords = ['ig', 'yt', 'am', 'sw', 'jj', 'qr', 'tt'];
 
   const hasFull = fullKeywords.some(kw => clean.includes(kw));
   if (hasFull) return true;
@@ -258,21 +268,51 @@ export default async function handler(req, res) {
       ? rawBody.message
       : (req.query && typeof req.query.message === 'string' ? req.query.message : '');
 
+    const userName = (rawBody && typeof rawBody.userName === 'string' && rawBody.userName.trim())
+      ? rawBody.userName.trim()
+      : (req.query && typeof req.query.userName === 'string' ? req.query.userName.trim() : 'Kawan');
+
     const cleanMsg = message.trim();
     const lowerMsg = cleanMsg.toLowerCase();
 
-    // 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN
+    // 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN (SISTEM ANGER BERJENJANG)
     if (isProfaneOrAbusive(lowerMsg)) {
+      const wCount = (typeof rawBody.warningCount === 'number' && rawBody.warningCount >= 1 && rawBody.warningCount <= 3) 
+        ? rawBody.warningCount 
+        : 1;
+
+      let angerReply = `? Eh... tolong jangan berkata kasar atau tidak sopan ya, ${userName}! Aku beri peringatan pertama nih (1/3)!`;
+      if (wCount === 2) {
+        angerReply = `? Heh! Masih berani berkata seperti itu?! Ini peringatan ke-2 ya, ${userName}! Kalau sekali lagi kamu kasar, aku bakal ngambek dan nggak mau bicara sama kamu selama 30 menit (2/3)!`;
+      } else if (wCount >= 3) {
+        angerReply = `? Hmph! Kamu keterlaluan banget, ${userName}! Aku ngambek total dan nggak mau ngobrol sama kamu selama 30 menit! Hmph! (3/3)`;
+      }
+
       return res.status(200).json({
-        reply: '? Maaf, kata-kata tersebut tidak pantas. Saya hanya asisten khusus untuk membantu fitur dan panduan navigasi di AllToolsKuro!',
+        reply: angerReply,
         is_valid_context: false,
         isValidContext: false,
-        animation: 'confused',
+        is_abusive: true,
+        isAbusive: true,
+        warning_level: wCount,
+        warningLevel: wCount,
+        animation: 'angry',
         action: 'none'
       });
     }
 
-    // 2. FILTER TEKS ACAK / RANDOM GIBBERISH
+    // 2. DETEKSI SAPAAN RAMAH (GREETING)
+    if (isFriendlyGreeting(lowerMsg)) {
+      return res.status(200).json({
+        reply: `Halo ${userName}! Kuro siap menemani petualanganmu di AllToolsKuro! Mau dibantu unduh video tanpa watermark, lewati tautan safelink iklan, cari template CapCut & preset AM, atau konversi dokumen? Tanyakan saja pada Kuro!`,
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'wave',
+        action: 'none'
+      });
+    }
+
+    // 3. FILTER TEKS ACAK / RANDOM GIBBERISH
     if (isGibberishOrRandom(cleanMsg)) {
       return res.status(200).json({
         reply: '? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!',
@@ -283,7 +323,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
+    // 4. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
     if (!isAllToolsKuroTopic(lowerMsg)) {
       return res.status(200).json({
         reply: '? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya.',
@@ -294,7 +334,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4. DETEKSI TOUR FITUR LENGKAP
+    // 5. DETEKSI TOUR FITUR LENGKAP
     const isTourRequest = /\b(tour|tur|keliling|panduan lengkap|semua fitur|jelaskan semua|demo semua)\b/i.test(lowerMsg);
     if (isTourRequest) {
       const first = TOUR_ORDER[0];
@@ -313,8 +353,35 @@ export default async function handler(req, res) {
       });
     }
 
-    // 5. DETEKSI FITUR SPESIFIK: SAFELINK BYPASSER / RESOLVER
-    if (lowerMsg.includes('safelink') || lowerMsg.includes('bypass') || lowerMsg.includes('shortlink') || lowerMsg.includes('sfl') || lowerMsg.includes('resolver')) {
+    // 6. DETEKSI SINGKATAN & PERTANYAAN CARA PAKAI / PANDUAN
+    if (/\b(gmn cara|cara pakenya|cara pakai|gimana cara|cara gunain|bingung|panduan)\b/i.test(lowerMsg) && !detectToolMention(lowerMsg)) {
+      return res.status(200).json({
+        reply: 'Caranya sangat mudah! Pilih alat yang kamu butuhkan di beranda AllToolsKuro:\n• Unduh video? Gunakan Media Downloader.\n• Lewati iklan bertingkat? Gunakan Safelink Bypasser.\n• Cari sound jedag-jedug viral? Gunakan Cari Link JJ.\n• Satukan foto jadi PDF? Gunakan PNG to PDF.\nKlik tombol "Tour Web" jika ingin Kuro ajak keliling otomatis!',
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'talking',
+        action: 'none'
+      });
+    }
+
+    // 7. DETEKSI SINGKATAN BIKIN PDF DARI FOTO
+    if (/\b(bikin pdf|foto ke pdf|foto jd pdf|gambar ke pdf|png to pdf)\b/i.test(lowerMsg)) {
+      const tool = KURO_TOOLS['pngToPdf'];
+      return res.status(200).json({
+        reply: `Tentu saja! Fitur ${tool.name} siap membantumu menyatukan banyak foto/gambar menjadi satu file PDF berkualitas tinggi dengan cepat.`,
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'talking',
+        action: 'navigate_tool',
+        target_tool: 'pngToPdf',
+        targetTool: 'pngToPdf',
+        target_element: tool.element_id,
+        targetElement: tool.element_id
+      });
+    }
+
+    // 8. DETEKSI FITUR SPESIFIK: SAFELINK BYPASSER / RESOLVER
+    if (lowerMsg.includes('safelink') || lowerMsg.includes('bypass') || lowerMsg.includes('shortlink') || lowerMsg.includes('sfl') || lowerMsg.includes('resolver') || lowerMsg.includes('lewati')) {
       const tool = KURO_TOOLS['resolver'];
       return res.status(200).json({
         reply: `Tentu saja! Ini dia fitur ${tool.name}. ${tool.desc} Tempelkan tautan safelink Anda untuk langsung mendapatkan link unduhan asli tanpa iklan bertingkat!`,
@@ -329,7 +396,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 6. DETEKSI FITUR SPESIFIK: TEMPLATE CAPCUT / PRESET ALIGHT MOTION / XML GOOGLE DRIVE
+    // 9. DETEKSI FITUR SPESIFIK: TEMPLATE CAPCUT / PRESET ALIGHT MOTION / XML GOOGLE DRIVE
     if (lowerMsg.includes('capcut') || lowerMsg.includes('alight motion') || lowerMsg.includes('xml') || lowerMsg.includes('preset') || lowerMsg.includes('jj') || lowerMsg.includes('jedag')) {
       const tool = KURO_TOOLS['jjFinder'];
       return res.status(200).json({
@@ -340,6 +407,22 @@ export default async function handler(req, res) {
         action: 'navigate_tool',
         target_tool: 'jjFinder',
         targetTool: 'jjFinder',
+        target_element: tool.element_id,
+        targetElement: tool.element_id
+      });
+    }
+
+    // 10. DETEKSI SINGKATAN MEDIA DOWNLOADER (DONLOD TT, UNDUH YT, IG)
+    if (/\b(donlod|unduh|download|tt|tiktok|ig|yt|sw)\b/i.test(lowerMsg)) {
+      const tool = KURO_TOOLS['downloader'];
+      return res.status(200).json({
+        reply: `Siap! Untuk mengunduh video, slide foto, atau musik tanpa watermark (TikTok, IG, YouTube, Status WA Anti-Burik), gunakan fitur ${tool.name}.`,
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'talking',
+        action: 'navigate_tool',
+        target_tool: 'downloader',
+        targetTool: 'downloader',
         target_element: tool.element_id,
         targetElement: tool.element_id
       });
