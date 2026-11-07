@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Capacitor } from '@capacitor/core';
 import { 
   ArrowLeft, 
   ChevronDown,
@@ -18,9 +17,12 @@ import {
   Images,
   Home,
   History,
-  Settings
+  Settings,
+  RefreshCw
 } from 'lucide-react';
 import { translations } from '../utils/translations';
+import { useAppUpdate } from '../hooks/useAppUpdate';
+import UpdateModal from './UpdateModal';
 
 export default function Navbar({ 
   currentScreen, 
@@ -30,19 +32,8 @@ export default function Navbar({
   settings 
 }) {
   const [toolsDropdownOpen, setToolsDropdownOpen] = useState(false);
-  const [isNativeApp, setIsNativeApp] = useState(false);
   const dropdownRef = useRef(null);
-
-  useEffect(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const native = Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
-        setIsNativeApp(native);
-      }
-    } catch {
-      setIsNativeApp(false);
-    }
-  }, []);
+  const appUpdate = useAppUpdate();
 
   const lang = settings?.language || 'id';
   const t = translations[lang] || translations.id;
@@ -156,11 +147,11 @@ export default function Navbar({
             })}
           </nav>
 
-          {/* Tombol Unduh APK & Cari atau Tool Switcher */}
+          {/* Tombol Unduh APK / Update & Cari atau Tool Switcher */}
           {isMainTab ? (
             <div className="flex items-center gap-1.5 sm:gap-2">
-              {/* Tombol Unduh APK (Hanya tampil di web browser, otomatis hilang jika dibuka di native APK) */}
-              {!isNativeApp && (
+              {/* Versi Web: Tombol Unduh APK */}
+              {!appUpdate.isNativeApp ? (
                 <a
                   href="/AllToolsKuro.apk"
                   download="AllToolsKuro.apk"
@@ -170,6 +161,27 @@ export default function Navbar({
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" />
                   <span className="whitespace-nowrap">{t.nav.downloadApk || 'Unduh APK'}</span>
                 </a>
+              ) : (
+                /* Versi Aplikasi Android: Tombol Update dengan Pulse & Red Dot Badge */
+                <button
+                  type="button"
+                  onClick={appUpdate.openModal}
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black bg-white text-black font-bold text-xs sm:text-sm hover:bg-neutral-100 transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer relative select-none ${
+                    appUpdate.hasUpdate ? 'ring-2 ring-blue-500/70 bg-blue-50/70 animate-pulse' : ''
+                  }`}
+                  title={appUpdate.hasUpdate ? 'Pembaruan aplikasi tersedia! Klik untuk update' : 'Versi aplikasi sudah terbaru'}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] text-blue-600 ${appUpdate.isChecking ? 'animate-spin' : ''}`} />
+                  <span className="whitespace-nowrap">Update</span>
+
+                  {/* Dot Notification Badge Titik Merah Dinamis */}
+                  {appUpdate.hasUpdate && (
+                    <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-600 border border-black"></span>
+                    </span>
+                  )}
+                </button>
               )}
 
               <button
@@ -242,6 +254,18 @@ export default function Navbar({
         </div>
 
       </div>
+
+      {/* Modal Pembaruan Aplikasi Android (#1a1a2e Anime Modern) */}
+      <UpdateModal
+        isOpen={appUpdate.showModal}
+        onClose={appUpdate.closeModal}
+        latestInfo={appUpdate.latestInfo}
+        localVersion={appUpdate.localVersion}
+        isDownloading={appUpdate.isDownloading}
+        downloadProgress={appUpdate.downloadProgress}
+        downloadStatus={appUpdate.downloadStatus}
+        onStartDownload={appUpdate.startDownloadUpdate}
+      />
     </header>
   );
 }

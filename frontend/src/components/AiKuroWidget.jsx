@@ -419,25 +419,24 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         }, anim);
       }
     } catch (err) {
-      console.warn('[AI Kuro] Request fallback:', err);
-      // Fallback ramah jika koneksi terputus atau pertanyaan di luar topik
+      console.warn('[KuroBot] Request fallback:', err);
       const lower = textToSend.toLowerCase();
-      const isOut = ['resep', 'masak', 'politik', 'presiden', 'matematika', 'rumus', 'sejarah', 'cuaca', 'ramalan', 'zodiak'].some(k => lower.includes(k));
-      
-      if (!isOut && (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl'))) {
-        handleGuideSpecificTool('resolver', 'Tentu saja! Ini dia fitur Safelink Resolver. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya tanpa menunggu iklan.');
+
+      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl')) {
+        handleGuideSpecificTool('resolver', 'Tentu saja! Ini dia fitur Safelink Bypasser. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya tanpa menunggu iklan.');
         return;
       }
 
-      const fallbackMsg = isOut
-        ? 'Maaf ya, Kuro hanya bisa membantu menjelaskan seputar fitur-fitur dan cara penggunaan website ini! Fufufu~ Coba tanyakan salah satu dari 13 fitur hebat kami.'
-        : 'Halo! Aku AI Kuro, asisten penyihir penjelajah yang siap membantumu. Mau tahu penjelasan seputar 13 fitur Kuro Studio?';
-      
-      const anim = isOut ? 'confused' : 'talking';
-      setAnimState(anim);
+      if (lower.includes('capcut') || lower.includes('template') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('xml')) {
+        handleGuideSpecificTool('jjFinder', 'Tentu! Fitur Cari Link JJ menyediakan ribuan template CapCut, preset Alight Motion, dan file XML Google Drive yang siap digunakan.');
+        return;
+      }
+
+      const fallbackMsg = '? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!';
+      setAnimState('confused');
       streamText(fallbackMsg, () => {
-        setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: anim }]);
-      }, anim);
+        setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: 'confused' }]);
+      }, 'confused');
     }
   };
 

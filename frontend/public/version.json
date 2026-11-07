@@ -1,0 +1,13 @@
+{
+  "latestVersion": "1.2.0",
+  "versionCode": 2,
+  "releaseNotes": "Penambahan fitur Safelink Bypasser dan ekstrak deep link CapCut.",
+  "features": [
+    "Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.",
+    "Ekstrak Deep Link CapCut & Preset Alight Motion pada Cari Link JJ.",
+    "Performa unduhan media lebih stabil dengan auto-reconnect."
+  ],
+  "apkUrl": "https://alltoolskuro.vercel.app/AllToolsKuro.apk",
+  "fileSize": "11.9 MB",
+  "publishedAt": "2026-11-07"
+}

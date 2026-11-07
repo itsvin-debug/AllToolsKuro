@@ -1,4 +1,4 @@
-// api/chat.js - Vercel Serverless Endpoint untuk AI Kuro (Persona Elaina)
+// api/chat.js - Vercel Serverless Endpoint untuk KuroBot (Maskot & Asisten AI AllToolsKuro)
 
 const KURO_TOOLS = {
   downloader: {
@@ -18,9 +18,10 @@ const KURO_TOOLS = {
     element_id: 'tool-jjFinder',
     keywords: [
       'jj', 'jedag jedug', 'sound jj', 'preset', 'remix', 'am', 'alight motion', 
-      'capcut jj', 'sound jedag', 'jedag-jedug', 'preset am', 'jedug'
+      'capcut jj', 'sound jedag', 'jedag-jedug', 'preset am', 'jedug', 'capcut',
+      'template capcut', 'xml', 'xml google drive', 'preset alight motion'
     ],
-    desc: 'Fitur Cari Link JJ untuk menemukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung siap pakai.'
+    desc: 'Fitur Cari Link JJ untuk menemukan ribuan sound jedag-jedug viral, template CapCut, preset Alight Motion, dan file XML Google Drive siap pakai untuk konten kreatifmu.'
   },
   pngToPdf: {
     id: 'pngToPdf',
@@ -124,15 +125,15 @@ const KURO_TOOLS = {
   },
   resolver: {
     id: 'resolver',
-    name: 'Safelink & Link Resolver',
+    name: 'Safelink Bypasser & Link Resolver',
     element_id: 'tool-resolver',
     keywords: [
       'resolver', 'safelink', 'shortlink', 'bypass link', 'lewati link', 'buka link',
       'resolve link', 'ouo', 'bitly', 's.id', 'linkvertise', 'adf.ly', 'url resolver',
       'sfl', 'sfl.gl', 'safelinku', 'bypass', 'lewati safelink', 'mediafire link',
-      'bypasser', 'link safelink', 'iklan link', 'lewati iklan', 'lewat link'
+      'bypasser', 'link safelink', 'iklan link', 'lewati iklan', 'lewat link', 'safelink bypasser'
     ],
-    desc: 'Fitur Safelink & Shortlink Resolver untuk melewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll), melewati countdown waktu dan iklan membingungkan agar langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan tanpa ribet.'
+    desc: 'Fitur Safelink Bypasser untuk melewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll), melewati hitungan waktu dan iklan membingungkan agar langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
   }
 };
 
@@ -155,6 +156,51 @@ function cleanSpeechText(text) {
     .trim();
 }
 
+// Deteksi kata kasar, makian, atau ujaran tidak pantas
+function isProfaneOrAbusive(text) {
+  const abusivePatterns = [
+    /\b(anjing|asw|asu|babi|kontol|memek|jembut|peler|pepek|bangsat|bajingan|pantek|itil)\b/i,
+    /\b(goblok|tolol|bego|idiot|bodoh|tai|taik|kampret|ngentot|ngentd|bokep|porno|sange)\b/i,
+    /\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker)\b/i
+  ];
+  return abusivePatterns.some(regex => regex.test(text));
+}
+
+// Deteksi teks acak atau simbol random tanpa arti (gibberish)
+function isGibberishOrRandom(text) {
+  const clean = text.trim();
+  if (!clean || clean.length < 2) return true;
+
+  // Hanya simbol berulang tanpa kata (contoh: ????, ....., !@#$)
+  if (/^[^a-zA-Z0-9\s]+$/.test(clean)) return true;
+
+  // Karakter berulang berlebihan (contoh: aaaaaaa, asdfgh, zzzzzz, wkwkwk tanpa konteks)
+  if (/^(.)\1{4,}$/.test(clean)) return true;
+  if (/^[b-df-hj-np-tv-z]{5,}$/i.test(clean)) return true;
+
+  return false;
+}
+
+// Cek apakah pesan berkaitan langsung dengan ekosistem AllToolsKuro
+function isAllToolsKuroTopic(text) {
+  const clean = text.toLowerCase();
+
+  const validKeywords = [
+    'kuro', 'kurobot', 'alltoolskuro', 'alltools', 'studio', 'fitur', 'alat', 'tool', 
+    'menu', 'panduan', 'cara pakai', 'cara menggunakan', 'bantuan', 'tour', 'tur',
+    'safelink', 'bypass', 'bypasser', 'sfl', 'sfl.gl', 'safelinku', 'ouo', 'bitly', 'shortlink', 'resolver',
+    'capcut', 'template', 'template capcut', 'jj', 'jedag', 'jedag jedug', 'jedag-jedug',
+    'preset', 'alight motion', 'am', 'preset am', 'xml', 'google drive', 'drive xml',
+    'download', 'downloader', 'unduh', 'tiktok', 'instagram', 'youtube', 'ig', 'yt', 'sw', 'status wa', 'anti burik',
+    'png to pdf', 'pdf', 'ppt', 'dokumen', 'scribd', 'slideshare', 'doc',
+    'image to link', 'file ke link', 'kompres', 'compress', 'qr', 'barcode', 'qrcode',
+    'audio', 'musik', 'lagu', 'merger', 'photo studio', 'video studio', 'trimmer', 'potong video',
+    'hapus background', 'bg remover', 'transparan', 'gratis', 'update', 'pembaruan', 'apk', 'aplikasi'
+  ];
+
+  return validKeywords.some(kw => clean.includes(kw));
+}
+
 function detectToolMention(text) {
   const clean = text.toLowerCase();
   for (const [toolId, toolData] of Object.entries(KURO_TOOLS)) {
@@ -171,33 +217,6 @@ function detectToolMention(text) {
   return null;
 }
 
-// Deteksi topik yang BENAR-BENAR di luar konteks web
-function isStrictlyOutOfTopic(text) {
-  const clean = text.toLowerCase();
-  
-  // Jika teks menyebutkan web, kuro, fitur, alat, download, video, foto, audio, pdf, dll. -> BUKAN luar topik!
-  const webKeywords = [
-    'web', 'website', 'kuro', 'studio', 'fitur', 'alat', 'tool', 'menu', 
-    'download', 'unduh', 'video', 'foto', 'gambar', 'musik', 'sound', 
-    'lagu', 'pdf', 'ppt', 'doc', 'link', 'qr', 'barcode', 'kompres', 
-    'potong', 'trim', 'background', 'transparan', 'jedag', 'jj', 'preset',
-    'status wa', 'sw', 'anti burik', 'gratis', 'cara pakai', 'panduan',
-    'safelink', 'bypass', 'shortlink', 'sfl', 'sfl.gl', 'resolver'
-  ];
-  if (webKeywords.some(kw => clean.includes(kw))) {
-    return false;
-  }
-
-  const outPatterns = [
-    /\bresep\b/i, /\bmasak\b/i, /\bpolitik\b/i, /\bpresiden\b/i,
-    /\bmatematika\b/i, /\brumus\b/i, /\bsejarah\b/i, /\bagama\b/i,
-    /\bcuaca\b/i, /\bramalan\b/i, /\bzodiak\b/i, /\bpuisi cinta\b/i,
-    /\bkimia\b/i, /\bfisika\b/i, /\bbiologi\b/i, /\bsepak bola\b/i,
-    /\bpertandingan\b/i, /\bklasemen\b/i, /\bgosip\b/i
-  ];
-  return outPatterns.some(p => p.test(clean));
-}
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -208,20 +227,53 @@ export default async function handler(req, res) {
   }
 
   if (req.method !== 'POST') {
-    return res.status(200).json({ status: 'online', service: 'AI Kuro Chatbot Engine' });
+    return res.status(200).json({ status: 'online', service: 'KuroBot AI Assistant Engine' });
   }
 
   try {
-    const { message = '', history = [] } = req.body || {};
+    const { message = '' } = req.body || {};
     const cleanMsg = message.trim();
     const lowerMsg = cleanMsg.toLowerCase();
 
-    // 1. Deteksi Permintaan Tour Berkelanjutan (Sequence Tour)
+    // 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN
+    if (isProfaneOrAbusive(lowerMsg)) {
+      return res.status(200).json({
+        reply: '? Maaf, kata-kata tersebut tidak pantas. Saya hanya asisten khusus untuk membantu fitur dan panduan navigasi di AllToolsKuro!',
+        is_valid_context: false,
+        isValidContext: false,
+        animation: 'confused',
+        action: 'none'
+      });
+    }
+
+    // 2. FILTER TEKS ACAK / RANDOM GIBBERISH
+    if (isGibberishOrRandom(cleanMsg)) {
+      return res.status(200).json({
+        reply: '? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!',
+        is_valid_context: false,
+        isValidContext: false,
+        animation: 'confused',
+        action: 'none'
+      });
+    }
+
+    // 3. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
+    if (!isAllToolsKuroTopic(lowerMsg)) {
+      return res.status(200).json({
+        reply: '? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya.',
+        is_valid_context: false,
+        isValidContext: false,
+        animation: 'confused',
+        action: 'none'
+      });
+    }
+
+    // 4. DETEKSI TOUR FITUR LENGKAP
     const isTourRequest = /\b(tour|tur|keliling|panduan lengkap|semua fitur|jelaskan semua|demo semua)\b/i.test(lowerMsg);
     if (isTourRequest) {
       const first = TOUR_ORDER[0];
       return res.status(200).json({
-        reply: 'Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 13 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!',
+        reply: 'Fufufu~ Pilihan tepat! Saya akan memandu Anda melihat dan memahami seluruh 13 fitur hebat di AllToolsKuro satu per satu. Ayo ikuti saya!',
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
@@ -235,116 +287,44 @@ export default async function handler(req, res) {
       });
     }
 
-    // 2. Deteksi Pertanyaan Umum Seputar Fitur Web ("jelasin fitur web ini", "fitur apa aja", "kuro studio ini apa")
-    const isGeneralWebFeaturesQuery = (
-      lowerMsg.includes('jelasin fitur') ||
-      lowerMsg.includes('jelaskan fitur') ||
-      lowerMsg.includes('fitur web') ||
-      lowerMsg.includes('fitur website') ||
-      lowerMsg.includes('fitur apa') ||
-      lowerMsg.includes('apa saja fitur') ||
-      lowerMsg.includes('ada fitur apa') ||
-      lowerMsg.includes('menu apa') ||
-      lowerMsg.includes('alat apa') ||
-      lowerMsg.includes('web ini tentang apa') ||
-      lowerMsg.includes('web ini buat apa') ||
-      lowerMsg.includes('kuro studio ini apa') ||
-      lowerMsg.includes('bisa apa aja') ||
-      lowerMsg.includes('daftar fitur') ||
-      lowerMsg.includes('katalog')
-    );
-
-    if (isGeneralWebFeaturesQuery) {
-      const overviewText = 
-        'Fufufu~ Tentu saja! Kuro Studio (AllToolsKuro) punya 13 fitur hebat serbaguna yang terbagi dalam 4 kategori utama:\n\n' +
-        '1. Media & Audio: Media Downloader (Unduh video 4K & 1080p Status WA Anti-Burik tanpa watermark dari TikTok, IG, YT), Cari Link JJ (Preset AM & Sound viral), dan Audio Merger.\n\n' +
-        '2. Dokumen & Cloud: PNG to PDF (Satukan banyak foto jadi PDF rapi), Link to PDF/PPT (Ekstrak materi Scribd & SlideShare), File ke Link (Hosting gambar instan jadi tautan publik), dan Safelink Resolver (Bypass link bertingkat Sfl.gl, SafelinkU, dan iklan langsung ke file asli Mediafire/Drive).\n\n' +
-        '3. Studio Kreatif & AI: Hapus Background AI (PNG transparan 1-klik), QR Code Studio (Kode QR neobrutalist dengan logo), dan Photo Studio.\n\n' +
-        '4. Editor Video & Media: Kompres Media HD (Kecilkan file video/foto tanpa burik), Video Studio, dan Video Trimmer.\n\n' +
-        'Kamu bisa klik tombol Tour Web di atas untuk panduan interaktif, atau sebutkan fitur yang ingin kamu coba!';
-
+    // 5. DETEKSI FITUR SPESIFIK: SAFELINK BYPASSER / RESOLVER
+    if (lowerMsg.includes('safelink') || lowerMsg.includes('bypass') || lowerMsg.includes('shortlink') || lowerMsg.includes('sfl') || lowerMsg.includes('resolver')) {
+      const tool = KURO_TOOLS['resolver'];
       return res.status(200).json({
-        reply: overviewText,
-        is_valid_context: true,
-        isValidContext: true,
-        animation: 'talking',
-        action: 'none',
-        target_tool: null,
-        targetTool: null,
-        target_element: null,
-        targetElement: null
-      });
-    }
-
-    // 3. Deteksi Pertanyaan Cara Pakai / Panduan Website
-    const isGuidanceQuery = (
-      lowerMsg.includes('cara pakai') ||
-      lowerMsg.includes('cara menggunakan') ||
-      lowerMsg.includes('gimana cara') ||
-      lowerMsg.includes('panduan') ||
-      lowerMsg.includes('bingung')
-    );
-
-    if (isGuidanceQuery && !detectToolMention(lowerMsg)) {
-      const guideText = 
-        'Caranya sangat mudah! Kamu cukup pilih salah satu dari 13 kartu alat di halaman utama Kuro Studio:\n' +
-        '• Mau unduh video? Klik Media Downloader lalu tempel tautan video dari TikTok, IG, atau YT.\n' +
-        '• Mau lewati link iklan safelink? Klik Safelink Resolver lalu tempel link Sfl.gl atau SafelinkU untuk langsung membuka file aslinya.\n' +
-        '• Mau satukan foto jadi dokumen? Klik PNG to PDF.\n' +
-        '• Mau hilangkan latar foto? Klik Hapus Background.\n' +
-        '• Mau bikin kode barcode? Klik QR Code Studio.\n\n' +
-        'Atau klik tombol Tour Web di kanan atas, dan aku akan mengajakmu berkeliling melihat cara kerja tiap fiturnya!';
-
-      return res.status(200).json({
-        reply: guideText,
-        is_valid_context: true,
-        isValidContext: true,
-        animation: 'talking',
-        action: 'none',
-        target_tool: null,
-        targetTool: null,
-        target_element: null,
-        targetElement: null
-      });
-    }
-
-    // 4. Deteksi Pertanyaan Biaya / Gratis
-    if (lowerMsg.includes('gratis') || lowerMsg.includes('bayar') || lowerMsg.includes('biaya') || lowerMsg.includes('langganan') || lowerMsg.includes('tarif')) {
-      return res.status(200).json({
-        reply: 'Semua 13 fitur di Kuro Studio 100% gratis tanpa biaya langganan apapun! Kamu bebas download video, convert dokumen, kompres file, lewati safelink, hingga edit media sepuasnya tanpa watermark fufufu~',
-        is_valid_context: true,
-        isValidContext: true,
-        animation: 'talking',
-        action: 'none',
-        target_tool: null,
-        targetTool: null,
-        target_element: null,
-        targetElement: null
-      });
-    }
-
-    // 5. Deteksi Pertanyaan Khusus Status WA Anti-Burik
-    if (lowerMsg.includes('status wa') || lowerMsg.includes('sw') || lowerMsg.includes('anti burik') || lowerMsg.includes('tidak burik') || lowerMsg.includes('biar jernih')) {
-      const dl = KURO_TOOLS['downloader'];
-      return res.status(200).json({
-        reply: 'Fufufu~ Khusus untuk Status WhatsApp, fitur Media Downloader kami menyediakan resolusi khusus 1080p Status WA Anti-Burik! Sistem mengoptimalkan bitrate agar video tidak dikompres pecah saat diunggah ke status WhatsApp.',
+        reply: `Tentu saja! Ini dia fitur ${tool.name}. ${tool.desc} Tempelkan tautan safelink Anda untuk langsung mendapatkan link unduhan asli tanpa iklan bertingkat!`,
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
         action: 'navigate_tool',
-        target_tool: 'downloader',
-        targetTool: 'downloader',
-        target_element: dl.element_id,
-        targetElement: dl.element_id
+        target_tool: 'resolver',
+        targetTool: 'resolver',
+        target_element: tool.element_id,
+        targetElement: tool.element_id
       });
     }
 
-    // 6. Deteksi Fitur Spesifik (Auto-Scroll & Panduan Tool)
+    // 6. DETEKSI FITUR SPESIFIK: TEMPLATE CAPCUT / PRESET ALIGHT MOTION / XML GOOGLE DRIVE
+    if (lowerMsg.includes('capcut') || lowerMsg.includes('alight motion') || lowerMsg.includes('xml') || lowerMsg.includes('preset') || lowerMsg.includes('jj') || lowerMsg.includes('jedag')) {
+      const tool = KURO_TOOLS['jjFinder'];
+      return res.status(200).json({
+        reply: `Siap! Fitur ${tool.name} menyediakan ribuan template CapCut, preset Alight Motion (AM), dan berkas XML Google Drive serta sound jedag-jedug viral yang siap digunakan.`,
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'talking',
+        action: 'navigate_tool',
+        target_tool: 'jjFinder',
+        targetTool: 'jjFinder',
+        target_element: tool.element_id,
+        targetElement: tool.element_id
+      });
+    }
+
+    // 7. DETEKSI FITUR LAINNYA DI KATALOG ALAT
     const targetToolId = detectToolMention(lowerMsg);
     if (targetToolId) {
       const tool = KURO_TOOLS[targetToolId];
       return res.status(200).json({
-        reply: `Tentu saja! Ini dia fitur ${tool.name}. ${tool.desc} Kamu bisa langsung menggunakannya sekarang!`,
+        reply: `Tentu! Ini dia fitur ${tool.name}. ${tool.desc} Anda bisa langsung menggunakannya sekarang!`,
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
@@ -352,72 +332,51 @@ export default async function handler(req, res) {
         target_tool: targetToolId,
         targetTool: targetToolId,
         target_element: tool.element_id,
-        targetElement: tool.element_id,
-        tour_sequence: null,
-        tourSequence: null
+        targetElement: tool.element_id
       });
     }
 
-    // 7. Sapaan & Identitas
-    if (['halo', 'hai', 'hi', 'salam', 'pagi', 'siang', 'malam', 'assalamualaikum'].some(k => lowerMsg.includes(k))) {
+    // 8. DETEKSI IDENTITAS KUROBOT
+    if (lowerMsg.includes('siapa kamu') || lowerMsg.includes('kurobot') || lowerMsg.includes('nama kamu') || lowerMsg.includes('tentang kamu')) {
       return res.status(200).json({
-        reply: 'Halo! Aku AI Kuro, penyihir asisten terhebat yang siap membantumu menjelajahi setiap sudut website Kuro ini! Mau tahu fitur apa hari ini?',
+        reply: 'Halo! Saya adalah KuroBot, maskot dan asisten AI resmi untuk aplikasi web AllToolsKuro. Tugas saya adalah membantu navigasi serta menjelaskan seluruh fitur utilitas hebat kami!',
         is_valid_context: true,
         isValidContext: true,
         animation: 'wave',
-        action: 'none',
-        target_tool: null,
-        targetTool: null,
-        target_element: null,
-        targetElement: null
+        action: 'none'
       });
     }
 
-    if (['siapa kamu', 'nama kamu', 'siapa kuro', 'tentang kamu', 'asal usulmu'].some(k => lowerMsg.includes(k))) {
+    // 9. DETEKSI PERTANYAAN UMUM FITUR / PANDUAN APLIKASI
+    if (lowerMsg.includes('fitur') || lowerMsg.includes('alat') || lowerMsg.includes('bisa apa') || lowerMsg.includes('panduan') || lowerMsg.includes('cara')) {
+      const overviewText = 
+        'AllToolsKuro memiliki 13 fitur utilitas lengkap:\n' +
+        '1. Media: Media Downloader (4K & 1080p Status WA Anti-Burik), Cari Link JJ (Template CapCut & Preset Alight Motion), dan Audio Merger.\n' +
+        '2. Dokumen: Safelink Bypasser (Bypass link iklan Sfl.gl/SafelinkU ke direct link), PNG to PDF, Link to PDF/PPT (Scribd/SlideShare), dan File ke Link.\n' +
+        '3. Studio & Visual: Hapus Background AI, QR Code Studio, Photo Studio, Video Studio, Kompres Media HD, dan Video Trimmer.\n\n' +
+        'Fitur mana yang ingin Anda gunakan hari ini?';
+
       return res.status(200).json({
-        reply: 'Namaku AI Kuro! Penyihir asisten cerdas yang terinspirasi dari sang pengelana hebat Elaina. Tugas utamaku adalah memastikan pengalamanmu di Kuro Studio menyenangkan dan tanpa kendala!',
+        reply: overviewText,
         is_valid_context: true,
         isValidContext: true,
-        animation: 'wave',
-        action: 'none',
-        target_tool: null,
-        targetTool: null,
-        target_element: null,
-        targetElement: null
+        animation: 'talking',
+        action: 'none'
       });
     }
 
-    // 8. Guardrails KETAT: Tolak HANYA jika pertanyaan benar-benar di luar konteks website
-    if (isStrictlyOutOfTopic(lowerMsg)) {
-      return res.status(200).json({
-        reply: 'Maaf ya, Kuro hanya bisa membantu menjawab hal seputar fitur, alat, dan panduan penggunaan website Kuro Studio! Fufufu~ Coba tanyakan seputar 12 fitur hebat kami!',
-        is_valid_context: false,
-        isValidContext: false,
-        animation: 'confused',
-        action: 'none',
-        target_tool: null,
-        targetTool: null,
-        target_element: null,
-        targetElement: null
-      });
-    }
-
-    // 9. Respon Default yang Ramah & Menjelaskan Fitur (BUKAN Menolak)
+    // 10. JIKA TIDAK ADA INTENSI SPESIFIK YANG COCOK, TOLAK DENGAN TANDA TANYA
     return res.status(200).json({
-      reply: 'Ada yang bisa Kuro bantu seputar website Kuro Studio? Kamu bisa tanyakan cara penggunaan 13 alat kami (seperti Media Downloader, Safelink Resolver, PNG to PDF, Hapus Background, QR Studio) atau klik tombol Tour Web untuk berkeliling otomatis!',
-      is_valid_context: true,
-      isValidContext: true,
-      animation: 'talking',
-      action: 'none',
-      target_tool: null,
-      targetTool: null,
-      target_element: null,
-      targetElement: null
+      reply: '? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!',
+      is_valid_context: false,
+      isValidContext: false,
+      animation: 'confused',
+      action: 'none'
     });
 
   } catch (err) {
     return res.status(500).json({
-      reply: 'Maaf, terjadi gangguan sesaat pada mantra sihirku. Coba tanyakan lagi ya!',
+      reply: '? Maaf, terjadi kendala teknis sesaat. Silakan tanyakan kembali seputar fitur AllToolsKuro!',
       is_valid_context: false,
       isValidContext: false,
       animation: 'confused',
