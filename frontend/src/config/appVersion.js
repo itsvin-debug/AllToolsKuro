@@ -5,6 +5,26 @@ export const LOCAL_VERSION_CODE = 1;
 export const APP_PACKAGE_ID = 'com.kuro.alltools';
 export const APP_DISPLAY_NAME = 'AllToolsKuro';
 
+const INSTALLED_VERSION_KEY = 'kuro_installed_app_version';
+
+export function getInstalledAppVersion() {
+  if (typeof window === 'undefined') return LOCAL_APP_VERSION;
+  try {
+    return localStorage.getItem(INSTALLED_VERSION_KEY) || LOCAL_APP_VERSION;
+  } catch {
+    return LOCAL_APP_VERSION;
+  }
+}
+
+export function setInstalledAppVersion(version) {
+  if (typeof window === 'undefined' || !version) return;
+  try {
+    localStorage.setItem(INSTALLED_VERSION_KEY, String(version).trim());
+  } catch (err) {
+    console.warn('[AppVersion] Gagal menyimpan versi aplikasi:', err);
+  }
+}
+
 // Fungsi pembanding nomor versi (Semantic Versioning)
 export function isVersionHigher(remoteVersion, localVersion) {
   if (!remoteVersion || !localVersion) return false;
@@ -22,4 +42,3 @@ export function isVersionHigher(remoteVersion, localVersion) {
   }
   return false;
 }
-

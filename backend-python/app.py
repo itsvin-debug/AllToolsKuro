@@ -222,31 +222,54 @@ def detect_tool_mention(text: str) -> Optional[str]:
                 return tool_id
     return None
 
-def is_strictly_out_of_topic(text: str) -> bool:
-    """Deteksi cepat topik yang BENAR-BENAR di luar konteks website Kuro Studio."""
+def is_profane_or_abusive(text: str) -> bool:
+    """Mendeteksi kata kasar, makian, ujaran kebencian, atau rasisme."""
+    abusive_patterns = [
+        r'\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard)\b',
+        r'\b(anjing|asw|asu|babi|kontol|memek|jembut|peler|pepek|bangsat|bajingan|pantek|itil)\b',
+        r'\b(goblok|tolol|bego|idiot|bodoh|tai|taik|kampret|ngentot|ngentd|bokep|porno|sange|lonte|perek|jablay|bencong|banci)\b',
+        r'\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker|whore|slut)\b'
+    ]
+    for pat in abusive_patterns:
+        if re.search(pat, text, re.IGNORECASE):
+            return True
+    return False
+
+def is_gibberish_or_random(text: str) -> bool:
+    """Mendeteksi teks acak atau simbol random tanpa arti."""
+    clean = text.strip()
+    if not clean or len(clean) < 2:
+        return True
+    if re.match(r'^[^a-zA-Z0-9\s]+$', clean):
+        return True
+    if re.match(r'^(.)\1{4,}$', clean):
+        return True
+    if re.match(r'^[b-df-hj-np-tv-z]{5,}$', clean, re.IGNORECASE):
+        return True
+    return False
+
+def is_alltoolskuro_topic(text: str) -> bool:
+    """Memastikan pertanyaan berkaitan langsung dengan ekosistem AllToolsKuro."""
     clean = text.lower()
     
-    # Jika teks menyebutkan elemen web / fitur / multimedia, BUKAN luar topik!
-    web_keywords = [
-        "web", "website", "kuro", "studio", "fitur", "alat", "tool", "menu", 
-        "download", "unduh", "video", "foto", "gambar", "musik", "sound", 
-        "lagu", "pdf", "ppt", "doc", "link", "qr", "barcode", "kompres", 
-        "potong", "trim", "background", "transparan", "jedag", "jj", "preset",
-        "status wa", "sw", "anti burik", "gratis", "cara pakai", "panduan",
-        "safelink", "bypass", "shortlink", "sfl", "sfl.gl", "resolver"
+    full_keywords = [
+        "kuro", "kurobot", "alltoolskuro", "alltools", "studio", "fitur", "alat", "tool", 
+        "menu", "panduan", "cara pakai", "cara menggunakan", "bantuan", "tour", "tur",
+        "safelink", "bypass", "bypasser", "sfl", "sfl.gl", "safelinku", "ouo", "bitly", "shortlink", "resolver",
+        "capcut", "template", "template capcut", "jedag jedug", "jedag-jedug",
+        "preset", "alight motion", "preset am", "xml", "google drive", "drive xml",
+        "download", "downloader", "unduh", "tiktok", "instagram", "youtube", "status wa", "anti burik",
+        "png to pdf", "pdf", "ppt", "dokumen", "scribd", "slideshare", "doc",
+        "image to link", "file ke link", "kompres", "compress", "qrcode",
+        "audio", "musik", "lagu", "merger", "photo studio", "video studio", "trimmer", "potong video",
+        "hapus background", "bg remover", "transparan", "gratis", "update", "pembaruan", "apk", "aplikasi"
     ]
-    if any(kw in clean for kw in web_keywords):
-        return False
+    if any(kw in clean for kw in full_keywords):
+        return True
 
-    out_patterns = [
-        r'\bresep\b', r'\bmasak\b', r'\bpolitik\b', r'\bpresiden\b', 
-        r'\bmatematika\b', r'\brumus\b', r'\bsejarah\b', r'\bagama\b',
-        r'\bcuaca\b', r'\bramalan\b', r'\bzodiak\b', r'\bpuisi cinta\b',
-        r'\bkimia\b', r'\bfisika\b', r'\bbiologi\b', r'\bsepak bola\b',
-        r'\bklasemen\b', r'\bgosip\b'
-    ]
-    for pat in out_patterns:
-        if re.search(pat, clean):
+    short_keywords = ["ig", "yt", "am", "sw", "jj", "qr"]
+    for sk in short_keywords:
+        if re.search(r'\b' + re.escape(sk) + r'\b', clean):
             return True
     return False
 
@@ -254,8 +277,8 @@ def is_strictly_out_of_topic(text: str) -> bool:
 def health_check():
     return {
         "status": "online",
-        "service": "AI Kuro Chatbot Engine",
-        "persona": "Chibi Elaina",
+        "service": "KuroBot AI Assistant Engine",
+        "persona": "KuroBot (AllToolsKuro Mascot & Assistant)",
         "hasGeminiKey": bool(GEMINI_API_KEY)
     }
 
@@ -264,10 +287,10 @@ def handle_chat(req: ChatRequest):
     message = req.message.strip()
     lower_msg = message.lower()
 
-    # 1. Guardrail KETAT: Cek apakah topik BENAR-BENAR di luar konteks web
-    if is_strictly_out_of_topic(lower_msg):
+    # 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN
+    if is_profane_or_abusive(lower_msg):
         return ChatResponse(
-            reply="Maaf ya, Kuro hanya bisa membantu menjawab hal seputar fitur, alat, dan panduan penggunaan website Kuro Studio! Fufufu~ Coba tanyakan seputar 13 fitur hebat kami!",
+            reply="? Maaf, kata-kata tersebut tidak pantas. Saya hanya asisten khusus untuk membantu fitur dan panduan navigasi di AllToolsKuro!",
             is_valid_context=False,
             animation="confused",
             action="none",
@@ -276,14 +299,36 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 2. Deteksi Permintaan Tour Berkelanjutan (13 Fitur Web)
-    tour_patterns = [r'\btour\b', r'\btur\b', r'semua fitur', r'jelaskan semua', r'keliling', r'panduan lengkap', r'demo semua']
-    is_tour_request = any(re.search(pat, lower_msg) for pat in tour_patterns)
+    # 2. FILTER TEKS ACAK / RANDOM GIBBERISH
+    if is_gibberish_or_random(message):
+        return ChatResponse(
+            reply="? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!",
+            is_valid_context=False,
+            animation="confused",
+            action="none",
+            target_tool=None,
+            target_element=None,
+            tour_sequence=None
+        )
 
-    if is_tour_request:
+    # 3. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
+    if not is_alltoolskuro_topic(lower_msg):
+        return ChatResponse(
+            reply="? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya.",
+            is_valid_context=False,
+            animation="confused",
+            action="none",
+            target_tool=None,
+            target_element=None,
+            tour_sequence=None
+        )
+
+    # 4. Deteksi Permintaan Tour Lengkap
+    tour_patterns = [r'\btour\b', r'\btur\b', r'semua fitur', r'jelaskan semua', r'keliling', r'panduan lengkap', r'demo semua']
+    if any(re.search(pat, lower_msg) for pat in tour_patterns):
         first_tool = TOUR_ORDER[0]
         return ChatResponse(
-            reply="Fufufu~ Pilihan tepat! Aku akan mengajakmu berkeliling melihat dan memahami seluruh 13 fitur hebat di Kuro Studio satu per satu. Ayo ikuti aku!",
+            reply="Fufufu~ Pilihan tepat! Saya akan memandu Anda melihat dan memahami seluruh 13 fitur hebat di AllToolsKuro satu per satu. Ayo ikuti saya!",
             is_valid_context=True,
             animation="talking",
             action="start_tour",
@@ -292,20 +337,66 @@ def handle_chat(req: ChatRequest):
             tour_sequence=TOUR_ORDER
         )
 
-    # 3. Deteksi Pertanyaan Umum Seputar Fitur Web ("jelasin fitur web ini", "fitur apa aja", "web ini buat apa")
-    general_features_triggers = [
-        "jelasin fitur", "jelaskan fitur", "fitur web", "fitur website", "fitur apa", 
-        "apa saja fitur", "ada fitur apa", "menu apa", "alat apa", "web ini tentang apa", 
-        "web ini buat apa", "kuro studio ini apa", "bisa apa aja", "daftar fitur", "katalog"
-    ]
-    if any(trigger in lower_msg for trigger in general_features_triggers):
+    # 5. Deteksi Fitur Safelink Bypasser / Resolver
+    if any(k in lower_msg for k in ["safelink", "bypass", "bypasser", "shortlink", "sfl", "resolver"]):
+        t_info = KURO_TOOLS["resolver"]
+        return ChatResponse(
+            reply=f"Tentu saja! Ini dia fitur {t_info['name']}. {t_info['desc']} Tempelkan tautan safelink Anda untuk langsung mendapatkan link unduhan asli tanpa iklan bertingkat!",
+            is_valid_context=True,
+            animation="talking",
+            action="navigate_tool",
+            target_tool="resolver",
+            target_element=t_info["element_id"],
+            tour_sequence=None
+        )
+
+    # 6. Deteksi Fitur Cari Link JJ / CapCut / Alight Motion / XML
+    if any(k in lower_msg for k in ["capcut", "alight motion", "xml", "preset", "jj", "jedag"]):
+        t_info = KURO_TOOLS["jjFinder"]
+        return ChatResponse(
+            reply=f"Tentu! Fitur {t_info['name']} menyediakan ribuan template CapCut, preset Alight Motion, dan file XML Google Drive yang siap digunakan. Tempel tautan CapCut/AM atau cari kata kunci sound yang diinginkan!",
+            is_valid_context=True,
+            animation="talking",
+            action="navigate_tool",
+            target_tool="jjFinder",
+            target_element=t_info["element_id"],
+            tour_sequence=None
+        )
+
+    # 7. Deteksi Fitur Spesifik Lainnya
+    target_tool_id = detect_tool_mention(lower_msg)
+    if target_tool_id:
+        t_info = KURO_TOOLS[target_tool_id]
+        return ChatResponse(
+            reply=clean_speech_text(f"Tentu saja! Ini dia fitur {t_info['name']}. {t_info['desc']} Anda bisa langsung menggunakannya sekarang!"),
+            is_valid_context=True,
+            animation="talking",
+            action="navigate_tool",
+            target_tool=target_tool_id,
+            target_element=t_info["element_id"],
+            tour_sequence=None
+        )
+
+    # 8. Sapaan & Identitas Resmi KuroBot
+    if any(k in lower_msg for k in ["siapa kamu", "kurobot", "nama kamu", "tentang kamu"]):
+        return ChatResponse(
+            reply="Halo! Saya adalah KuroBot, maskot dan asisten AI resmi untuk aplikasi web AllToolsKuro. Tugas saya adalah membantu navigasi serta menjelaskan seluruh fitur utilitas hebat kami!",
+            is_valid_context=True,
+            animation="wave",
+            action="none",
+            target_tool=None,
+            target_element=None,
+            tour_sequence=None
+        )
+
+    # 9. Panduan Umum Fitur AllToolsKuro
+    if any(k in lower_msg for k in ["fitur", "alat", "bisa apa", "panduan", "cara"]):
         overview_text = (
-            "Fufufu~ Tentu saja! Kuro Studio (AllToolsKuro) punya 13 fitur hebat serbaguna yang terbagi dalam 4 kategori utama:\n\n"
-            "1. Media & Audio: Media Downloader (Unduh video 4K & 1080p Status WA Anti-Burik tanpa watermark dari TikTok, IG, YT), Cari Link JJ (Preset AM & Sound viral), dan Audio Merger.\n\n"
-            "2. Dokumen & Cloud: PNG to PDF (Satukan banyak foto jadi PDF rapi), Link to PDF/PPT (Ekstrak materi Scribd & SlideShare), File ke Link (Hosting gambar instan jadi tautan publik), dan Safelink Resolver (Bypass link bertingkat Sfl.gl, SafelinkU, dan iklan langsung ke file asli Mediafire/Drive).\n\n"
-            "3. Studio Kreatif & AI: Hapus Background AI (PNG transparan 1-klik), QR Code Studio (Kode QR neobrutalist dengan logo), dan Photo Studio.\n\n"
-            "4. Editor Video & Media: Kompres Media HD (Kecilkan file video/foto tanpa burik), Video Studio, dan Video Trimmer.\n\n"
-            "Kamu bisa klik tombol Tour Web di atas untuk panduan interaktif, atau sebutkan fitur yang ingin kamu coba!"
+            "AllToolsKuro memiliki 13 fitur utilitas lengkap:\n"
+            "1. Media: Media Downloader (4K & 1080p Status WA Anti-Burik), Cari Link JJ (Template CapCut & Preset Alight Motion), dan Audio Merger.\n"
+            "2. Dokumen: Safelink Bypasser (Bypass link iklan Sfl.gl/SafelinkU ke direct link), PNG to PDF, Link to PDF/PPT (Scribd/SlideShare), dan File ke Link.\n"
+            "3. Studio & Visual: Hapus Background AI, QR Code Studio, Photo Studio, Video Studio, Kompres Media HD, dan Video Trimmer.\n\n"
+            "Fitur mana yang ingin Anda gunakan hari ini?"
         )
         return ChatResponse(
             reply=overview_text,
@@ -317,94 +408,11 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 4. Deteksi Panduan Cara Pakai Website
-    guidance_triggers = ["cara pakai", "cara menggunakan", "gimana cara", "panduan", "bingung"]
-    if any(g in lower_msg for g in guidance_triggers) and not detect_tool_mention(lower_msg):
-        guide_text = (
-            "Caranya sangat mudah! Kamu cukup pilih salah satu dari 13 kartu alat di halaman utama Kuro Studio:\n"
-            "• Mau unduh video? Klik Media Downloader lalu tempel tautan video dari TikTok, IG, atau YT.\n"
-            "• Mau lewati link iklan safelink? Klik Safelink Resolver lalu tempel link Sfl.gl atau SafelinkU untuk langsung membuka file aslinya.\n"
-            "• Mau satukan foto jadi dokumen? Klik PNG to PDF.\n"
-            "• Mau hilangkan latar foto? Klik Hapus Background.\n"
-            "• Mau bikin kode barcode? Klik QR Code Studio.\n\n"
-            "Atau klik tombol Tour Web di kanan atas, dan aku akan mengajakmu berkeliling melihat cara kerja tiap fiturnya!"
-        )
-        return ChatResponse(
-            reply=guide_text,
-            is_valid_context=True,
-            animation="talking",
-            action="none",
-            target_tool=None,
-            target_element=None,
-            tour_sequence=None
-        )
-
-    # 5. Deteksi Pertanyaan Biaya / Gratis
-    if any(k in lower_msg for k in ["gratis", "bayar", "biaya", "langganan", "tarif"]):
-        return ChatResponse(
-            reply="Semua 13 fitur di Kuro Studio 100% gratis tanpa biaya langganan apapun! Kamu bebas download video, convert dokumen, kompres file, lewati safelink, hingga edit media sepuasnya tanpa watermark fufufu~",
-            is_valid_context=True,
-            animation="talking",
-            action="none",
-            target_tool=None,
-            target_element=None,
-            tour_sequence=None
-        )
-
-    # 6. Deteksi Pertanyaan Khusus Status WA Anti-Burik
-    if any(k in lower_msg for k in ["status wa", "sw", "anti burik", "tidak burik", "biar jernih"]):
-        return ChatResponse(
-            reply="Fufufu~ Khusus untuk Status WhatsApp, fitur Media Downloader kami menyediakan resolusi khusus 1080p Status WA Anti-Burik! Sistem mengoptimalkan bitrate agar video tidak dikompres pecah saat diunggah ke status WhatsApp.",
-            is_valid_context=True,
-            animation="talking",
-            action="navigate_tool",
-            target_tool="downloader",
-            target_element="tool-downloader",
-            tour_sequence=None
-        )
-
-    # 7. Deteksi Fitur Spesifik (Auto-Scroll & Panduan Tool)
-    target_tool_id = detect_tool_mention(lower_msg)
-    if target_tool_id:
-        t_info = KURO_TOOLS[target_tool_id]
-        return ChatResponse(
-            reply=clean_speech_text(f"Tentu saja! Ini dia fitur {t_info['name']}. {t_info['desc']} Kamu bisa langsung mencobanya sekarang!"),
-            is_valid_context=True,
-            animation="talking",
-            action="navigate_tool",
-            target_tool=target_tool_id,
-            target_element=t_info["element_id"],
-            tour_sequence=None
-        )
-
-    # 8. Sapaan & Identitas
-    if any(k in lower_msg for k in ["halo", "hai", "hi", "salam", "pagi", "siang", "malam", "assalamualaikum"]):
-        return ChatResponse(
-            reply="Halo! Aku AI Kuro, penyihir asisten terhebat yang siap membantumu menjelajahi setiap sudut website Kuro ini! Mau tahu fitur apa hari ini?",
-            is_valid_context=True,
-            animation="wave",
-            action="none",
-            target_tool=None,
-            target_element=None,
-            tour_sequence=None
-        )
-
-    if any(k in lower_msg for k in ["siapa kamu", "nama kamu", "siapa kuro", "tentang kamu", "asal usulmu"]):
-        return ChatResponse(
-            reply="Namaku AI Kuro! Penyihir asisten cerdas yang terinspirasi dari sang pengelana hebat Elaina. Tugas utamaku adalah memastikan pengalamanmu di Kuro Studio menyenangkan dan tanpa kendala!",
-            is_valid_context=True,
-            animation="wave",
-            action="none",
-            target_tool=None,
-            target_element=None,
-            tour_sequence=None
-        )
-
-    # 9. Respons Default Ramah seputar Web Kuro (BUKAN Menolak)
+    # 10. Default Rejection dengan Tanda Tanya
     return ChatResponse(
-        reply="Ada yang bisa Kuro bantu seputar website Kuro Studio? Kamu bisa tanyakan cara penggunaan 13 alat kami (seperti Media Downloader, Safelink Resolver, PNG to PDF, Hapus Background, QR Studio) atau klik tombol Tour Web untuk berkeliling otomatis!",
-        is_valid_context=True,
-        animation="talking",
+        reply="? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!",
+        is_valid_context=False,
+        animation="confused",
         action="none",
         target_tool=None,
         target_element=None,

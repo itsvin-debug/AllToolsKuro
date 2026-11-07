@@ -1,4 +1,3 @@
-// frontend/src/components/UpdateModal.jsx - Dialog Pembaruan Anime Modern (#1a1a2e)
 import React from 'react';
 import { 
   Sparkles, 
@@ -6,9 +5,9 @@ import {
   X, 
   CheckCircle2, 
   ArrowUpCircle,
-  FileCode,
   ShieldCheck,
-  RefreshCw
+  RefreshCw,
+  ExternalLink
 } from 'lucide-react';
 
 export default function UpdateModal({
@@ -31,11 +30,12 @@ export default function UpdateModal({
     'Performa unduhan media lebih stabil dengan auto-reconnect.'
   ];
   const fileSize = latestInfo?.fileSize || '11.9 MB';
+  const apkDownloadUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150">
       
-      {/* Container Utama Modal (#1a1a2e dengan Aksen Silver-Grey & Biru) */}
+      {/* Container Utama Modal (#1a1a2e Anime Neobrutalist) */}
       <div 
         className="w-full max-w-md rounded-2xl border-2 border-black shadow-[6px_6px_0px_#000000] overflow-hidden text-white flex flex-col relative"
         style={{ backgroundColor: '#1a1a2e' }}
@@ -43,22 +43,19 @@ export default function UpdateModal({
         aria-modal="true"
         aria-labelledby="modal-update-title"
       >
-        {/* Dekorasi Aksen Cahaya Anime di Background */}
-        <div className="absolute top-0 right-0 w-44 h-44 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-36 h-36 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
 
-        {/* ─── 1. HEADER MODAL ─── */}
-        <div className="p-4 sm:p-5 border-b border-slate-700/80 bg-slate-900/60 flex items-start justify-between relative z-10">
+        {/* ─── 1. HEADER MODAL NEOBRUTALIST ─── */}
+        <div className="p-4 sm:p-5 border-b-2 border-black bg-[#131322] flex items-start justify-between relative z-10">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-blue-600/20 border-2 border-blue-400/40 flex items-center justify-center text-blue-400 shrink-0 shadow-[2px_2px_0px_#000000]">
-              <ArrowUpCircle className="w-6 h-6 stroke-[2.2]" />
+            <div className="w-10 h-10 rounded-xl bg-blue-600 border-2 border-black flex items-center justify-center text-white shrink-0 shadow-[2px_2px_0px_#000000]">
+              <ArrowUpCircle className="w-6 h-6 stroke-[2.5]" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-400/30">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded border-2 border-black bg-blue-600 text-white shadow-[1px_1px_0px_#000000]">
                   New Release
                 </span>
-                <span className="text-[11px] font-mono text-slate-400">
+                <span className="text-[11px] font-mono text-slate-300 font-bold">
                   {fileSize}
                 </span>
               </div>
@@ -72,23 +69,23 @@ export default function UpdateModal({
             type="button"
             onClick={onClose}
             disabled={isDownloading}
-            className="p-1.5 rounded-lg border border-slate-700 bg-slate-800/80 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors disabled:opacity-40 cursor-pointer"
+            className="p-1.5 rounded-lg border-2 border-black bg-[#282a3c] text-slate-300 hover:text-white hover:bg-[#34374e] shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
             aria-label="Tutup dialog"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4 stroke-[2.5]" />
           </button>
         </div>
 
         {/* ─── 2. KONTEN DETAIL VERSI & RELEASE NOTES ─── */}
-        <div className="p-4 sm:p-5 space-y-4 max-h-[62vh] overflow-y-auto text-xs relative z-10 font-sans">
+        <div className="p-4 sm:p-5 space-y-3.5 max-h-[62vh] overflow-y-auto text-xs relative z-10 font-sans custom-scrollbar">
           
-          {/* Baris Identitas Aplikasi & Versi */}
-          <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-slate-900/80 border border-slate-700/60 shadow-[2px_2px_0px_#000000]">
+          {/* Identitas Aplikasi & Perbandingan Versi */}
+          <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-[#131322] border-2 border-black shadow-[3px_3px_0px_#000000]">
             <div>
-              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block font-bold">
                 Aplikasi & ID
               </span>
-              <span className="font-extrabold text-white text-xs sm:text-sm block truncate mt-0.5">
+              <span className="font-black text-white text-xs sm:text-sm block truncate mt-0.5">
                 AllToolsKuro
               </span>
               <span className="text-[10px] font-mono text-slate-400 block truncate">
@@ -96,78 +93,78 @@ export default function UpdateModal({
               </span>
             </div>
 
-            <div className="text-right border-l border-slate-700/60 pl-2.5">
-              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block">
+            <div className="text-right border-l-2 border-black pl-2.5">
+              <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block font-bold">
                 Versi Baru
               </span>
               <div className="flex items-center justify-end gap-1.5 mt-0.5">
                 <span className="text-[11px] font-mono text-slate-400 line-through">
                   v{localVersion}
                 </span>
-                <span className="text-xs sm:text-sm font-mono font-black text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-400/40">
+                <span className="text-xs sm:text-sm font-mono font-black text-white bg-blue-600 px-2 py-0.5 rounded border-2 border-black shadow-[2px_2px_0px_#000000]">
                   v{newVersion}
                 </span>
               </div>
-              <span className="text-[10px] text-emerald-400 font-mono block mt-0.5 flex items-center justify-end gap-1">
-                <ShieldCheck className="w-3 h-3" />
+              <span className="text-[10px] text-emerald-400 font-mono font-bold block mt-1 flex items-center justify-end gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 stroke-[2.5]" />
                 Verified APK
               </span>
             </div>
           </div>
 
-          {/* Ringkasan Rilis */}
-          <div className="p-3 rounded-xl bg-slate-900/40 border border-slate-800">
-            <span className="text-[10px] uppercase font-mono tracking-wider text-blue-300 font-bold block mb-1 flex items-center gap-1.5">
+          {/* Ringkasan Catatan Rilis */}
+          <div className="p-3 rounded-xl bg-[#131322] border-2 border-black shadow-[2px_2px_0px_#000000]">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-blue-400 font-extrabold block mb-1 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-blue-400" />
               Catatan Rilis
             </span>
-            <p className="text-slate-300 leading-relaxed font-medium">
+            <p className="text-slate-200 leading-relaxed font-medium">
               {releaseNotes}
             </p>
           </div>
 
-          {/* Daftar Fitur Baru */}
+          {/* Daftar Fitur Baru & Penyempurnaan */}
           <div>
-            <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400 font-bold block mb-2">
+            <span className="text-[10px] uppercase font-mono tracking-wider text-slate-300 font-extrabold block mb-2">
               Fitur Baru & Penyempurnaan:
             </span>
             <div className="space-y-2">
               {features.map((feat, idx) => (
                 <div 
                   key={idx}
-                  className="flex items-start gap-2.5 p-2 rounded-lg bg-slate-900/60 border border-slate-800 text-slate-200"
+                  className="flex items-start gap-2.5 p-2.5 rounded-lg bg-[#151526] border-2 border-black shadow-[2px_2px_0px_#000000] text-slate-100"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0 mt-0.5 stroke-[2.2]" />
-                  <span className="text-[11px] leading-snug">{feat}</span>
+                  <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0 mt-0.5 stroke-[2.5]" />
+                  <span className="text-[11px] leading-snug font-medium">{feat}</span>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* ─── 3. PROGRESS BAR PENGUNDUHAN (Jika Tombol Update Ditekan) ─── */}
+          {/* ─── 3. PROGRESS BAR PENGUNDUHAN NEOBRUTALIST ─── */}
           {isDownloading && (
-            <div className="p-3.5 rounded-xl bg-blue-950/40 border border-blue-500/40 space-y-2 animate-in fade-in duration-200">
+            <div className="p-3.5 rounded-xl bg-[#131322] border-2 border-black shadow-[3px_3px_0px_#000000] space-y-2">
               <div className="flex items-center justify-between text-[11px] font-mono">
-                <span className="text-blue-300 flex items-center gap-1.5 font-bold">
-                  <RefreshCw className="w-3 h-3 animate-spin text-blue-400" />
+                <span className="text-blue-400 flex items-center gap-1.5 font-bold">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400 stroke-[2.5]" />
                   {downloadStatus === 'completed' ? 'Unduhan Selesai' : 'Mengunduh Pembaruan APK...'}
                 </span>
-                <span className="text-blue-400 font-black">
+                <span className="text-white font-mono font-black bg-blue-600 px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
                   {downloadProgress}%
                 </span>
               </div>
 
-              {/* Progress Bar Track */}
-              <div className="w-full h-3 rounded-full bg-slate-800 border border-slate-700 overflow-hidden p-0.5">
+              {/* Progress Bar Track Solid */}
+              <div className="w-full h-3.5 rounded-lg bg-[#0c0d14] border-2 border-black overflow-hidden p-0.5 shadow-[2px_2px_0px_#000000]">
                 <div 
-                  className="h-full rounded-full bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 transition-all duration-200"
+                  className="h-full rounded bg-blue-500 transition-all duration-150"
                   style={{ width: `${downloadProgress}%` }}
                 />
               </div>
 
-              <p className="text-[10px] text-slate-400 font-mono">
+              <p className="text-[10px] text-slate-300 font-mono">
                 {downloadStatus === 'completed' 
-                  ? 'Membuka installer paket Android... Silakan konfirmasi update pada layar HP.' 
+                  ? 'Membuka installer paket Android... Silakan pasang pembaruan.' 
                   : 'Mohon tunggu sejenak, berkas APK sedang disiapkan di latar belakang.'}
               </p>
             </div>
@@ -175,42 +172,53 @@ export default function UpdateModal({
 
         </div>
 
-        {/* ─── 4. FOOTER AKSI (UPDATE & CANCEL) ─── */}
-        <div className="p-4 sm:p-5 border-t border-slate-700/80 bg-slate-900/90 flex items-center justify-end gap-2.5 relative z-10">
+        {/* ─── 4. FOOTER AKSI NEOBRUTALIST (UPDATE & CANCEL) ─── */}
+        <div className="p-4 sm:p-5 border-t-2 border-black bg-[#131322] flex items-center justify-end gap-2.5 relative z-10">
           
           {/* Tombol Cancel */}
           <button
             type="button"
             onClick={onClose}
             disabled={isDownloading}
-            className="px-4 py-2 rounded-xl border-2 border-black bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
+            className="px-4 py-2 rounded-xl border-2 border-black bg-[#282a3c] hover:bg-[#34374e] text-slate-200 hover:text-white font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
           >
             Batal
           </button>
 
-          {/* Tombol Update */}
-          <button
-            type="button"
-            onClick={onStartDownload}
-            disabled={isDownloading}
-            className="px-5 py-2 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-          >
-            {isDownloading ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Memproses...</span>
-              </>
-            ) : (
-              <>
-                <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Update Sekarang</span>
-              </>
-            )}
-          </button>
+          {/* Tombol Update atau Buka Installer Jika Unduhan Selesai */}
+          {downloadStatus === 'completed' ? (
+            <a
+              href={apkDownloadUrl}
+              target="_system"
+              download="AllToolsKuro.apk"
+              className="px-5 py-2 rounded-xl border-2 border-black bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Buka Berkas APK</span>
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={onStartDownload}
+              disabled={isDownloading}
+              className="px-5 py-2 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-500 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              {isDownloading ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin stroke-[2.5]" />
+                  <span>Memproses...</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Update Sekarang</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
       </div>
     </div>
   );
 }
-

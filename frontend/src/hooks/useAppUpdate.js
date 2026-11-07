@@ -5,6 +5,8 @@ import {
   LOCAL_APP_VERSION, 
   LOCAL_VERSION_CODE, 
   isVersionHigher,
+  getInstalledAppVersion,
+  setInstalledAppVersion,
   APP_PACKAGE_ID,
   APP_DISPLAY_NAME
 } from '../config/appVersion';
@@ -15,6 +17,7 @@ export function useAppUpdate() {
   const [latestInfo, setLatestInfo] = useState(null);
   const [isChecking, setIsChecking] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [currentInstalledVersion, setCurrentInstalledVersion] = useState(LOCAL_APP_VERSION);
   
   // State unduhan APK
   const [isDownloading, setIsDownloading] = useState(false);
@@ -29,6 +32,7 @@ export function useAppUpdate() {
       if (typeof window !== 'undefined') {
         const isNative = Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
         setIsNativeApp(isNative);
+        setCurrentInstalledVersion(getInstalledAppVersion());
       }
     } catch {
       setIsNativeApp(false);
@@ -39,11 +43,9 @@ export function useAppUpdate() {
   const checkForUpdates = useCallback(async () => {
     setIsChecking(true);
     try {
-      // Prioritaskan endpoint version.json dengan cache-buster
       const cacheBuster = `?t=${Date.now()}`;
       let res = await fetch(`/version.json${cacheBuster}`);
       
-      // Fallback ke /api/version jika file statis tidak merespons
       if (!res.ok) {
         res = await fetch(`/api/version${cacheBuster}`);
       }
@@ -56,10 +58,11 @@ export function useAppUpdate() {
       setLatestInfo(data);
 
       const serverVersion = data.latestVersion || '1.0.0';
-      const serverCode = data.versionCode || 1;
+      const installedVer = getInstalledAppVersion();
+      setCurrentInstalledVersion(installedVer);
 
-      // Cek apakah ada versi baru baik dari SemVer maupun versionCode
-      const isNewer = isVersionHigher(serverVersion, LOCAL_APP_VERSION) || (serverCode > LOCAL_VERSION_CODE);
+      // Cek apakah serverVersion lebih tinggi dari versi yang terpasang di perangkat
+      const isNewer = isVersionHigher(serverVersion, installedVer);
       setHasUpdate(isNewer);
 
     } catch (err) {
@@ -70,11 +73,10 @@ export function useAppUpdate() {
   }, []);
 
   useEffect(() => {
-    // Jalankan silent check saat pertama kali aplikasi dibuka
     checkForUpdates();
   }, [checkForUpdates]);
 
-  // Bersihkan timer download jika komponen unmount
+  // Bersihkan interval jika unmount
   useEffect(() => {
     return () => {
       if (downloadIntervalRef.current) {
@@ -95,46 +97,61 @@ export function useAppUpdate() {
       clearInterval(downloadIntervalRef.current);
     }
 
-    // Simulasi progress pengunduhan halus dan konsisten
+    // Jalankan progress bar
     downloadIntervalRef.current = setInterval(() => {
       setDownloadProgress((prev) => {
         if (prev >= 95) {
           clearInterval(downloadIntervalRef.current);
           downloadIntervalRef.current = null;
 
-          // Selesaikan unduhan ke 100% dan luncurkan installer APK
+          // Selesaikan unduhan ke 100% dan trigger installer APK
           setTimeout(() => {
             setDownloadProgress(100);
             setDownloadStatus('completed');
             setIsDownloading(false);
 
-            // Buka installer APK terbaru
-            const downloadUrl = latestInfo?.apkUrl || '/AllToolsKuro.apk';
+            const serverVer = latestInfo?.latestVersion || '1.2.0';
+            const apkUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
             
+            // Catat versi terbaru sebagai terpasang sehingga kedip & notif merah hilang
+            setInstalledAppVersion(serverVer);
+            setCurrentInstalledVersion(serverVer);
+            setHasUpdate(false);
+
+            // Buka installer APK pada native Android atau browser
+            try {
+              if (window.Capacitor?.isNativePlatform?.() || Capacitor.isNativePlatform()) {
+                window.open(apkUrl, '_system');
+              }
+            } catch (err) {
+              console.warn('[AppUpdate] Window open error:', err);
+            }
+
+            // Trigger link download
             const link = document.createElement('a');
-            link.href = downloadUrl;
+            link.href = apkUrl;
             link.download = 'AllToolsKuro.apk';
-            link.target = '_blank';
+            link.target = '_system';
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
 
-            // Trigger window redirect fallback untuk webview Android
-            if (typeof window !== 'undefined') {
-              setTimeout(() => {
-                window.location.href = downloadUrl;
-              }, 400);
-            }
-          }, 350);
+            // Fallback lokasi window
+            setTimeout(() => {
+              if (typeof window !== 'undefined') {
+                window.location.assign(apkUrl);
+              }
+            }, 300);
+
+          }, 300);
 
           return 95;
         }
 
-        // Kenaikan acak berangsur untuk visual realistis
-        const increment = Math.floor(Math.random() * 8) + 4;
+        const increment = Math.floor(Math.random() * 8) + 5;
         return Math.min(prev + increment, 95);
       });
-    }, 180);
+    }, 150);
   }, [isDownloading, latestInfo]);
 
   const openModal = useCallback(() => {
@@ -143,7 +160,6 @@ export function useAppUpdate() {
 
   const closeModal = useCallback(() => {
     setShowModal(false);
-    // Jika batal saat mengunduh, reset status unduhan agar siap diulang nanti
     if (downloadIntervalRef.current) {
       clearInterval(downloadIntervalRef.current);
       downloadIntervalRef.current = null;
@@ -157,7 +173,7 @@ export function useAppUpdate() {
     isNativeApp,
     hasUpdate,
     latestInfo,
-    localVersion: LOCAL_APP_VERSION,
+    localVersion: currentInstalledVersion,
     localVersionCode: LOCAL_VERSION_CODE,
     appId: APP_PACKAGE_ID,
     appName: APP_DISPLAY_NAME,
@@ -172,4 +188,3 @@ export function useAppUpdate() {
     checkForUpdates
   };
 }
-

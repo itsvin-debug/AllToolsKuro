@@ -156,12 +156,13 @@ function cleanSpeechText(text) {
     .trim();
 }
 
-// Deteksi kata kasar, makian, atau ujaran tidak pantas
+// Deteksi kata kasar, makian, ujaran kebencian, atau rasisme
 function isProfaneOrAbusive(text) {
   const abusivePatterns = [
+    /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard)\b/i,
     /\b(anjing|asw|asu|babi|kontol|memek|jembut|peler|pepek|bangsat|bajingan|pantek|itil)\b/i,
-    /\b(goblok|tolol|bego|idiot|bodoh|tai|taik|kampret|ngentot|ngentd|bokep|porno|sange)\b/i,
-    /\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker)\b/i
+    /\b(goblok|tolol|bego|idiot|bodoh|tai|taik|kampret|ngentot|ngentd|bokep|porno|sange|lonte|perek|jablay|bencong|banci)\b/i,
+    /\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker|whore|slut)\b/i
   ];
   return abusivePatterns.some(regex => regex.test(text));
 }
@@ -185,20 +186,26 @@ function isGibberishOrRandom(text) {
 function isAllToolsKuroTopic(text) {
   const clean = text.toLowerCase();
 
-  const validKeywords = [
+  const fullKeywords = [
     'kuro', 'kurobot', 'alltoolskuro', 'alltools', 'studio', 'fitur', 'alat', 'tool', 
     'menu', 'panduan', 'cara pakai', 'cara menggunakan', 'bantuan', 'tour', 'tur',
     'safelink', 'bypass', 'bypasser', 'sfl', 'sfl.gl', 'safelinku', 'ouo', 'bitly', 'shortlink', 'resolver',
-    'capcut', 'template', 'template capcut', 'jj', 'jedag', 'jedag jedug', 'jedag-jedug',
-    'preset', 'alight motion', 'am', 'preset am', 'xml', 'google drive', 'drive xml',
-    'download', 'downloader', 'unduh', 'tiktok', 'instagram', 'youtube', 'ig', 'yt', 'sw', 'status wa', 'anti burik',
+    'capcut', 'template', 'template capcut', 'jedag jedug', 'jedag-jedug',
+    'preset', 'alight motion', 'preset am', 'xml', 'google drive', 'drive xml',
+    'download', 'downloader', 'unduh', 'tiktok', 'instagram', 'youtube', 'status wa', 'anti burik',
     'png to pdf', 'pdf', 'ppt', 'dokumen', 'scribd', 'slideshare', 'doc',
-    'image to link', 'file ke link', 'kompres', 'compress', 'qr', 'barcode', 'qrcode',
+    'image to link', 'file ke link', 'kompres', 'compress', 'qrcode',
     'audio', 'musik', 'lagu', 'merger', 'photo studio', 'video studio', 'trimmer', 'potong video',
     'hapus background', 'bg remover', 'transparan', 'gratis', 'update', 'pembaruan', 'apk', 'aplikasi'
   ];
 
-  return validKeywords.some(kw => clean.includes(kw));
+  // Kata kunci pendek wajib menggunakan word boundary agar tidak cocok dengan substring kata lain (misal "ig" di dalam "nigga")
+  const shortKeywords = ['ig', 'yt', 'am', 'sw', 'jj', 'qr'];
+
+  const hasFull = fullKeywords.some(kw => clean.includes(kw));
+  if (hasFull) return true;
+
+  return shortKeywords.some(kw => new RegExp(`\\b${kw}\\b`, 'i').test(clean));
 }
 
 function detectToolMention(text) {
@@ -208,9 +215,16 @@ function detectToolMention(text) {
       return toolId;
     }
     for (const kw of toolData.keywords) {
-      const regex = new RegExp(`(^|\\s)${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`, 'i');
-      if (regex.test(clean) || clean.includes(kw)) {
-        return toolId;
+      if (kw.length <= 3) {
+        // Kata pendek wajib word boundary ketat
+        if (new RegExp(`\\b${kw}\\b`, 'i').test(clean)) {
+          return toolId;
+        }
+      } else {
+        const regex = new RegExp(`(^|\\s)${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`, 'i');
+        if (regex.test(clean) || clean.includes(kw)) {
+          return toolId;
+        }
       }
     }
   }

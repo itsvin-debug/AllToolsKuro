@@ -422,6 +422,17 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       console.warn('[KuroBot] Request fallback:', err);
       const lower = textToSend.toLowerCase();
 
+      // Filter kata kasar & ujaran kebencian di fallback
+      const isProfane = /\b(nigga|nigger|negro|niggas|niggers|anjing|asu|babi|kontol|memek|goblok|tolol|fuck|shit|bitch)\b/i.test(lower);
+      if (isProfane) {
+        const abusiveMsg = '? Maaf, kata-kata tersebut tidak pantas. Saya hanya asisten khusus untuk membantu fitur dan panduan navigasi di AllToolsKuro!';
+        setAnimState('confused');
+        streamText(abusiveMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: abusiveMsg, animation: 'confused' }]);
+        }, 'confused');
+        return;
+      }
+
       if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl')) {
         handleGuideSpecificTool('resolver', 'Tentu saja! Ini dia fitur Safelink Bypasser. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya tanpa menunggu iklan.');
         return;
