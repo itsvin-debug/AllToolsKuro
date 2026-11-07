@@ -4,21 +4,17 @@ import {
   Send, 
   Sparkles, 
   Compass, 
-  ChevronRight, 
-  StopCircle, 
   ArrowUpRight, 
   RotateCcw,
-  ArrowLeftRight,
   AlertTriangle,
   Flame,
-  Clock
+  GripHorizontal
 } from 'lucide-react';
 import KuroCharacter from './KuroCharacter';
 import { 
   getDeviceUserName, 
   getDeviceAngerState, 
-  recordDeviceStrike, 
-  resetDeviceAngerState 
+  recordDeviceStrike 
 } from '../services/storageService';
 
 // Fungsi utilitas pembersih teks agar ucapan Kuro tampil natural tanpa simbol markdown mentah (** atau #)
@@ -121,7 +117,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   // Mode tampilan: 'collapsed' | 'chat_popup' | 'floating_helper'
   const [mode, setMode] = useState('collapsed');
   
-  // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking'
+  // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking' | 'angry'
   const [animState, setAnimState] = useState('idle');
 
   // Posisi docking pop-up: 'right' | 'left'
@@ -129,6 +125,12 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     if (typeof window === 'undefined') return 'right';
     return localStorage.getItem('kuro_chat_dock_side') || 'right';
   });
+
+  // Drag Gesture States
+  const [dragDeltaX, setDragDeltaX] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartXRef = useRef(0);
+  const isDraggingRef = useRef(false);
 
   // Modal alert syarat isi nama panggilan
   const [showNameAlert, setShowNameAlert] = useState(false);
@@ -239,7 +241,6 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     if (hasGreetedRef.current) return;
     hasGreetedRef.current = true;
 
-    // Jika pengguna belum mengisi nama, jangan munculkan popup otomatis
     const userName = getDeviceUserName();
     if (!userName || !userName.trim()) return;
 
@@ -263,15 +264,6 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
     return () => clearTimeout(greetTimer);
   }, [streamText]);
-
-  // Toggle posisi docking (Kiri <-> Kanan)
-  const toggleDockPosition = () => {
-    const next = dockPosition === 'right' ? 'left' : 'right';
-    setDockPosition(next);
-    try {
-      localStorage.setItem('kuro_chat_dock_side', next);
-    } catch (e) {}
-  };
 
   // Buka widget secara manual dengan pemeriksaan nama pengguna
   const handleOpenWidget = () => {
@@ -348,8 +340,6 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
     setIsTourActive(false);
     setHighlightedToolId(null);
-    setMode('chat_popup');
-    setAnimState('idle');
   };
 
   const handleCloseWidget = () => {
@@ -358,25 +348,25 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setAnimState('idle');
   };
 
-  // Scroll otomatis ke kartu fitur target
+  // Auto-scroll ke elemen kartu alat di halaman beranda
   const scrollToToolElement = (toolId) => {
-    document.querySelectorAll('.ring-blue-500').forEach(el => {
-      el.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white', 'transition-all', 'duration-300');
+    const el = document.getElementById(`tool-${toolId}`);
+    if (!el) return;
+
+    document.querySelectorAll('.ring-blue-500').forEach(node => {
+      node.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white');
     });
 
-    const targetElement = document.getElementById(`tool-${toolId}`);
-    if (targetElement) {
-      targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      targetElement.classList.add('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white', 'transition-all', 'duration-300');
-      setHighlightedToolId(toolId);
-    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white', 'transition-all', 'duration-300');
+    setHighlightedToolId(toolId);
   };
 
-  // Eksekusi sekuens langkah tour satu per satu
+  // Eksekusi sekuens tour per fitur
   const executeTourStep = useCallback((index) => {
     if (index >= KURO_TOOLS_CATALOG.length) {
       document.querySelectorAll('.ring-blue-500').forEach(el => {
-        el.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white', 'transition-all', 'duration-300');
+        el.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white');
       });
 
       setHighlightedToolId(null);
@@ -465,8 +455,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       return;
     }
 
-    // 2. DETEKSI KATA KASAR / SLURS / MAKIAN UNTUK SISTEM 3 PERINGATAN (STRIKES)
-    const isProfane = /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard|anjing|asw|asu|babi|kontol|memek|jembut|peler|pepek|itil|pantek|ngentot|ngentd|bangsat|bajingan|goblok|tolol|bego|idiot|bodoh|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt)\b/i.test(textToSend);
+    // 2. DETEKSI KATA KASAR / SLURS / MAKIAN / SLANG GAUL KOTOR
+    const isProfane = /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard|anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|ngentd|bangsat|bgst|bngst|bajingan|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|anj|anjr|anjir|kelamin|titit|tetek|toket|penis|vagina)\b/i.test(textToSend);
 
     if (isProfane) {
       setInputText('');
@@ -481,13 +471,13 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       let warningMsg = '';
       let targetAnim = 'confused';
       if (strikeResult.strikes === 1) {
-        warningMsg = `? Eh... tolong jangan berkata kasar atau tidak sopan ya, ${userName}! Aku beri peringatan ke-1 nih!`;
+        warningMsg = `? Hmph! ${userName}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)`;
         targetAnim = 'confused';
       } else if (strikeResult.strikes === 2) {
-        warningMsg = `? Heh! Masih berani berkata seperti itu?! Ini peringatan ke-2 ya, ${userName}! Kalau sekali lagi kamu kasar, aku bakal ngambek dan nggak mau bicara sama kamu selama 30 menit!`;
+        warningMsg = `? Mou! Sudah kubilang jangan bicara kasar, ${userName}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek dan tidak mau bicara denganmu lagi! (Peringatan 2/3)`;
         targetAnim = 'angry';
       } else {
-        warningMsg = `? Hmph! Kamu keterlaluan banget, ${userName}! Aku ngambek total dan nggak mau ngobrol sama kamu selama 30 menit! Hmph!`;
+        warningMsg = `? Cukup! Aku benar-benar marah dan ngambek padamu, ${userName}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)`;
         targetAnim = 'angry';
       }
 
@@ -525,7 +515,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       const data = await res.json();
       const reply = cleanSpeechText(data.reply || `Halo ${userName}! Ada yang bisa KuroBot bantu seputar AllToolsKuro?`);
       const isValidContext = data.is_valid_context !== undefined ? data.is_valid_context : (data.isValidContext !== undefined ? data.isValidContext : true);
-      const anim = (!isValidContext || data.animation === 'confused') ? 'confused' : (data.animation || 'talking');
+      const anim = (!isValidContext || data.animation === 'confused' || data.animation === 'angry') ? data.animation || 'confused' : (data.animation || 'talking');
       const action = data.action || 'none';
       const targetTool = data.target_tool || data.targetTool || null;
 
@@ -544,17 +534,35 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       console.warn('[KuroBot] Request fallback:', err);
       const lower = textToSend.toLowerCase();
 
-      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl')) {
+      // Filter kata kasar & ujaran kebencian di fallback
+      const isFallbackProfane = /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard|anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|bangsat|bgst|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|fuck|shit|bitch|anj|anjr|anjir)\b/i.test(lower);
+      if (isFallbackProfane) {
+        const strikeResult = recordDeviceStrike();
+        setAngerState(getDeviceAngerState());
+        let abusiveMsg = `? Hmph! ${userName}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)`;
+        if (strikeResult.strikes === 2) {
+          abusiveMsg = `? Mou! Sudah kubilang jangan bicara kasar, ${userName}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek dan tidak mau bicara denganmu lagi! (Peringatan 2/3)`;
+        } else if (strikeResult.strikes >= 3) {
+          abusiveMsg = `? Cukup! Aku benar-benar marah dan ngambek padamu, ${userName}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)`;
+        }
+        setAnimState('angry');
+        streamText(abusiveMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: abusiveMsg, animation: 'angry' }]);
+        }, 'angry');
+        return;
+      }
+
+      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl') || lower.includes('bypas') || lower.includes('baypas')) {
         handleGuideSpecificTool('resolver', `Tentu saja, ${userName}! Ini dia fitur Safelink Bypasser. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya.`);
         return;
       }
 
-      if (lower.includes('capcut') || lower.includes('template') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('xml')) {
+      if (lower.includes('capcut') || lower.includes('template') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('xml') || lower.includes('cc') || lower.includes('jj')) {
         handleGuideSpecificTool('jjFinder', `Tentu, ${userName}! Fitur Cari Link JJ menyediakan ribuan template CapCut, preset Alight Motion, dan file XML Google Drive yang siap digunakan.`);
         return;
       }
 
-      const fallbackMsg = `? Maaf ${userName}, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!`;
+      const fallbackMsg = `? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya, ${userName}.`;
       setAnimState('confused');
       streamText(fallbackMsg, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: 'confused' }]);
@@ -562,23 +570,74 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }
   };
 
+  // ─── GESTUR SENTUH & DRAG SNAP TO EDGE (KIRI / KANAN) ───
+  const handleDragStart = (e) => {
+    // Abaikan drag jika menyentuh tombol di dalam header
+    if (e.target.closest('button')) return;
+
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    dragStartXRef.current = clientX;
+    isDraggingRef.current = true;
+    setIsDragging(true);
+  };
+
+  const handleDragMove = (e) => {
+    if (!isDraggingRef.current) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const delta = clientX - dragStartXRef.current;
+    setDragDeltaX(delta);
+  };
+
+  const handleDragEnd = () => {
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+    setIsDragging(false);
+
+    // Hitung posisi snap (Dilarang berhenti di tengah)
+    const currentSide = dockPosition;
+    let finalSide = currentSide;
+
+    // Jika digeser melewati ambang batas 65px ke arah sebaliknya
+    if (currentSide === 'right' && dragDeltaX < -65) {
+      finalSide = 'left';
+    } else if (currentSide === 'left' && dragDeltaX > 65) {
+      finalSide = 'right';
+    }
+
+    setDragDeltaX(0);
+    setDockPosition(finalSide);
+    try {
+      localStorage.setItem('kuro_chat_dock_side', finalSide);
+    } catch {}
+  };
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isDraggingRef.current) {
+        handleDragEnd();
+      }
+    };
+
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [dragDeltaX, dockPosition]);
+
   return (
     <>
-      {/* ─── 1. MODAL ALERT PERINGATAN WAJIB ISI NAMA ─── */}
+      {/* ─── 1. MODAL ALERT PERINGATAN WAJIB ISI NAMA (NEOBRUTALIST TERANG) ─── */}
       {showNameAlert && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
           <div 
-            className="w-full max-w-sm rounded-2xl border-2 border-black shadow-[6px_6px_0px_#000000] p-5 space-y-4 text-white"
-            style={{ backgroundColor: '#1a1a2e' }}
+            className="w-full max-w-sm rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] p-5 space-y-4"
             role="alertdialog"
             aria-labelledby="name-alert-title"
           >
-            <div className="flex items-center gap-2.5 text-amber-400 font-black text-base border-b-2 border-black pb-2.5">
+            <div className="flex items-center gap-2.5 text-amber-600 font-black text-base border-b-2 border-black pb-2.5">
               <AlertTriangle className="w-5 h-5 stroke-[2.5]" />
               <span id="name-alert-title">Syarat Akses Chatbot</span>
             </div>
 
-            <p className="text-xs text-slate-200 leading-relaxed font-medium">
+            <p className="text-xs text-neutral-800 leading-relaxed font-semibold">
               Silakan masukkan nama panggilan Anda terlebih dahulu di halaman utama sebelum menggunakan chatbot!
             </p>
 
@@ -589,7 +648,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                   setShowNameAlert(false);
                   window.dispatchEvent(new CustomEvent('kuro_focus_username_input'));
                 }}
-                className="px-4 py-2 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer"
+                className="px-4 py-2 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer"
               >
                 Isi Nama Sekarang
               </button>
@@ -601,20 +660,20 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {/* ─── 2. TOMBOL WIDGET MELAYANG (COLLAPSED) DENGAN DOCKING KIRI / KANAN ─── */}
       {mode === 'collapsed' && (
         <div 
-          className={`fixed bottom-20 sm:bottom-6 z-50 flex items-center gap-2 group transition-all duration-200 ${
+          className={`fixed bottom-20 sm:bottom-6 z-50 flex items-center gap-2 group transition-all duration-300 ${
             dockPosition === 'left' ? 'left-4 sm:left-6 flex-row-reverse' : 'right-4 sm:right-6'
           }`}
         >
           {/* Label Sapaan saat Hover */}
-          <div className="hidden sm:flex items-center gap-1.5 bg-[#1a1a2e] text-white border-2 border-black px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_#000000] text-xs font-bold font-mono pointer-events-none group-hover:opacity-100 opacity-90 transition-opacity">
-            <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+          <div className="hidden sm:flex items-center gap-1.5 bg-white text-black border-2 border-black px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_#000000] text-xs font-bold font-mono pointer-events-none group-hover:opacity-100 opacity-90 transition-opacity">
+            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <span>Tanya KuroBot</span>
           </div>
 
           <button
             type="button"
             onClick={handleOpenWidget}
-            className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#1a1a2e] border-2 border-black shadow-[3px_3px_0px_#000000] hover:shadow-[5px_5px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center relative cursor-pointer overflow-hidden p-1"
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border-2 border-black shadow-[3px_3px_0px_#000000] hover:shadow-[5px_5px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center relative cursor-pointer overflow-hidden p-1"
             title="Buka Asisten KuroBot"
             aria-label="Buka Asisten KuroBot"
           >
@@ -623,59 +682,66 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             {/* Badge Status Aktif / Ngambek */}
             <span 
               className={`absolute top-1.5 right-1.5 w-3 h-3 rounded-full border border-black ${
-                angerState.isAngry ? 'bg-rose-500 animate-ping' : 'bg-blue-500 animate-pulse'
+                angerState.isAngry ? 'bg-rose-500 animate-ping' : 'bg-blue-600 animate-pulse'
               }`} 
             />
           </button>
         </div>
       )}
 
-      {/* ─── 3. POPUP CHAT INTERAKTIF NEOBRUTALIST (ANTI-SLOP THEME) ─── */}
+      {/* ─── 3. POPUP CHAT INTERAKTIF NEOBRUTALIST (TERANG & BERKARAKTER ANIME) ─── */}
       {mode === 'chat_popup' && (
         <div 
-          className={`fixed bottom-20 sm:bottom-6 z-50 w-[92vw] sm:w-[385px] max-h-[85vh] sm:max-h-[580px] rounded-2xl border-2 border-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden text-white animate-in fade-in duration-200 ${
-            dockPosition === 'left' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
-          }`}
-          style={{ backgroundColor: '#1a1a2e' }}
+          className={`fixed bottom-20 sm:bottom-6 z-50 w-[92vw] sm:w-[385px] max-h-[85vh] sm:max-h-[580px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-200 ${
+            isDragging ? 'select-none' : 'transition-all duration-300 ease-out'
+          } ${dockPosition === 'left' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'}`}
+          style={{
+            transform: dragDeltaX ? `translateX(${dragDeltaX}px)` : 'none'
+          }}
         >
           
-          {/* Header Popup: Karakter, Nama, Toggle Posisi, & Kontrol */}
-          <div className="p-3 bg-[#131322] text-white border-b-2 border-black flex items-center justify-between">
+          {/* Header Popup: Drag Handle, Karakter, Nama, & Kontrol */}
+          <div 
+            onMouseDown={handleDragStart}
+            onMouseMove={handleDragMove}
+            onTouchStart={handleDragStart}
+            onTouchMove={handleDragMove}
+            onTouchEnd={handleDragEnd}
+            className="p-3 bg-neutral-50 text-black border-b-2 border-black flex items-center justify-between cursor-grab active:cursor-grabbing select-none"
+          >
             <div className="flex items-center gap-2.5">
               <div className="w-10 h-10 rounded-xl bg-blue-600 border-2 border-black overflow-hidden shrink-0 shadow-[2px_2px_0px_#000000] flex items-center justify-center p-0.5">
                 <KuroCharacter state={animState} size={38} />
               </div>
               <div className="flex flex-col">
                 <div className="flex items-center gap-1.5">
-                  <span className="font-black text-sm tracking-tight text-white">KuroBot</span>
+                  <span className="font-black text-sm tracking-tight text-black">KuroBot</span>
                   <span className="bg-blue-600 text-white text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border border-black shadow-[1px_1px_0px_#000000]">
                     AI ASISTEN
                   </span>
                 </div>
-                <span className="text-[10px] text-slate-300 font-mono font-medium flex items-center gap-1">
-                  <span className={`w-1.5 h-1.5 rounded-full ${angerState.isAngry ? 'bg-rose-400' : 'bg-emerald-400'} animate-pulse`} />
+                <span className="text-[10px] text-neutral-600 font-mono font-bold flex items-center gap-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${angerState.isAngry ? 'bg-rose-500' : 'bg-emerald-500'} animate-pulse`} />
                   {angerState.isAngry ? 'Sedang Ngambek' : 'Siap Membantu'}
                 </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-1">
-              {/* Tombol Toggle Posisi Docking (Kiri / Kanan) */}
-              <button
-                type="button"
-                onClick={toggleDockPosition}
-                className="w-7 h-7 rounded-lg bg-[#282a3c] hover:bg-[#34374e] text-slate-200 hover:text-white border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
-                title={dockPosition === 'right' ? 'Pindah ke Kiri Layar' : 'Pindah ke Kanan Layar'}
-                aria-label="Pindah Posisi Chatbot"
+            {/* Indikator Drag Handle & Tombol Aksi */}
+            <div className="flex items-center gap-1.5">
+              {/* Petunjuk Visual Drag Geser */}
+              <div 
+                className="hidden sm:flex items-center px-1.5 py-0.5 rounded border border-neutral-300 bg-white text-neutral-400 text-[9px] font-mono"
+                title="Tarik untuk geser ke kiri atau kanan"
               >
-                <ArrowLeftRight className="w-3.5 h-3.5 stroke-[2.5]" />
-              </button>
+                <GripHorizontal className="w-3.5 h-3.5" />
+              </div>
 
               {/* Tombol Hapus Riwayat Chat */}
               <button
                 type="button"
                 onClick={handleClearHistory}
-                className="w-7 h-7 rounded-lg bg-[#282a3c] hover:bg-rose-900/60 text-slate-200 hover:text-rose-300 border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                className="w-7 h-7 rounded-lg bg-white hover:bg-rose-50 text-neutral-700 hover:text-rose-600 border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
                 title="Hapus Riwayat Chat"
                 aria-label="Hapus Riwayat Chat"
               >
@@ -697,7 +763,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               <button
                 type="button"
                 onClick={handleCloseWidget}
-                className="w-7 h-7 rounded-lg bg-[#282a3c] hover:bg-[#34374e] text-slate-200 hover:text-white border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                className="w-7 h-7 rounded-lg bg-white hover:bg-neutral-100 text-neutral-700 hover:text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
                 aria-label="Tutup Chat"
               >
                 <X className="w-4 h-4 stroke-[2.5]" />
@@ -707,9 +773,9 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
           {/* Banner Peringatan & Status Ngambek 30 Menit */}
           {angerState.isAngry && (
-            <div className="p-2.5 bg-rose-950/90 border-b-2 border-black text-rose-200 text-xs font-mono font-bold flex items-center justify-between px-3">
+            <div className="p-2.5 bg-rose-100 border-b-2 border-black text-rose-800 text-xs font-mono font-bold flex items-center justify-between px-3">
               <span className="flex items-center gap-1.5">
-                <Flame className="w-4 h-4 text-rose-400 animate-pulse stroke-[2.5]" />
+                <Flame className="w-4 h-4 text-rose-600 animate-pulse stroke-[2.5]" />
                 <span>KuroBot Sedang Ngambek!</span>
               </span>
               <span className="bg-rose-600 text-white px-2 py-0.5 rounded border border-black font-black text-[11px]">
@@ -718,12 +784,14 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             </div>
           )}
 
-          {/* Area Riwayat Pesan Obrolan Neobrutalist */}
-          <div className="flex-1 p-3.5 overflow-y-auto max-h-[350px] flex flex-col gap-3 bg-[#111220] text-xs custom-scrollbar">
+          {/* Area Riwayat Pesan Obrolan Neobrutalist Terang */}
+          <div className="flex-1 p-3.5 overflow-y-auto max-h-[350px] flex flex-col gap-3 bg-neutral-50/70 text-xs custom-scrollbar">
             {messages.map((m, idx) => (
               <div
                 key={idx}
-                className={`flex gap-2 items-start ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                className={`flex gap-2 items-start ${
+                  m.sender === 'user' ? 'justify-end' : 'justify-start'
+                }`}
               >
                 {m.sender === 'ai' && (
                   <div className="w-7 h-7 rounded-lg bg-blue-600 border-2 border-black overflow-hidden shrink-0 mt-0.5 flex items-center justify-center p-0.5 shadow-[1.5px_1.5px_0px_#000000]">
@@ -731,12 +799,12 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                   </div>
                 )}
                 
-                {/* Bubble Chat: Biru Elektrik untuk User, Dark Neobrutalist #1f2038 untuk AI */}
+                {/* Bubble Chat: Biru Elektrik untuk User, Putih Neobrutalist untuk AI */}
                 <div
                   className={`p-3 rounded-xl border-2 border-black max-w-[85%] text-xs leading-relaxed font-sans shadow-[2px_2px_0px_#000000] ${
                     m.sender === 'user'
                       ? 'bg-blue-600 text-white font-medium text-right'
-                      : 'bg-[#1f2038] text-slate-100 text-left'
+                      : 'bg-white text-neutral-900 text-left'
                   }`}
                 >
                   <p className="whitespace-pre-line">{cleanSpeechText(m.text)}</p>
@@ -746,7 +814,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                     <button
                       type="button"
                       onClick={() => onOpenTool(m.toolId)}
-                      className="mt-2.5 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold text-[11px] border border-black shadow-xs cursor-pointer"
+                      className="mt-2.5 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] border border-black shadow-[1px_1px_0px_#000000] cursor-pointer"
                     >
                       <span>Buka Fitur Ini</span>
                       <ArrowUpRight className="w-3 h-3 stroke-[2.5]" />
@@ -762,9 +830,9 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 <div className="w-7 h-7 rounded-lg bg-blue-600 border-2 border-black overflow-hidden shrink-0 mt-0.5 flex items-center justify-center p-0.5 shadow-[1.5px_1.5px_0px_#000000]">
                   <KuroCharacter state="talking" size={28} />
                 </div>
-                <div className="p-3 rounded-xl border-2 border-black bg-[#1f2038] text-slate-100 shadow-[2px_2px_0px_#000000] max-w-[85%] text-xs leading-relaxed font-sans text-left">
+                <div className="p-3 rounded-xl border-2 border-black bg-white text-neutral-900 shadow-[2px_2px_0px_#000000] max-w-[85%] text-xs leading-relaxed font-sans text-left">
                   <p className="whitespace-pre-line">{displayedReply}</p>
-                  <span className="inline-block w-1.5 h-3 ml-1 bg-blue-400 animate-pulse" />
+                  <span className="inline-block w-1.5 h-3 ml-1 bg-blue-600 animate-pulse" />
                 </div>
               </div>
             )}
@@ -773,132 +841,119 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
           </div>
 
           {/* Prompt Cepat (Quick Suggestions) */}
-          <div className="px-3 py-2 bg-[#131322] border-t-2 border-black flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          <div className="px-3 py-2 bg-neutral-100 border-t-2 border-black flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             <button
               type="button"
               onClick={handleStartTour}
-              className="px-2.5 py-1 rounded-md bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-blue-50 text-blue-700 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
             >
               Jelaskan Semua Fitur
             </button>
             <button
               type="button"
-              onClick={() => handleSendMessage('Jelaskan fitur safelink bypasser')}
-              className="px-2.5 py-1 rounded-md bg-[#24263a] hover:bg-[#30334e] text-slate-200 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+              onClick={() => handleSendMessage('bagaimana cara bypass link safelink?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
             >
               Safelink Bypasser
             </button>
             <button
               type="button"
-              onClick={() => handleSendMessage('Jelaskan fitur cari link jj capcut')}
-              className="px-2.5 py-1 rounded-md bg-[#24263a] hover:bg-[#30334e] text-slate-200 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+              onClick={() => handleSendMessage('cara cari template capcut dan preset alight motion?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
             >
               Cari Link JJ
             </button>
             <button
               type="button"
-              onClick={() => handleSendMessage('Jelaskan fitur media downloader')}
-              className="px-2.5 py-1 rounded-md bg-[#24263a] hover:bg-[#30334e] text-slate-200 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-xs"
+              onClick={() => handleSendMessage('apa saja format yang didukung downloader?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
             >
               Media Downloader
             </button>
           </div>
 
-          {/* Form Input Obrolan Neobrutalist */}
+          {/* Kotak Input Pesan Neobrutalist Terang */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSendMessage();
             }}
-            className="p-3 bg-[#131322] border-t-2 border-black flex items-center gap-2"
+            className="p-3 bg-white border-t-2 border-black flex items-center gap-2"
           >
             <input
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={angerState.isAngry ? 'KuroBot sedang ngambek (30 menit)...' : 'Tanya seputar fitur AllToolsKuro...'}
+              placeholder={angerState.isAngry ? `Kuro sedang ngambek... (${remainingCountdown})` : 'Tanya seputar fitur AllToolsKuro...'}
               disabled={isTyping || angerState.isAngry}
-              className="flex-1 bg-[#0e0f1a] border-2 border-black rounded-lg px-3 py-2 text-xs font-medium text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+              maxLength={200}
+              className="flex-1 px-3 py-2 rounded-xl border-2 border-black bg-neutral-50 text-neutral-900 placeholder:text-neutral-400 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-black disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={!inputText.trim() || isTyping || angerState.isAngry}
-              className="w-9 h-9 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none flex items-center justify-center transition-all cursor-pointer"
+              disabled={isTyping || !inputText.trim() || angerState.isAngry}
+              className="p-2.5 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer shrink-0"
+              title="Kirim Pesan"
               aria-label="Kirim Pesan"
             >
-              <Send className="w-3.5 h-3.5 stroke-[2.5]" />
+              <Send className="w-4 h-4 stroke-[2.5]" />
             </button>
           </form>
 
         </div>
       )}
 
-      {/* ─── 4. FLOATING HELPER MODE (GUIDED TOUR & AUTO-SCROLL) ─── */}
-      {mode === 'floating_helper' && (
+      {/* ─── 4. FLOATING TOUR HELPER BUBBLE (SAAT TOUR AKTIF) ─── */}
+      {mode === 'floating_helper' && isTourActive && (
         <div 
-          className={`fixed bottom-20 sm:bottom-8 z-50 flex items-end gap-3 max-w-[360px] sm:max-w-[460px] animate-in fade-in duration-200 ${
-            dockPosition === 'left' ? 'left-3 sm:left-8' : 'right-3 sm:right-8'
+          className={`fixed bottom-20 sm:bottom-6 z-50 w-[90vw] sm:w-[360px] bg-white text-black border-2 border-black rounded-2xl shadow-[6px_6px_0px_#000000] p-4 flex flex-col gap-2.5 animate-in fade-in duration-150 ${
+            dockPosition === 'left' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
           }`}
         >
-          {/* Balon Penjelasan Interaktif */}
-          <div 
-            className="flex-1 rounded-2xl border-2 border-black p-4 shadow-[5px_5px_0px_#000000] flex flex-col gap-2.5 text-white"
-            style={{ backgroundColor: '#1a1a2e' }}
-          >
-            {/* Header Helper: Nomor Urut Tour & Tombol Cancel */}
-            <div className="flex items-center justify-between border-b-2 border-black pb-2">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
-                <span className="text-xs font-mono font-black text-blue-400 uppercase">
-                  {isTourActive ? `Guided Tour (${tourIndex + 1}/${KURO_TOOLS_CATALOG.length})` : 'Panduan Fitur'}
-                </span>
+          <div className="flex items-center justify-between border-b-2 border-black pb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-blue-600 border border-black overflow-hidden flex items-center justify-center p-0.5">
+                <KuroCharacter state={animState} size={28} />
               </div>
-
+              <span className="font-black text-xs">Pemandu Tour Kuro</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold bg-amber-400 text-black px-2 py-0.5 rounded border border-black">
+                {tourIndex + 1}/13
+              </span>
               <button
                 type="button"
                 onClick={handleCancelTour}
-                className="p-1 rounded-lg bg-[#282a3c] hover:bg-[#34374e] text-slate-200 border border-black shadow-xs cursor-pointer transition-colors"
+                className="p-1 rounded bg-white hover:bg-neutral-100 text-black border border-black cursor-pointer"
                 title="Hentikan Tour"
-                aria-label="Hentikan Tour"
               >
-                <StopCircle className="w-3.5 h-3.5 stroke-[2.5]" />
+                <X className="w-3.5 h-3.5 stroke-[2.5]" />
               </button>
-            </div>
-
-            {/* Konten Penjelasan Typewriter */}
-            <p className="text-xs text-slate-100 font-sans leading-relaxed whitespace-pre-line">
-              {displayedReply || (messages.length > 0 ? messages[messages.length - 1].text : '')}
-            </p>
-
-            {/* Footer Helper: Tombol Navigasi Lanjut */}
-            <div className="flex items-center justify-between pt-1">
-              <button
-                type="button"
-                onClick={() => setMode('chat_popup')}
-                className="text-[11px] font-mono text-slate-300 hover:text-white underline cursor-pointer"
-              >
-                Buka Chatbot
-              </button>
-
-              {isTourActive && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (tourSequenceRef.current) clearTimeout(tourSequenceRef.current);
-                    executeTourStep(tourIndex + 1);
-                  }}
-                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-extrabold rounded-lg border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 cursor-pointer transition-all"
-                >
-                  <span>Berikutnya</span>
-                  <ChevronRight className="w-3 h-3 stroke-[2.5]" />
-                </button>
-              )}
             </div>
           </div>
 
-          {/* Karakter Avatar di Sisi Balon */}
-          <div className="w-16 h-16 rounded-2xl bg-[#1a1a2e] border-2 border-black shadow-[3px_3px_0px_#000000] overflow-hidden flex items-center justify-center p-1 shrink-0">
-            <KuroCharacter state={animState} size={54} />
+          <div className="p-2.5 rounded-xl bg-neutral-50 border border-black text-xs leading-relaxed">
+            <p className="font-semibold text-neutral-800">{displayedReply || messages[messages.length - 1]?.text}</p>
+          </div>
+
+          <div className="flex items-center justify-between pt-1">
+            <button
+              type="button"
+              onClick={handleCancelTour}
+              className="px-3 py-1.5 rounded-lg border border-black bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold"
+            >
+              Selesai Tour
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (tourSequenceRef.current) clearTimeout(tourSequenceRef.current);
+                executeTourStep(tourIndex + 1);
+              }}
+              className="px-3.5 py-1.5 rounded-lg border-2 border-black bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
+            >
+              Lanjut ({tourIndex + 2}/13)
+            </button>
           </div>
         </div>
       )}

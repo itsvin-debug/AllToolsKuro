@@ -156,13 +156,13 @@ function cleanSpeechText(text) {
     .trim();
 }
 
-// Deteksi kata kasar, makian, ujaran kebencian, atau rasisme
+// Deteksi kata kasar, makian, ujaran kebencian, rasisme, atau singkatan kotor gaul
 function isProfaneOrAbusive(text) {
   const abusivePatterns = [
     /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard)\b/i,
-    /\b(anjing|asw|asu|babi|kontol|memek|jembut|peler|pepek|bangsat|bajingan|pantek|itil)\b/i,
-    /\b(goblok|tolol|bego|idiot|bodoh|tai|taik|kampret|ngentot|ngentd|bokep|porno|sange|lonte|perek|jablay|bencong|banci)\b/i,
-    /\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker|whore|slut)\b/i
+    /\b(anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|bangsat|bgst|bngst|bajingan|pantek|itil)\b/i,
+    /\b(goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|kampret|ngentot|ngntt|ngentd|bokep|porno|sange|lonte|perek|jablay|bencong|banci|anj|anjr|anjir)\b/i,
+    /\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker|whore|slut|kelamin|titit|tetek|toket|penis|vagina)\b/i
   ];
   return abusivePatterns.some(regex => regex.test(text));
 }
@@ -281,11 +281,11 @@ export default async function handler(req, res) {
         ? rawBody.warningCount 
         : 1;
 
-      let angerReply = `? Eh... tolong jangan berkata kasar atau tidak sopan ya, ${userName}! Aku beri peringatan pertama nih (1/3)!`;
+      let angerReply = `? Hmph! ${userName}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)`;
       if (wCount === 2) {
-        angerReply = `? Heh! Masih berani berkata seperti itu?! Ini peringatan ke-2 ya, ${userName}! Kalau sekali lagi kamu kasar, aku bakal ngambek dan nggak mau bicara sama kamu selama 30 menit (2/3)!`;
+        angerReply = `? Mou! Sudah kubilang jangan bicara kasar, ${userName}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek dan tidak mau bicara denganmu lagi! (Peringatan 2/3)`;
       } else if (wCount >= 3) {
-        angerReply = `? Hmph! Kamu keterlaluan banget, ${userName}! Aku ngambek total dan nggak mau ngobrol sama kamu selama 30 menit! Hmph! (3/3)`;
+        angerReply = `? Cukup! Aku benar-benar marah dan ngambek padamu, ${userName}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)`;
       }
 
       return res.status(200).json({

@@ -54,10 +54,9 @@ export function setDeviceUserName(name) {
 /**
  * Validasi ketat nama panggilan pengguna
  * Aturan:
- * - Hanya 1 kata pendek (tanpa spasi kalimat)
- * - 2 - 15 karakter huruf alfabet
- * - Tidak boleh mengandung angka atau simbol
- * - Dilarang keras kata toxic, kata kotor, kelamin, dan nama binatang
+ * - Hanya 1 kata pendek (tanpa spasi)
+ * - 2 - 12 karakter huruf alfabet murni (tanpa angka/simbol)
+ * - Dilarang keras kata toxic, kelamin, makian, rasisme, dan nama binatang
  */
 export function validateNickname(rawName) {
   if (!rawName || typeof rawName !== 'string') {
@@ -70,37 +69,37 @@ export function validateNickname(rawName) {
     return { isValid: false, error: 'Nama panggilan tidak boleh kosong.' };
   }
 
-  // Dilarang mengandung spasi (hanya boleh 1 kata nama panggilan pendek)
+  // Dilarang mengandung spasi (hanya 1 kata)
   if (/\s/.test(trimmed)) {
-    return { isValid: false, error: 'Gunakan satu kata panggilan saja (bukan nama panjang atau kalimat).' };
+    return { isValid: false, error: 'Hanya boleh 1 kata nama panggilan pendek (tanpa spasi).' };
   }
 
   // Dilarang angka
   if (/\d/.test(trimmed)) {
-    return { isValid: false, error: 'Nama panggilan tidak boleh mengandung angka.' };
+    return { isValid: false, error: 'Nama panggilan dilarang mengandung angka.' };
   }
 
   // Dilarang simbol / karakter khusus (hanya huruf alfabet a-z / A-Z)
   if (!/^[a-zA-Z]+$/.test(trimmed)) {
-    return { isValid: false, error: 'Nama panggilan hanya boleh berisi huruf alfabet biasa.' };
+    return { isValid: false, error: 'Nama panggilan hanya boleh berisi huruf alfabet.' };
   }
 
-  // Batas panjang 2 - 15 karakter
+  // Batas panjang 2 - 12 karakter
   if (trimmed.length < 2) {
-    return { isValid: false, error: 'Nama panggilan terlalu pendek (minimal 2 karakter).' };
+    return { isValid: false, error: 'Nama panggilan terlalu pendek (minimal 2 huruf).' };
   }
-  if (trimmed.length > 15) {
-    return { isValid: false, error: 'Nama panggilan terlalu panjang (maksimal 15 karakter).' };
+  if (trimmed.length > 12) {
+    return { isValid: false, error: 'Nama panggilan terlalu panjang (maksimal 12 huruf).' };
   }
 
   // Filter nama binatang
-  const animalPattern = /\b(anjing|asu|asw|babi|monyet|kunyuk|kampret|kucing|tikus|ular|celeng|buaya)\b/i;
+  const animalPattern = /\b(anjing|asu|asw|babi|monyet|kunyuk|kampret|kucing|tikus|ular|celeng|buaya|bebek|ayam|kuda|sapi|kambing|codot|buntal)\b/i;
   if (animalPattern.test(trimmed)) {
     return { isValid: false, error: 'Dilarang menggunakan nama binatang atau sebutan tidak wajar.' };
   }
 
-  // Filter kata toxic, kelamin, rasisme, dan makian
-  const toxicPattern = /\b(kontol|memek|jembut|peler|pepek|itil|pantek|ngentot|ngentd|bangsat|bajingan|goblok|tolol|bego|idiot|bodoh|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|nigga|nigger|negro)\b/i;
+  // Filter kata toxic, kelamin, rasisme, makian, dan singkatan slang kotor
+  const toxicPattern = /\b(kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|ngentd|bangsat|bgst|bngst|bajingan|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|nigga|nigger|negro|chink|spic|kike|faggot|retard|anj|anjr|anjir|kelamin|titit|tetek|toket|penis|vagina)\b/i;
   if (toxicPattern.test(trimmed)) {
     return { isValid: false, error: 'Nama mengandung kata tidak pantas atau dilarang. Harap gunakan nama yang sopan.' };
   }

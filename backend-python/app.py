@@ -228,12 +228,12 @@ def detect_tool_mention(text: str) -> Optional[str]:
     return None
 
 def is_profane_or_abusive(text: str) -> bool:
-    """Mendeteksi kata kasar, makian, ujaran kebencian, atau rasisme."""
+    """Mendeteksi kata kasar, makian, ujaran kebencian, rasisme, atau singkatan kotor gaul."""
     abusive_patterns = [
         r'\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard)\b',
-        r'\b(anjing|asw|asu|babi|kontol|memek|jembut|peler|pepek|bangsat|bajingan|pantek|itil)\b',
-        r'\b(goblok|tolol|bego|idiot|bodoh|tai|taik|kampret|ngentot|ngentd|bokep|porno|sange|lonte|perek|jablay|bencong|banci)\b',
-        r'\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker|whore|slut)\b'
+        r'\b(anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|bangsat|bgst|bngst|bajingan|pantek|itil)\b',
+        r'\b(goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|kampret|ngentot|ngntt|ngentd|bokep|porno|sange|lonte|perek|jablay|bencong|banci|anj|anjr|anjir)\b',
+        r'\b(fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|motherfucker|whore|slut|kelamin|titit|tetek|toket|penis|vagina)\b'
     ]
     for pat in abusive_patterns:
         if re.search(pat, text, re.IGNORECASE):
@@ -307,11 +307,11 @@ def handle_chat(req: ChatRequest):
     # 1. FILTER KATA KASAR / MAKIAN / UJARAN KEBENCIAN (SISTEM ANGER BERJENJANG)
     if is_profane_or_abusive(lower_msg):
         if w_count == 2:
-            anger_reply = f"? Heh! Masih berani berkata seperti itu?! Ini peringatan ke-2 ya, {user_name}! Kalau sekali lagi kamu kasar, aku bakal ngambek dan nggak mau bicara sama kamu selama 30 menit (2/3)!"
+            anger_reply = f"? Mou! Sudah kubilang jangan bicara kasar, {user_name}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek dan tidak mau bicara denganmu lagi! (Peringatan 2/3)"
         elif w_count >= 3:
-            anger_reply = f"? Hmph! Kamu keterlaluan banget, {user_name}! Aku ngambek total dan nggak mau ngobrol sama kamu selama 30 menit! Hmph! (3/3)"
+            anger_reply = f"? Cukup! Aku benar-benar marah dan ngambek padamu, {user_name}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)"
         else:
-            anger_reply = f"? Eh... tolong jangan berkata kasar atau tidak sopan ya, {user_name}! Aku beri peringatan pertama nih (1/3)!"
+            anger_reply = f"? Hmph! {user_name}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)"
 
         return ChatResponse(
             reply=anger_reply,
