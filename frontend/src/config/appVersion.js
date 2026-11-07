@@ -22,3 +22,4 @@ export function isVersionHigher(remoteVersion, localVersion) {
   }
   return false;
 }
+
