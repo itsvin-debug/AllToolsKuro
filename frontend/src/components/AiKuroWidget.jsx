@@ -120,17 +120,30 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking' | 'angry'
   const [animState, setAnimState] = useState('idle');
 
-  // Posisi docking pop-up: 'right' | 'left'
+  // Posisi docking pop-up & tombol: 'right' | 'left' (Wajib hanya di kiri atau kanan)
   const [dockPosition, setDockPosition] = useState(() => {
     if (typeof window === 'undefined') return 'right';
     return localStorage.getItem('kuro_chat_dock_side') || 'right';
   });
 
-  // Drag Gesture States
-  const [dragDeltaX, setDragDeltaX] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStartXRef = useRef(0);
-  const isDraggingRef = useRef(false);
+  // State gestur drag tombol melayang (collapsed)
+  const [buttonDragDeltaX, setButtonDragDeltaX] = useState(0);
+  const [isButtonDragging, setIsButtonDragging] = useState(false);
+  const buttonDragStateRef = useRef({
+    startX: 0,
+    startTime: 0,
+    isDragging: false,
+    lastX: 0
+  });
+
+  // State gestur drag popup chat
+  const [popupDragDeltaX, setPopupDragDeltaX] = useState(0);
+  const [isPopupDragging, setIsPopupDragging] = useState(false);
+  const popupDragStateRef = useRef({
+    startX: 0,
+    isDragging: false,
+    lastX: 0
+  });
 
   // Modal alert syarat isi nama panggilan
   const [showNameAlert, setShowNameAlert] = useState(false);
@@ -570,57 +583,170 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }
   };
 
-  // ─── GESTUR SENTUH & DRAG SNAP TO EDGE (KIRI / KANAN) ───
-  const handleDragStart = (e) => {
-    // Abaikan drag jika menyentuh tombol di dalam header
-    if (e.target.closest('button')) return;
+  // ─── GESTUR DRAG TOMBOL MELAYANG (SNAP HANYA KIRI / KANAN) ───
+  const handleButtonStart = (e) => {
+    // Hanya tangani klik mouse utama (kiri) atau sentuhan jari
+    if (e.button !== undefined && e.button !== 0) return;
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    dragStartXRef.current = clientX;
-    isDraggingRef.current = true;
-    setIsDragging(true);
-  };
+    buttonDragStateRef.current = {
+      startX: clientX,
+      startTime: Date.now(),
+      isDragging: false,
+      lastX: clientX
+    };
 
-  const handleDragMove = (e) => {
-    if (!isDraggingRef.current) return;
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const delta = clientX - dragStartXRef.current;
-    setDragDeltaX(delta);
-  };
+    const handleMove = (moveEvent) => {
+      const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const deltaX = currentX - buttonDragStateRef.current.startX;
+      buttonDragStateRef.current.lastX = currentX;
 
-  const handleDragEnd = () => {
-    if (!isDraggingRef.current) return;
-    isDraggingRef.current = false;
-    setIsDragging(false);
+      // Ambang batas gerakan 6px untuk membedakan antara klik biasa dan gestur tarik
+      if (!buttonDragStateRef.current.isDragging && Math.abs(deltaX) > 6) {
+        buttonDragStateRef.current.isDragging = true;
+        setIsButtonDragging(true);
+      }
 
-    // Hitung posisi snap (Dilarang berhenti di tengah)
-    const currentSide = dockPosition;
-    let finalSide = currentSide;
+      if (buttonDragStateRef.current.isDragging) {
+        if (moveEvent.cancelable) moveEvent.preventDefault();
 
-    // Jika digeser melewati ambang batas 65px ke arah sebaliknya
-    if (currentSide === 'right' && dragDeltaX < -65) {
-      finalSide = 'left';
-    } else if (currentSide === 'left' && dragDeltaX > 65) {
-      finalSide = 'right';
-    }
-
-    setDragDeltaX(0);
-    setDockPosition(finalSide);
-    try {
-      localStorage.setItem('kuro_chat_dock_side', finalSide);
-    } catch {}
-  };
-
-  useEffect(() => {
-    const handleGlobalMouseUp = () => {
-      if (isDraggingRef.current) {
-        handleDragEnd();
+        const screenWidth = window.innerWidth || document.documentElement.clientWidth;
+        // Batasi rentang horizontal agar tombol tetap di dalam batas layar HP
+        let clampedDelta = deltaX;
+        if (dockPosition === 'right') {
+          clampedDelta = Math.max(-(screenWidth - 80), Math.min(25, deltaX));
+        } else {
+          clampedDelta = Math.min((screenWidth - 80), Math.max(-25, deltaX));
+        }
+        setButtonDragDeltaX(clampedDelta);
       }
     };
 
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, [dragDeltaX, dockPosition]);
+    const handleEnd = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+      window.removeEventListener('touchcancel', handleEnd);
+
+      const { startX, startTime, isDragging: wasDragging, lastX } = buttonDragStateRef.current;
+      const duration = Date.now() - startTime;
+      const totalDelta = lastX - startX;
+
+      setIsButtonDragging(false);
+      setButtonDragDeltaX(0);
+
+      // Jika bukan drag (gerakan kecil di bawah 8px dan durasi singkat), buka widget
+      if (!wasDragging && Math.abs(totalDelta) < 8 && duration < 500) {
+        handleOpenWidget();
+        return;
+      }
+
+      // Hitung snap posisi HANYA KIRI atau KANAN (Dilarang berhenti di tengah)
+      const screenWidth = window.innerWidth || document.documentElement.clientWidth;
+      let finalSide = dockPosition;
+
+      if (dockPosition === 'right') {
+        if (totalDelta < -40 || lastX < screenWidth * 0.5) {
+          finalSide = 'left';
+        }
+      } else {
+        if (totalDelta > 40 || lastX > screenWidth * 0.5) {
+          finalSide = 'right';
+        }
+      }
+
+      setDockPosition(finalSide);
+      try {
+        localStorage.setItem('kuro_chat_dock_side', finalSide);
+      } catch (err) {}
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+    window.addEventListener('touchcancel', handleEnd);
+  };
+
+  // ─── GESTUR DRAG POPUP CHAT (SNAP HANYA KIRI / KANAN) ───
+  const handlePopupDragStart = (e) => {
+    // Abaikan jika menyentuh tombol di dalam header
+    if (e.target.closest('button')) return;
+    if (e.button !== undefined && e.button !== 0) return;
+
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    popupDragStateRef.current = {
+      startX: clientX,
+      isDragging: false,
+      lastX: clientX
+    };
+
+    const handleMove = (moveEvent) => {
+      const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const deltaX = currentX - popupDragStateRef.current.startX;
+      popupDragStateRef.current.lastX = currentX;
+
+      if (!popupDragStateRef.current.isDragging && Math.abs(deltaX) > 6) {
+        popupDragStateRef.current.isDragging = true;
+        setIsPopupDragging(true);
+      }
+
+      if (popupDragStateRef.current.isDragging) {
+        if (moveEvent.cancelable) moveEvent.preventDefault();
+        const screenWidth = window.innerWidth || document.documentElement.clientWidth;
+
+        let clampedDelta = deltaX;
+        if (dockPosition === 'right') {
+          clampedDelta = Math.max(-(screenWidth - 100), Math.min(30, deltaX));
+        } else {
+          clampedDelta = Math.min((screenWidth - 100), Math.max(-30, deltaX));
+        }
+        setPopupDragDeltaX(clampedDelta);
+      }
+    };
+
+    const handleEnd = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+      window.removeEventListener('touchcancel', handleEnd);
+
+      const { startX, isDragging: wasDragging, lastX } = popupDragStateRef.current;
+      const totalDelta = lastX - startX;
+
+      setIsPopupDragging(false);
+      setPopupDragDeltaX(0);
+
+      if (!wasDragging) return;
+
+      // Hitung snap posisi HANYA KIRI atau KANAN (Dilarang berhenti di tengah)
+      const screenWidth = window.innerWidth || document.documentElement.clientWidth;
+      let finalSide = dockPosition;
+
+      if (dockPosition === 'right') {
+        if (totalDelta < -50 || lastX < screenWidth * 0.5) {
+          finalSide = 'left';
+        }
+      } else {
+        if (totalDelta > 50 || lastX > screenWidth * 0.5) {
+          finalSide = 'right';
+        }
+      }
+
+      setDockPosition(finalSide);
+      try {
+        localStorage.setItem('kuro_chat_dock_side', finalSide);
+      } catch (err) {}
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+    window.addEventListener('touchcancel', handleEnd);
+  };
 
   return (
     <>
@@ -660,32 +786,55 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {/* ─── 2. TOMBOL WIDGET MELAYANG (COLLAPSED) DENGAN DOCKING KIRI / KANAN ─── */}
       {mode === 'collapsed' && (
         <div 
-          className={`fixed bottom-20 sm:bottom-6 z-50 flex items-center gap-2 group transition-all duration-300 ${
+          className={`fixed bottom-20 sm:bottom-6 z-50 flex items-center gap-2 group ${
+            isButtonDragging ? '' : 'transition-all duration-300 ease-out'
+          } ${
             dockPosition === 'left' ? 'left-4 sm:left-6 flex-row-reverse' : 'right-4 sm:right-6'
           }`}
+          style={{
+            transform: buttonDragDeltaX ? `translateX(${buttonDragDeltaX}px)` : 'none'
+          }}
         >
-          {/* Label Sapaan saat Hover */}
-          <div className="hidden sm:flex items-center gap-1.5 bg-white text-black border-2 border-black px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_#000000] text-xs font-bold font-mono pointer-events-none group-hover:opacity-100 opacity-90 transition-opacity">
+          {/* Label Sapaan saat Hover di Desktop */}
+          <div className="hidden sm:flex items-center gap-1.5 bg-white text-black border-2 border-black px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_#000000] text-xs font-bold font-mono pointer-events-none group-hover:opacity-100 opacity-90 transition-opacity select-none">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <span>Tanya KuroBot</span>
           </div>
 
-          <button
-            type="button"
-            onClick={handleOpenWidget}
-            className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border-2 border-black shadow-[3px_3px_0px_#000000] hover:shadow-[5px_5px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center relative cursor-pointer overflow-hidden p-1"
-            title="Buka Asisten KuroBot"
-            aria-label="Buka Asisten KuroBot"
+          <div
+            role="button"
+            tabIndex={0}
+            onMouseDown={handleButtonStart}
+            onTouchStart={handleButtonStart}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleOpenWidget();
+              }
+            }}
+            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border-2 border-black ${
+              isButtonDragging 
+                ? 'shadow-[5px_5px_0px_#000000] scale-105 cursor-grabbing' 
+                : 'shadow-[3px_3px_0px_#000000] hover:shadow-[5px_5px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none cursor-grab'
+            } transition-all flex items-center justify-center relative select-none touch-none overflow-hidden p-1`}
+            title="Tarik ke kiri/kanan untuk geser posisi, atau klik untuk buka chat"
+            aria-label="Buka Asisten KuroBot (Tarik untuk geser posisi)"
           >
             {/* Karakter Vektor SVG Elaina */}
             <KuroCharacter state="wave" size={54} />
+            
             {/* Badge Status Aktif / Ngambek */}
             <span 
               className={`absolute top-1.5 right-1.5 w-3 h-3 rounded-full border border-black ${
                 angerState.isAngry ? 'bg-rose-500 animate-ping' : 'bg-blue-600 animate-pulse'
               }`} 
             />
-          </button>
+
+            {/* Indikator Geser Halus di Bagian Bawah Tombol */}
+            <div className="absolute bottom-1 inset-x-0 flex justify-center items-center pointer-events-none opacity-50">
+              <div className="w-4 h-1 rounded-full bg-black/40" />
+            </div>
+          </div>
         </div>
       )}
 
@@ -693,23 +842,22 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {mode === 'chat_popup' && (
         <div 
           className={`fixed bottom-20 sm:bottom-6 z-50 w-[92vw] sm:w-[385px] max-h-[85vh] sm:max-h-[580px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-200 ${
-            isDragging ? 'select-none' : 'transition-all duration-300 ease-out'
+            isPopupDragging ? 'select-none' : 'transition-all duration-300 ease-out'
           } ${dockPosition === 'left' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'}`}
           style={{
-            transform: dragDeltaX ? `translateX(${dragDeltaX}px)` : 'none'
+            transform: popupDragDeltaX ? `translateX(${popupDragDeltaX}px)` : 'none'
           }}
         >
           
           {/* Header Popup: Drag Handle, Karakter, Nama, & Kontrol */}
           <div 
-            onMouseDown={handleDragStart}
-            onMouseMove={handleDragMove}
-            onTouchStart={handleDragStart}
-            onTouchMove={handleDragMove}
-            onTouchEnd={handleDragEnd}
-            className="p-3 bg-neutral-50 text-black border-b-2 border-black flex items-center justify-between cursor-grab active:cursor-grabbing select-none"
+            onMouseDown={handlePopupDragStart}
+            onTouchStart={handlePopupDragStart}
+            className={`p-3 bg-neutral-50 text-black border-b-2 border-black flex items-center justify-between select-none touch-none ${
+              isPopupDragging ? 'cursor-grabbing bg-neutral-100' : 'cursor-grab'
+            }`}
           >
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2.5 pointer-events-none">
               <div className="w-10 h-10 rounded-xl bg-blue-600 border-2 border-black overflow-hidden shrink-0 shadow-[2px_2px_0px_#000000] flex items-center justify-center p-0.5">
                 <KuroCharacter state={animState} size={38} />
               </div>
@@ -731,10 +879,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             <div className="flex items-center gap-1.5">
               {/* Petunjuk Visual Drag Geser */}
               <div 
-                className="hidden sm:flex items-center px-1.5 py-0.5 rounded border border-neutral-300 bg-white text-neutral-400 text-[9px] font-mono"
-                title="Tarik untuk geser ke kiri atau kanan"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-neutral-300 bg-white text-neutral-500 text-[9px] font-mono select-none"
+                title="Tarik ke kiri atau kanan untuk geser posisi"
               >
                 <GripHorizontal className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline font-bold">Geser</span>
               </div>
 
               {/* Tombol Hapus Riwayat Chat */}
