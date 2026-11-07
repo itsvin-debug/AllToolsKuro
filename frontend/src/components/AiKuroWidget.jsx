@@ -565,6 +565,17 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         return;
       }
 
+      // Deteksi pertanyaan identitas & pengenalan web AllToolsKuro di fallback
+      const isWebIntro = /\b(web apa|situs apa|aplikasi apa|apk apa|buat apa|fungsi web|kegunaan web|gunanya web|alltoolskuro|bisa ngapain|bisa apa|apa itu|ini web apa|web apa ini|situs ini buat apa)\b/i.test(lower);
+      if (isWebIntro) {
+        const introReply = `Halo ${userName}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digitalmu secara gratis! ✨\n\nDi sini kamu bisa menggunakan:\n• Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.\n• Cari Link JJ: Ribuan template CapCut, preset Alight Motion, dan XML Google Drive.\n• Media Downloader: Unduh video tanpa watermark TikTok, IG, YT (kualitas HD hingga Status WA Anti-Burik).\n• Studio Visual AI: Hapus Background AI, QR Code Studio, Photo & Video Studio, dan Kompres Media.\n• Konversi Dokumen: PNG to PDF dan materi Scribd/SlideShare.\n\nMau Kuro pandu mencoba fitur yang mana hari ini?`;
+        setAnimState('wave');
+        streamText(introReply, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: introReply, animation: 'wave' }]);
+        }, 'wave');
+        return;
+      }
+
       if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl') || lower.includes('bypas') || lower.includes('baypas')) {
         handleGuideSpecificTool('resolver', `Tentu saja, ${userName}! Ini dia fitur Safelink Bypasser. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya.`);
         return;

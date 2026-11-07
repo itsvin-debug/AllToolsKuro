@@ -260,11 +260,32 @@ def is_friendly_greeting(text: str) -> bool:
         return True
     return bool(re.search(r'\b(halo|hai|hi|hei|salam|assalamualaikum|pagi|siang|sore|malam|halo kuro|hai kuro|kurobot|kuro)\b', clean))
 
+def is_web_intro_or_identity_query(text: str) -> bool:
+    """Mendeteksi pertanyaan seputar pengenalan identitas, fungsi umum, atau penjelasan dasar web AllToolsKuro."""
+    clean = text.lower().strip()
+    patterns = [
+        r'\b(ini\s+)?(web|website|situs|laman|portal|platform|app|apk|aplikasi)\s+(apa|apaan|apa ya|apasi|apaan nih|apa nih|apa tuh|apaan tuh|tentang apa|buat apa|tujuannya apa|fungsinya apa|gunanya apa|kegunaannya apa)\b',
+        r'\b(web|website|situs|laman|portal|platform|app|apk|aplikasi)\s+(apa\s+ini|apaan\s+ini|apa\s+nih|apaan\s+nih|apa\s+tuh|apaan\s+tuh|ini\s+apa|ini\s+apaan)\b',
+        r'\b(apa|apaan)\s+(fungsi|kegunaan|manfaat|tujuan|maksud)\s+(dari\s+)?(web|website|situs|aplikasi|apk|platform|alltoolskuro|alltools|kuro)\b',
+        r'\b(web|website|situs|aplikasi|platform|alltoolskuro|alltools)\s+(ini\s+)?(buat apa|bisa apa|bisa ngapain|fungsinya apa|gunanya apa|tentang apa|isinya apa)\b',
+        r'\b(apa\s+itu|apaan\s+sih|apa\s+sih|apa\s+artinya)\s+(alltoolskuro|alltools|kuro\s*studio|web\s+ini|situs\s+ini|aplikasi\s+ini)\b',
+        r'\b(alltoolskuro|alltools|kuro\s*studio)\s+(itu\s+)?(apa|apaan|web apa|situs apa|aplikasi apa|buat apa)\b',
+        r'\b(bisa\s+ngapain\s+aja|bisa\s+buat\s+apa|bisa\s+apa\s+aja|ada\s+apa\s+aja|gunanya\s+apa|fungsinya\s+apa)\s*(di\s+)?(sini|web ini|situs ini|aplikasi ini|alltoolskuro)?\b',
+        r'\b(jelasin|ceritakan|kasih tau|info|penjelasan)\s+(tentang\s+)?(web|website|situs|alltoolskuro|platform)\b',
+        r'\b(kegunaan|fungsi|manfaat|tujuan)\s+(web|website|situs|aplikasi)\b',
+        r'\b(kenapa\s+ada|untuk\s+apa)\s+(web|website|situs|alltoolskuro)\b',
+        r'^(web apa|situs apa|aplikasi apa|apk apa|ini web apa|web apa ini|situs ini apa|ini situs apa|alltoolskuro apa)(\s*\?*)$'
+    ]
+    return any(re.search(pat, clean, re.IGNORECASE) for pat in patterns)
+
 def is_alltoolskuro_topic(text: str) -> bool:
     """Memastikan pertanyaan berkaitan langsung dengan ekosistem AllToolsKuro atau sapaan."""
     clean = text.lower()
     
     if is_friendly_greeting(clean):
+        return True
+
+    if is_web_intro_or_identity_query(clean):
         return True
 
     full_keywords = [
@@ -277,12 +298,13 @@ def is_alltoolskuro_topic(text: str) -> bool:
         "png to pdf", "pdf", "ppt", "dokumen", "scribd", "slideshare", "doc", "bikin pdf",
         "image to link", "file ke link", "kompres", "compress", "kecilkan", "qrcode",
         "audio", "musik", "lagu", "merger", "photo studio", "video studio", "trimmer", "potong video",
-        "hapus background", "bg remover", "hapus bg", "transparan", "gratis", "update", "pembaruan", "apk", "aplikasi"
+        "hapus background", "bg remover", "hapus bg", "transparan", "gratis", "update", "pembaruan", "apk", "aplikasi",
+        "web", "website", "situs", "platform", "fungsi", "kegunaan", "manfaat", "tujuan"
     ]
     if any(kw in clean for kw in full_keywords):
         return True
 
-    short_keywords = ["ig", "yt", "am", "sw", "jj", "qr", "tt"]
+    short_keywords = ["ig", "yt", "am", "sw", "jj", "qr", "tt", "app"]
     for sk in short_keywords:
         if re.search(r'\b' + re.escape(sk) + r'\b', clean):
             return True
@@ -325,7 +347,29 @@ def handle_chat(req: ChatRequest):
             is_abusive=True
         )
 
-    # 2. DETEKSI SAPAAN RAMAH
+    # 2. DETEKSI PERTANYAAN PENGENALAN & FUNGSI UTAMA WEB (WAJIB DIJAWAB RAMAH & LENGKAP)
+    if is_web_intro_or_identity_query(lower_msg):
+        web_intro_reply = (
+            f"Halo {user_name}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digital dan kreasi kontenmu secara instan dan 100% gratis! ✨\n\n"
+            "Berikut deretan fitur andalan yang bisa kamu gunakan:\n"
+            "• 🚀 Safelink Bypasser: Lewati tautan safelink iklan bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll) dalam hitungan detik untuk langsung mengambil link unduhan asli (Mediafire, GDrive, Mega).\n"
+            "• 🎬 Cari Link JJ: Akses ribuan template CapCut viral, preset Alight Motion (AM), dan file XML Google Drive siap pakai untuk konten jedag-jedug.\n"
+            "• 📥 Media Downloader: Unduh video, foto slide, dan musik tanpa watermark dari TikTok, Instagram, YouTube dengan kualitas jernih hingga Status WA Anti-Burik.\n"
+            "• 🎨 Studio & Visual AI: Hapus Background foto otomatis dengan kecerdasan AI, buat QR Code estetik dengan logo kustom, Photo & Video Studio, serta Kompres Media HD.\n"
+            "• 📄 Konversi Dokumen: Satukan aneka foto jadi dokumen PDF rapi (PNG to PDF) dan ekstrak materi presentasi Scribd/SlideShare.\n\n"
+            f"Ada fitur tertentu yang ingin kamu coba hari ini, {user_name}? Atau mau Kuro ajak keliling otomatis dengan Tour Web?"
+        )
+        return ChatResponse(
+            reply=web_intro_reply,
+            is_valid_context=True,
+            animation="wave",
+            action="none",
+            target_tool=None,
+            target_element=None,
+            tour_sequence=None
+        )
+
+    # 3. DETEKSI SAPAAN RAMAH
     if is_friendly_greeting(lower_msg):
         return ChatResponse(
             reply=f"Halo {user_name}! Kuro siap menemani petualanganmu di AllToolsKuro! Mau dibantu unduh video tanpa watermark, lewati tautan safelink iklan, cari template CapCut & preset AM, atau konversi dokumen? Tanyakan saja pada Kuro!",
@@ -337,7 +381,7 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 3. FILTER TEKS ACAK / RANDOM GIBBERISH
+    # 4. FILTER TEKS ACAK / RANDOM GIBBERISH
     if is_gibberish_or_random(message):
         return ChatResponse(
             reply="? Maaf, saya tidak mengerti maksud Anda. Saya hanya asisten khusus untuk membantu fitur dan navigasi di AllToolsKuro!",
@@ -349,7 +393,7 @@ def handle_chat(req: ChatRequest):
             tour_sequence=None
         )
 
-    # 4. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
+    # 5. FILTER GUARDRAILS UTAMA: WAJIB TERIKAT DENGAN EKOSISTEM ALLTOOLSKURO
     if not is_alltoolskuro_topic(lower_msg):
         return ChatResponse(
             reply="? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya.",
