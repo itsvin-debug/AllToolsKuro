@@ -415,8 +415,8 @@ export function useAppUpdate() {
   }, [downloadStatus, latestInfo]);
 
   // Logika Klik Tombol Update Utama:
-  // Jika hasUpdate === true -> Buka modal changelog
-  // Jika hasUpdate === false (installedVersion === latestVersion) -> DILARANG BUKA MODAL, langsung tampilkan toast
+  // Kondisi 1 (Ada Update): Buka modal changelog dengan tombol "Update Sekarang"
+  // Kondisi 2 (Tidak Ada Update / Versi Mutakhir): Tampilkan modal/notifikasi "Tidak ada update tersedia" (tanpa changelog)
   const handleUpdateClick = useCallback(() => {
     const installedVer = getInstalledAppVersion();
     const installedCode = getInstalledVersionCode();
@@ -424,13 +424,31 @@ export function useAppUpdate() {
     const serverCode = latestInfo?.versionCode || 7;
     const isNewer = serverCode > installedCode || isVersionHigher(serverVersion, installedVer);
 
+    setHasUpdate(isNewer);
+    setCurrentInstalledVersion(installedVer);
+    setCurrentInstalledCode(installedCode);
+
     if (isNewer) {
-      openModal();
+      let unapplied = [];
+      if (Array.isArray(latestInfo?.changelog)) {
+        unapplied = latestInfo.changelog.filter(item => {
+          if (typeof item.versionCode === 'number') {
+            return item.versionCode > installedCode;
+          }
+          return isVersionHigher(item.version, installedVer);
+        });
+      }
+      setMissedUpdates(unapplied);
+      setMissedCount(Math.max(unapplied.length, 1));
+      setShowModal(true);
     } else {
-      setShowModal(false);
+      // Kondisi 2: Sudah versi paling akhir -> Buka modal status bersih & toast tanpa changelog
+      setMissedUpdates([]);
+      setMissedCount(0);
+      setShowModal(true);
       showToast(`Tidak ada update tersedia (Versi Anda sudah v${installedVer})`, 'info');
     }
-  }, [latestInfo, openModal, showToast]);
+  }, [latestInfo, showToast]);
 
   const closeModal = useCallback(() => {
     setShowModal(false);

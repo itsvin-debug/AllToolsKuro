@@ -129,7 +129,7 @@ export default function UpdateModal({
                     ? (effectiveCount > 1 
                         ? (isEn ? `${effectiveCount} App Updates Available!` : `Ada ${effectiveCount} Pembaruan Tersedia!`)
                         : (isEn ? 'App Update Available!' : 'Pembaruan Aplikasi Tersedia!'))
-                    : (isEn ? 'Update tidak tersedia' : 'Update tidak tersedia')}
+                    : (isEn ? 'No updates available' : 'Tidak ada update tersedia')}
               </h2>
             </div>
           </div>
@@ -150,21 +150,21 @@ export default function UpdateModal({
           
           {/* KASUS A: SUDAH VERSI TERBARU / TIDAK ADA UPDATE TERSEDIA */}
           {!hasUpdate && !isCompleted && (
-            <div className="p-4 rounded-xl bg-emerald-50 border-2 border-black shadow-[3px_3px_0px_#000000] flex flex-col items-center text-center gap-2">
-              <div className="w-12 h-12 rounded-full bg-emerald-500 border-2 border-black flex items-center justify-center text-white shadow-[2px_2px_0px_#000000]">
-                <Check className="w-7 h-7 stroke-[3]" />
+            <div className="p-5 rounded-xl bg-emerald-50 border-2 border-black shadow-[3px_3px_0px_#000000] flex flex-col items-center text-center gap-2.5 my-2">
+              <div className="w-14 h-14 rounded-full bg-emerald-500 border-2 border-black flex items-center justify-center text-white shadow-[2px_2px_0px_#000000]">
+                <Check className="w-8 h-8 stroke-[3]" />
               </div>
-              <h3 className="text-sm font-black text-black">
-                {isEn ? 'Update Not Available' : 'Update tidak tersedia'}
+              <h3 className="text-base font-black text-black">
+                {isEn ? 'No updates available' : 'Tidak ada update tersedia'}
               </h3>
-              <p className="text-[11px] text-neutral-700 leading-relaxed max-w-sm font-medium">
+              <p className="text-xs text-neutral-700 leading-relaxed max-w-sm font-medium">
                 {isEn 
-                  ? `AllToolsKuro on your Android device is running the latest release (v${localVersion}). Your application is up to date.` 
-                  : `Aplikasi AllToolsKuro di perangkat Android Anda sudah berjalan pada versi paling mutakhir (v${localVersion}). Versi Anda sudah paling baru.`}
+                  ? `AllToolsKuro on your Android device is running the latest release (v${localVersion}). All features and systems are up to date.` 
+                  : `Aplikasi AllToolsKuro di perangkat Android Anda sudah berjalan pada versi paling akhir (v${localVersion}). Tidak ada pembaruan baru yang perlu diambil.`}
               </p>
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] font-mono font-bold bg-white px-2.5 py-0.5 rounded border border-black text-emerald-800 shadow-[1px_1px_0px_#000000]">
-                  {isEn ? 'Status: Active & Secure' : 'Status: Aktif & Mutakhir'}
+                <span className="text-[10px] font-mono font-bold bg-white px-3 py-1 rounded border border-black text-emerald-800 shadow-[1px_1px_0px_#000000]">
+                  {isEn ? 'Status: Up to date' : 'Status: Versi Paling Akhir'}
                 </span>
               </div>
             </div>
@@ -282,26 +282,6 @@ export default function UpdateModal({
             </div>
           )}
 
-          {/* DAFTAR FITUR SAAT VERSI SUDAH MUTAKHIR */}
-          {!hasUpdate && !isCompleted && (
-            <div className="space-y-2">
-              <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-700 font-extrabold block">
-                {isEn ? 'Active Features in Current Build:' : 'Fitur & Patch Aktif Pada Versi Ini:'}
-              </span>
-              <div className="space-y-1.5">
-                {features.map((feat, idx) => (
-                  <div 
-                    key={idx}
-                    className="flex items-start gap-2 p-2 rounded-lg bg-white border-2 border-black shadow-[1.5px_1.5px_0px_#000000] text-neutral-800"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5 stroke-[2.5]" />
-                    <span className="text-[11px] leading-snug font-medium">{feat}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* ─── 3. PROGRESS BAR REAL-TIME IN-APP OTA (1% - 100%) ─── */}
           {isDownloading && (
             <div className="p-3.5 rounded-xl bg-amber-50 border-2 border-black shadow-[3px_3px_0px_#000000] space-y-2 animate-in fade-in duration-200">
@@ -342,57 +322,59 @@ export default function UpdateModal({
         {/* ─── 4. FOOTER AKSI NEOBRUTALIST ─── */}
         <div className="p-4 sm:p-5 border-t-2 border-black bg-neutral-50 flex items-center justify-between gap-2.5 relative z-10">
           
-          {/* Tombol Kiri: Cek Lagi atau Batal */}
+          {/* Kondisi 2: Versi Sudah Paling Baru / Tidak Ada Update -> Hanya Tombol Tutup */}
           {!hasUpdate && !isCompleted ? (
-            <button
-              type="button"
-              onClick={onCheckAgain}
-              disabled={isChecking}
-              className="px-3.5 py-2 rounded-xl border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${isChecking ? 'animate-spin text-blue-600' : ''}`} />
-              <span>{isChecking ? (isEn ? 'Checking...' : 'Memeriksa...') : (isEn ? 'Check Again' : 'Cek Pembaruan Lagi')}</span>
-            </button>
+            <div className="w-full flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full sm:w-auto px-6 py-2 rounded-xl border-2 border-black bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>{isEn ? 'Close' : 'Tutup'}</span>
+              </button>
+            </div>
+          ) : isCompleted ? (
+            <div className="w-full flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full sm:w-auto px-6 py-2 rounded-xl border-2 border-black bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                <span>{isEn ? 'Done' : 'Selesai'}</span>
+              </button>
+            </div>
           ) : (
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isDownloading}
-              className="px-4 py-2 rounded-xl border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
-            >
-              {isEn ? 'Cancel' : 'Batal'}
-            </button>
-          )}
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isDownloading}
+                className="px-4 py-2 rounded-xl border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
+              >
+                {isEn ? 'Cancel' : 'Batal'}
+              </button>
 
-          {/* Tombol Kanan: Update Sekarang atau Tutup */}
-          {isCompleted || (!hasUpdate && !isCompleted) ? (
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2 rounded-xl border-2 border-black bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Check className="w-3.5 h-3.5 stroke-[3]" />
-              <span>{isEn ? 'Close' : 'Tutup'}</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onStartDownload}
-              disabled={isDownloading}
-              className="px-5 py-2 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              {isDownloading ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin stroke-[2.5]" />
-                  <span>{isEn ? 'Applying...' : 'Menerapkan...'}</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>{isEn ? 'Update Now' : 'Update Sekarang'}</span>
-                </>
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={onStartDownload}
+                disabled={isDownloading}
+                className="px-5 py-2 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDownloading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin stroke-[2.5]" />
+                    <span>{isEn ? 'Applying...' : 'Menerapkan...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>{isEn ? 'Update Now' : 'Update Sekarang'}</span>
+                  </>
+                )}
+              </button>
+            </>
           )}
 
         </div>
