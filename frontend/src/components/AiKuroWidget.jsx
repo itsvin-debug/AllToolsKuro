@@ -132,30 +132,67 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking' | 'angry'
   const [animState, setAnimState] = useState('idle');
 
-  // Posisi docking pop-up & tombol: 'right' | 'left' (Wajib hanya di kiri atau kanan)
-  const [dockPosition, setDockPosition] = useState(() => {
-    if (typeof window === 'undefined') return 'right';
-    return localStorage.getItem('kuro_chat_dock_side') || 'right';
+  // Posisi docking 4-kuadran pop-up & tombol: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+  const [dockQuadrant, setDockQuadrant] = useState(() => {
+    if (typeof window === 'undefined') return 'bottom-right';
+    const savedQuadrant = localStorage.getItem('kuro_bot_dock_quadrant');
+    if (savedQuadrant) return savedQuadrant;
+    const oldSide = localStorage.getItem('kuro_chat_dock_side');
+    if (oldSide === 'left') return 'bottom-left';
+    return 'bottom-right';
   });
 
-  // State gestur drag tombol melayang (collapsed)
-  const [buttonDragDeltaX, setButtonDragDeltaX] = useState(0);
+  // State gestur drag tombol melayang (X & Y)
+  const [buttonDragDelta, setButtonDragDelta] = useState({ x: 0, y: 0 });
   const [isButtonDragging, setIsButtonDragging] = useState(false);
   const buttonDragStateRef = useRef({
     startX: 0,
+    startY: 0,
     startTime: 0,
     isDragging: false,
-    lastX: 0
+    lastX: 0,
+    lastY: 0
   });
 
-  // State gestur drag popup chat
-  const [popupDragDeltaX, setPopupDragDeltaX] = useState(0);
+  // State gestur drag popup chat (X & Y)
+  const [popupDragDelta, setPopupDragDelta] = useState({ x: 0, y: 0 });
   const [isPopupDragging, setIsPopupDragging] = useState(false);
   const popupDragStateRef = useRef({
     startX: 0,
+    startY: 0,
     isDragging: false,
-    lastX: 0
+    lastX: 0,
+    lastY: 0
   });
+
+  // Helper kelas CSS untuk posisi 4-kuadran di layar
+  const getQuadrantClasses = (isPopup = false) => {
+    if (isPopup) {
+      switch (dockQuadrant) {
+        case 'top-left':
+          return 'top-20 sm:top-20 left-3 sm:left-6';
+        case 'top-right':
+          return 'top-20 sm:top-20 right-3 sm:right-6';
+        case 'bottom-left':
+          return 'bottom-20 sm:bottom-6 left-3 sm:left-6';
+        case 'bottom-right':
+        default:
+          return 'bottom-20 sm:bottom-6 right-3 sm:right-6';
+      }
+    } else {
+      switch (dockQuadrant) {
+        case 'top-left':
+          return 'top-20 sm:top-20 left-4 sm:left-6 flex-row-reverse';
+        case 'top-right':
+          return 'top-20 sm:top-20 right-4 sm:right-6';
+        case 'bottom-left':
+          return 'bottom-20 sm:bottom-6 left-4 sm:left-6 flex-row-reverse';
+        case 'bottom-right':
+        default:
+          return 'bottom-20 sm:bottom-6 right-4 sm:right-6';
+      }
+    }
+  };
 
   // Modal alert syarat isi nama panggilan
   const [showNameAlert, setShowNameAlert] = useState(false);
@@ -616,42 +653,39 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }
   };
 
-  // ─── GESTUR DRAG TOMBOL MELAYANG (SNAP HANYA KIRI / KANAN) ───
+  // ─── GESTUR DRAG TOMBOL MELAYANG (4-KUADRAN: ATAS/BAWAH/KIRI/KANAN) ───
   const handleButtonStart = (e) => {
     // Hanya tangani klik mouse utama (kiri) atau sentuhan jari
     if (e.button !== undefined && e.button !== 0) return;
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     buttonDragStateRef.current = {
       startX: clientX,
+      startY: clientY,
       startTime: Date.now(),
       isDragging: false,
-      lastX: clientX
+      lastX: clientX,
+      lastY: clientY
     };
 
     const handleMove = (moveEvent) => {
       const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
       const deltaX = currentX - buttonDragStateRef.current.startX;
+      const deltaY = currentY - buttonDragStateRef.current.startY;
       buttonDragStateRef.current.lastX = currentX;
+      buttonDragStateRef.current.lastY = currentY;
 
       // Ambang batas gerakan 6px untuk membedakan antara klik biasa dan gestur tarik
-      if (!buttonDragStateRef.current.isDragging && Math.abs(deltaX) > 6) {
+      if (!buttonDragStateRef.current.isDragging && (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6)) {
         buttonDragStateRef.current.isDragging = true;
         setIsButtonDragging(true);
       }
 
       if (buttonDragStateRef.current.isDragging) {
         if (moveEvent.cancelable) moveEvent.preventDefault();
-
-        const screenWidth = window.innerWidth || document.documentElement.clientWidth;
-        // Batasi rentang horizontal agar tombol tetap di dalam batas layar HP
-        let clampedDelta = deltaX;
-        if (dockPosition === 'right') {
-          clampedDelta = Math.max(-(screenWidth - 80), Math.min(25, deltaX));
-        } else {
-          clampedDelta = Math.min((screenWidth - 80), Math.max(-25, deltaX));
-        }
-        setButtonDragDeltaX(clampedDelta);
+        setButtonDragDelta({ x: deltaX, y: deltaY });
       }
     };
 
@@ -662,36 +696,33 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       window.removeEventListener('touchend', handleEnd);
       window.removeEventListener('touchcancel', handleEnd);
 
-      const { startX, startTime, isDragging: wasDragging, lastX } = buttonDragStateRef.current;
+      const { startX, startY, startTime, isDragging: wasDragging, lastX, lastY } = buttonDragStateRef.current;
       const duration = Date.now() - startTime;
-      const totalDelta = lastX - startX;
+      const totalDeltaX = lastX - startX;
+      const totalDeltaY = lastY - startY;
 
       setIsButtonDragging(false);
-      setButtonDragDeltaX(0);
+      setButtonDragDelta({ x: 0, y: 0 });
 
       // Jika bukan drag (gerakan kecil di bawah 8px dan durasi singkat), buka widget
-      if (!wasDragging && Math.abs(totalDelta) < 8 && duration < 500) {
+      if (!wasDragging && Math.abs(totalDeltaX) < 8 && Math.abs(totalDeltaY) < 8 && duration < 500) {
         handleOpenWidget();
         return;
       }
 
-      // Hitung snap posisi HANYA KIRI atau KANAN (Dilarang berhenti di tengah)
+      // Hitung snap kuadran ke 4 sudut layar: Kiri-Atas, Kanan-Atas, Kiri-Bawah, Kanan-Bawah
       const screenWidth = window.innerWidth || document.documentElement.clientWidth;
-      let finalSide = dockPosition;
+      const screenHeight = window.innerHeight || document.documentElement.clientHeight;
 
-      if (dockPosition === 'right') {
-        if (totalDelta < -40 || lastX < screenWidth * 0.5) {
-          finalSide = 'left';
-        }
-      } else {
-        if (totalDelta > 40 || lastX > screenWidth * 0.5) {
-          finalSide = 'right';
-        }
-      }
+      const isLeft = lastX < screenWidth * 0.5;
+      const isTop = lastY < screenHeight * 0.5;
 
-      setDockPosition(finalSide);
+      const finalQuadrant = `${isTop ? 'top' : 'bottom'}-${isLeft ? 'left' : 'right'}`;
+
+      setDockQuadrant(finalQuadrant);
       try {
-        localStorage.setItem('kuro_chat_dock_side', finalSide);
+        localStorage.setItem('kuro_bot_dock_quadrant', finalQuadrant);
+        localStorage.setItem('kuro_chat_dock_side', isLeft ? 'left' : 'right');
       } catch (err) {}
     };
 
@@ -702,40 +733,38 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     window.addEventListener('touchcancel', handleEnd);
   };
 
-  // ─── GESTUR DRAG POPUP CHAT (SNAP HANYA KIRI / KANAN) ───
+  // ─── GESTUR DRAG POPUP CHAT (SNAP KE 4 KUADRAN) ───
   const handlePopupDragStart = (e) => {
     // Abaikan jika menyentuh tombol di dalam header
     if (e.target.closest('button')) return;
     if (e.button !== undefined && e.button !== 0) return;
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     popupDragStateRef.current = {
       startX: clientX,
+      startY: clientY,
       isDragging: false,
-      lastX: clientX
+      lastX: clientX,
+      lastY: clientY
     };
 
     const handleMove = (moveEvent) => {
       const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
       const deltaX = currentX - popupDragStateRef.current.startX;
+      const deltaY = currentY - popupDragStateRef.current.startY;
       popupDragStateRef.current.lastX = currentX;
+      popupDragStateRef.current.lastY = currentY;
 
-      if (!popupDragStateRef.current.isDragging && Math.abs(deltaX) > 6) {
+      if (!popupDragStateRef.current.isDragging && (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6)) {
         popupDragStateRef.current.isDragging = true;
         setIsPopupDragging(true);
       }
 
       if (popupDragStateRef.current.isDragging) {
         if (moveEvent.cancelable) moveEvent.preventDefault();
-        const screenWidth = window.innerWidth || document.documentElement.clientWidth;
-
-        let clampedDelta = deltaX;
-        if (dockPosition === 'right') {
-          clampedDelta = Math.max(-(screenWidth - 100), Math.min(30, deltaX));
-        } else {
-          clampedDelta = Math.min((screenWidth - 100), Math.max(-30, deltaX));
-        }
-        setPopupDragDeltaX(clampedDelta);
+        setPopupDragDelta({ x: deltaX, y: deltaY });
       }
     };
 
@@ -746,31 +775,25 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       window.removeEventListener('touchend', handleEnd);
       window.removeEventListener('touchcancel', handleEnd);
 
-      const { startX, isDragging: wasDragging, lastX } = popupDragStateRef.current;
-      const totalDelta = lastX - startX;
+      const { isDragging: wasDragging, lastX, lastY } = popupDragStateRef.current;
 
       setIsPopupDragging(false);
-      setPopupDragDeltaX(0);
+      setPopupDragDelta({ x: 0, y: 0 });
 
       if (!wasDragging) return;
 
-      // Hitung snap posisi HANYA KIRI atau KANAN (Dilarang berhenti di tengah)
       const screenWidth = window.innerWidth || document.documentElement.clientWidth;
-      let finalSide = dockPosition;
+      const screenHeight = window.innerHeight || document.documentElement.clientHeight;
 
-      if (dockPosition === 'right') {
-        if (totalDelta < -50 || lastX < screenWidth * 0.5) {
-          finalSide = 'left';
-        }
-      } else {
-        if (totalDelta > 50 || lastX > screenWidth * 0.5) {
-          finalSide = 'right';
-        }
-      }
+      const isLeft = lastX < screenWidth * 0.5;
+      const isTop = lastY < screenHeight * 0.5;
 
-      setDockPosition(finalSide);
+      const finalQuadrant = `${isTop ? 'top' : 'bottom'}-${isLeft ? 'left' : 'right'}`;
+
+      setDockQuadrant(finalQuadrant);
       try {
-        localStorage.setItem('kuro_chat_dock_side', finalSide);
+        localStorage.setItem('kuro_bot_dock_quadrant', finalQuadrant);
+        localStorage.setItem('kuro_chat_dock_side', isLeft ? 'left' : 'right');
       } catch (err) {}
     };
 
@@ -816,16 +839,16 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         </div>
       )}
 
-      {/* ─── 2. TOMBOL WIDGET MELAYANG (COLLAPSED) DENGAN DOCKING KIRI / KANAN ─── */}
+      {/* ─── 2. TOMBOL WIDGET MELAYANG (COLLAPSED) DENGAN DOCKING 4-KUADRAN ─── */}
       {mode === 'collapsed' && (
         <div 
-          className={`fixed bottom-20 sm:bottom-6 z-50 flex items-center gap-2 group ${
+          className={`fixed z-50 flex items-center gap-2 group ${
             isButtonDragging ? '' : 'transition-all duration-300 ease-out'
-          } ${
-            dockPosition === 'left' ? 'left-4 sm:left-6 flex-row-reverse' : 'right-4 sm:right-6'
-          }`}
+          } ${getQuadrantClasses(false)}`}
           style={{
-            transform: buttonDragDeltaX ? `translateX(${buttonDragDeltaX}px)` : 'none'
+            transform: (buttonDragDelta.x || buttonDragDelta.y) 
+              ? `translate(${buttonDragDelta.x}px, ${buttonDragDelta.y}px)` 
+              : 'none'
           }}
         >
           {/* Label Sapaan saat Hover di Desktop */}
@@ -850,8 +873,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 ? 'shadow-[5px_5px_0px_#000000] scale-105 cursor-grabbing' 
                 : 'shadow-[3px_3px_0px_#000000] hover:shadow-[5px_5px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none cursor-grab'
             } transition-all flex items-center justify-center relative select-none touch-none overflow-hidden p-1`}
-            title="Tarik ke kiri/kanan untuk geser posisi, atau klik untuk buka chat"
-            aria-label="Buka Asisten KuroBot (Tarik untuk geser posisi)"
+            title="Tarik ke 4 sudut layar (atas/bawah/kiri/kanan) untuk atur posisi, atau klik untuk buka chat"
+            aria-label="Buka Asisten KuroBot (Tarik ke 4 sudut untuk atur posisi)"
           >
             {/* Karakter Vektor SVG Elaina */}
             <KuroCharacter state="wave" size={54} />
@@ -874,11 +897,13 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {/* ─── 3. POPUP CHAT INTERAKTIF NEOBRUTALIST (TERANG & BERKARAKTER ANIME) ─── */}
       {mode === 'chat_popup' && (
         <div 
-          className={`fixed bottom-20 sm:bottom-6 z-50 w-[92vw] sm:w-[385px] max-h-[85vh] sm:max-h-[580px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-200 ${
+          className={`fixed z-50 w-[92vw] sm:w-[385px] max-h-[82vh] sm:max-h-[560px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-200 ${
             isPopupDragging ? 'select-none' : 'transition-all duration-300 ease-out'
-          } ${dockPosition === 'left' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'}`}
+          } ${getQuadrantClasses(true)}`}
           style={{
-            transform: popupDragDeltaX ? `translateX(${popupDragDeltaX}px)` : 'none'
+            transform: (popupDragDelta.x || popupDragDelta.y) 
+              ? `translate(${popupDragDelta.x}px, ${popupDragDelta.y}px)` 
+              : 'none'
           }}
         >
           
@@ -1102,9 +1127,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {/* ─── 4. FLOATING TOUR HELPER BUBBLE (SAAT TOUR AKTIF) ─── */}
       {mode === 'floating_helper' && isTourActive && (
         <div 
-          className={`fixed bottom-20 sm:bottom-6 z-50 w-[90vw] sm:w-[360px] bg-white text-black border-2 border-black rounded-2xl shadow-[6px_6px_0px_#000000] p-4 flex flex-col gap-2.5 animate-in fade-in duration-150 ${
-            dockPosition === 'left' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
-          }`}
+          className={`fixed z-50 w-[90vw] sm:w-[360px] bg-white text-black border-2 border-black rounded-2xl shadow-[6px_6px_0px_#000000] p-4 flex flex-col gap-2.5 animate-in fade-in duration-150 ${getQuadrantClasses(true)}`}
         >
           <div className="flex items-center justify-between border-b-2 border-black pb-2">
             <div className="flex items-center gap-2">

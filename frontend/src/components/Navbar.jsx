@@ -170,16 +170,16 @@ export default function Navbar({
                 <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${appUpdate.hasUpdate ? 'text-white' : 'text-blue-600'} ${appUpdate.isChecking ? 'animate-spin' : ''}`} />
                 <span className="whitespace-nowrap">
                   {appUpdate.hasUpdate 
-                    ? (lang === 'en' ? 'Update Available!' : 'Ada Update!') 
+                    ? (lang === 'en' ? `Update (${appUpdate.pendingCount})` : `Update (${appUpdate.pendingCount})`) 
                     : 'Update'}
                 </span>
 
-                {/* Dot Notification Badge Titik Merah Dinamis */}
-                {appUpdate.hasUpdate && (
-                  <span className="absolute -top-1.5 -right-1.5 flex h-3.5 w-3.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-90"></span>
-                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-yellow-400 text-black border border-black font-black text-[8px] items-center justify-center">
-                      !
+                {/* Badge Notifikasi Angka Dinamis (Menghitung Akumulasi Update Tertunda) */}
+                {appUpdate.pendingCount > 0 && (
+                  <span className="absolute -top-2 -right-2 flex items-center justify-center">
+                    <span className="animate-ping absolute inline-flex h-4 w-4 rounded-full bg-yellow-400 opacity-80"></span>
+                    <span className="relative inline-flex min-w-4.5 h-4.5 px-1 rounded-full bg-yellow-400 text-black border-2 border-black font-black text-[9px] items-center justify-center shadow-[1px_1px_0px_#000000]">
+                      {appUpdate.pendingCount}
                     </span>
                   </span>
                 )}
@@ -261,12 +261,14 @@ export default function Navbar({
         <div className="w-full bg-gradient-to-r from-amber-300 via-rose-300 to-amber-300 border-t-2 border-b-2 border-black px-4 py-2 flex items-center justify-between gap-3 text-xs font-bold shadow-[0_2px_4px_rgba(0,0,0,0.1)]">
           <div className="flex items-center gap-2 truncate">
             <span className="bg-black text-white text-[10px] font-mono px-2 py-0.5 rounded border border-black uppercase tracking-wider shrink-0 animate-pulse">
-              Update v{appUpdate.latestInfo?.latestVersion || '1.5.0'}
+              {appUpdate.pendingCount > 1 
+                ? `${appUpdate.pendingCount} Updates (v${appUpdate.latestInfo?.latestVersion || '1.5.2'})`
+                : `Update v${appUpdate.latestInfo?.latestVersion || '1.5.2'}`}
             </span>
             <span className="truncate text-black font-extrabold text-[11px] sm:text-xs">
               {lang === 'en' 
-                ? 'New features & enhancements available! Tap to update application.' 
-                : 'Pembaruan fitur & perbaikan baru tersedia! Ketuk tombol untuk memperbarui aplikasi.'}
+                ? `${appUpdate.pendingCount} accumulated updates available! Tap to apply all in-app.` 
+                : `${appUpdate.pendingCount} pembaruan terakumulasi! Ketuk untuk terapkan langsung di aplikasi.`}
             </span>
           </div>
           <button
@@ -287,6 +289,8 @@ export default function Navbar({
         latestInfo={appUpdate.latestInfo}
         localVersion={appUpdate.localVersion}
         hasUpdate={appUpdate.hasUpdate}
+        pendingCount={appUpdate.pendingCount}
+        pendingUpdates={appUpdate.pendingUpdates}
         isDownloading={appUpdate.isDownloading}
         downloadProgress={appUpdate.downloadProgress}
         downloadPhase={appUpdate.downloadPhase}
