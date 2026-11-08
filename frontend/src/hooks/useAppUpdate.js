@@ -17,6 +17,10 @@ export function useAppUpdate() {
   const [isNativeApp, setIsNativeApp] = useState(() => {
     if (typeof window === 'undefined') return false;
     try {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('app_mode') === 'android' || window.localStorage?.getItem('kuro_simulate_native') === 'true') {
+        return true;
+      }
       return Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
     } catch {
       return false;
@@ -41,11 +45,13 @@ export function useAppUpdate() {
 
   const downloadIntervalRef = useRef(null);
 
-  // Deteksi lingkungan Native Android (Capacitor)
+  // Deteksi lingkungan Native Android (Capacitor atau dev override)
   useEffect(() => {
     try {
       if (typeof window !== 'undefined') {
-        const isNative = Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
+        const urlParams = new URLSearchParams(window.location.search);
+        const isSimulated = urlParams.get('app_mode') === 'android' || window.localStorage?.getItem('kuro_simulate_native') === 'true';
+        const isNative = isSimulated || Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
         setIsNativeApp(isNative);
         setCurrentInstalledVersion(getInstalledAppVersion());
         setCurrentInstalledCode(getInstalledVersionCode());
@@ -59,7 +65,12 @@ export function useAppUpdate() {
   // HANYA aktif pada aplikasi Native Android; versi Web selalu mutakhir otomatis dari cloud
   const checkForUpdates = useCallback(async (isManual = false) => {
     // Jika bukan native app dan bukan pengecekan manual yang diminta sengaja, lewati
-    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.()));
+    const isNative = typeof window !== 'undefined' && (
+      new URLSearchParams(window.location.search).get('app_mode') === 'android' ||
+      window.localStorage?.getItem('kuro_simulate_native') === 'true' ||
+      Capacitor.isNativePlatform() || 
+      Boolean(window.Capacitor?.isNativePlatform?.())
+    );
     if (!isNative && !isManual) {
       setHasUpdate(false);
       setMissedCount(0);
@@ -229,7 +240,12 @@ export function useAppUpdate() {
 
   useEffect(() => {
     // Jalankan pengecekan otomatis hanya jika berjalan pada native app Android
-    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.()));
+    const isNative = typeof window !== 'undefined' && (
+      new URLSearchParams(window.location.search).get('app_mode') === 'android' ||
+      window.localStorage?.getItem('kuro_simulate_native') === 'true' ||
+      Capacitor.isNativePlatform() || 
+      Boolean(window.Capacitor?.isNativePlatform?.())
+    );
     if (isNative) {
       checkForUpdates();
     }
@@ -340,7 +356,12 @@ export function useAppUpdate() {
       
       let unapplied = [];
       if (Array.isArray(latestInfo?.changelog)) {
-        unapplied = latestInfo.changelog.filter(item => item.versionCode > installedCode);
+        unapplied = latestInfo.changelog.filter(item => {
+          if (typeof item.versionCode === 'number') {
+            return item.versionCode > installedCode;
+          }
+          return isVersionHigher(item.version, installedVer);
+        });
       }
 
       setHasUpdate(isNewer);

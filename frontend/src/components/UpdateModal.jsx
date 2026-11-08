@@ -129,7 +129,7 @@ export default function UpdateModal({
                     ? (effectiveCount > 1 
                         ? (isEn ? `${effectiveCount} App Updates Available!` : `Ada ${effectiveCount} Pembaruan Tersedia!`)
                         : (isEn ? 'App Update Available!' : 'Pembaruan Aplikasi Tersedia!'))
-                    : (isEn ? 'No Update Available' : 'Tidak Ada Update Tersedia')}
+                    : (isEn ? 'Update tidak tersedia' : 'Update tidak tersedia')}
               </h2>
             </div>
           </div>
@@ -155,12 +155,12 @@ export default function UpdateModal({
                 <Check className="w-7 h-7 stroke-[3]" />
               </div>
               <h3 className="text-sm font-black text-black">
-                {isEn ? 'Your App is Up to Date!' : 'Versi Anda Sudah Paling Baru!'}
+                {isEn ? 'Update Not Available' : 'Update tidak tersedia'}
               </h3>
               <p className="text-[11px] text-neutral-700 leading-relaxed max-w-sm font-medium">
                 {isEn 
-                  ? `AllToolsKuro on your Android device is currently running the latest release (v${localVersion}). All active features and security patches are up to date.` 
-                  : `Aplikasi AllToolsKuro di perangkat Android Anda sudah berjalan pada versi paling mutakhir (v${localVersion}). Belum ada pembaruan baru dari developer.`}
+                  ? `AllToolsKuro on your Android device is running the latest release (v${localVersion}). Your application is up to date.` 
+                  : `Aplikasi AllToolsKuro di perangkat Android Anda sudah berjalan pada versi paling mutakhir (v${localVersion}). Versi Anda sudah paling baru.`}
               </p>
               <div className="flex items-center gap-2 mt-1">
                 <span className="text-[10px] font-mono font-bold bg-white px-2.5 py-0.5 rounded border border-black text-emerald-800 shadow-[1px_1px_0px_#000000]">
@@ -187,39 +187,54 @@ export default function UpdateModal({
             </div>
           )}
 
-          {/* KASUS C: ADA UPDATE TERSEDIA - KOTAK IDENTITAS & VERSI */}
+          {/* KASUS C: ADA UPDATE TERSEDIA - KOTAK IDENTITAS, VERSI & CATATAN RILIS */}
           {hasUpdate && !isCompleted && (
-            <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-neutral-50 border-2 border-black shadow-[2px_2px_0px_#000000]">
-              <div>
-                <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-500 block font-bold">
-                  {isEn ? 'App & Platform' : 'Aplikasi & Platform'}
-                </span>
-                <span className="font-black text-black text-xs sm:text-sm block truncate mt-0.5">
-                  AllToolsKuro
-                </span>
-                <span className="text-[10px] font-mono text-neutral-500 block truncate">
-                  Android APK (OTA Engine)
-                </span>
-              </div>
-
-              <div className="text-right border-l-2 border-black pl-2.5">
-                <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-500 block font-bold">
-                  {isEn ? 'Version Upgrade' : 'Perbandingan Versi'}
-                </span>
-                <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                  <span className="text-[11px] font-mono text-neutral-400 line-through">
-                    v{localVersion}
+            <>
+              <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-neutral-50 border-2 border-black shadow-[2px_2px_0px_#000000]">
+                <div>
+                  <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-500 block font-bold">
+                    {isEn ? 'App & ID' : 'APLIKASI & ID'}
                   </span>
-                  <span className="text-xs sm:text-sm font-mono font-black text-white bg-blue-600 px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
-                    v{newVersion}
+                  <span className="font-black text-black text-xs sm:text-sm block truncate mt-0.5">
+                    AllToolsKuro
+                  </span>
+                  <span className="text-[10px] font-mono text-neutral-500 block truncate">
+                    com.kuro.alltools
                   </span>
                 </div>
-                <span className="text-[10px] text-emerald-700 font-mono font-bold block mt-1 flex items-center justify-end gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 stroke-[2.5]" />
-                  Verified In-App OTA
-                </span>
+
+                <div className="text-right border-l-2 border-black pl-2.5">
+                  <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-500 block font-bold">
+                    {isEn ? 'New Version' : 'VERSI BARU'}
+                  </span>
+                  <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                    <span className="text-[11px] font-mono text-neutral-400 line-through">
+                      v{localVersion}
+                    </span>
+                    <span className="text-xs sm:text-sm font-mono font-black text-white bg-blue-600 px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
+                      v{newVersion}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-emerald-700 font-mono font-bold block mt-1 flex items-center justify-end gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 stroke-[2.5]" />
+                    Verified APK
+                  </span>
+                </div>
               </div>
-            </div>
+
+              {/* CATATAN RILIS (SESUAI REFERENSI UI) */}
+              {releaseNotes && (
+                <div className="p-3 rounded-xl bg-white border-2 border-black shadow-[2px_2px_0px_#000000] space-y-1">
+                  <span className="text-[10px] uppercase font-mono tracking-wider text-blue-600 font-extrabold flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    {isEn ? 'Release Notes' : 'CATATAN RILIS'}
+                  </span>
+                  <p className="text-[11px] text-neutral-800 font-medium leading-relaxed">
+                    {releaseNotes}
+                  </p>
+                </div>
+              )}
+            </>
           )}
 
           {/* DAFTAR AKUMULASI CHANGELOG (JIKA MENUMPUK BEBERAPA KALI UPDATE) */}
@@ -349,7 +364,7 @@ export default function UpdateModal({
             </button>
           )}
 
-          {/* Tombol Kanan: Update Sekarang atau Selesai */}
+          {/* Tombol Kanan: Update Sekarang atau Tutup */}
           {isCompleted || (!hasUpdate && !isCompleted) ? (
             <button
               type="button"
@@ -357,7 +372,7 @@ export default function UpdateModal({
               className="px-5 py-2 rounded-xl border-2 border-black bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer"
             >
               <Check className="w-3.5 h-3.5 stroke-[3]" />
-              <span>{isEn ? 'Done' : 'Selesai'}</span>
+              <span>{isEn ? 'Close' : 'Tutup'}</span>
             </button>
           ) : (
             <button
