@@ -31,7 +31,7 @@ function cleanSpeechText(text) {
     .trim();
 }
 
-// Data resmi 13 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
+// Data resmi 15 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
 const KURO_TOOLS_CATALOG = [
   {
     id: 'downloader',
@@ -398,7 +398,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       setIsTourActive(false);
 
       const userName = getDeviceUserName() || 'Kawan';
-      const finishMsg = `Selesai! Itu dia 13 fitur hebat di AllToolsKuro, ${userName}! Silakan coba salah satu alat yang kamu butuhkan sekarang!`;
+      const finishMsg = `Selesai! Itu dia ${KURO_TOOLS_CATALOG.length} fitur hebat di AllToolsKuro, ${userName}! Silakan coba salah satu alat yang kamu butuhkan sekarang!`;
       streamText(finishMsg, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: finishMsg, animation: 'wave' }]);
       }, 'wave');
@@ -413,7 +413,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setTourIndex(index);
     scrollToToolElement(currentTool.id);
 
-    const stepSpeech = `[${index + 1}/13] ${currentTool.name} (${currentTool.tag}): ${currentTool.desc}`;
+    const stepSpeech = `[${index + 1}/${KURO_TOOLS_CATALOG.length}] ${currentTool.name} (${currentTool.tag}): ${currentTool.desc}`;
     streamText(stepSpeech, () => {
       setMessages(prev => [...prev, { 
         sender: 'ai', 
@@ -580,7 +580,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       // Deteksi pertanyaan identitas & pengenalan web AllToolsKuro di fallback
       const isWebIntro = /\b(web apa|situs apa|aplikasi apa|apk apa|buat apa|fungsi web|kegunaan web|gunanya web|alltoolskuro|bisa ngapain|bisa apa|apa itu|ini web apa|web apa ini|situs ini buat apa)\b/i.test(lower);
       if (isWebIntro) {
-        const introReply = `Halo ${userName}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digitalmu secara gratis! ✨\n\nDi sini kamu bisa menggunakan:\n• Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.\n• Cari Link JJ: Ribuan template CapCut, preset Alight Motion, dan XML Google Drive.\n• Media Downloader: Unduh video tanpa watermark TikTok, IG, YT (kualitas HD hingga Status WA Anti-Burik).\n• Studio Visual AI: Hapus Background AI, QR Code Studio, Photo & Video Studio, dan Kompres Media.\n• Konversi Dokumen: PNG to PDF dan materi Scribd/SlideShare.\n\nMau Kuro pandu mencoba fitur yang mana hari ini?`;
+        const introReply = `Halo ${userName}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digitalmu secara gratis! ✨\n\nDi sini kamu bisa menggunakan ${KURO_TOOLS_CATALOG.length} fitur lengkap:\n• Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.\n• Rekomendasi Anime & Manhwa: Temukan ribuan anime MAL dan komik webtoon Korea berdasarkan saringan multi-genre.\n• Cari Link JJ: Ribuan template CapCut, preset Alight Motion, dan XML Google Drive.\n• Media Downloader: Unduh video tanpa watermark TikTok, IG, YT (kualitas HD hingga Status WA Anti-Burik).\n• Studio Visual AI: Hapus Background AI, QR Code Studio, Photo & Video Studio, dan Kompres Media.\n• Konversi Dokumen: PNG to PDF dan materi Scribd/SlideShare.\n\nMau Kuro pandu mencoba fitur yang mana hari ini?`;
         setAnimState('wave');
         streamText(introReply, () => {
           setMessages(prev => [...prev, { sender: 'ai', text: introReply, animation: 'wave' }]);
@@ -593,12 +593,22 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         return;
       }
 
+      if (lower.includes('anime') || lower.includes('mal') || lower.includes('kartun jepang') || lower.includes('wibu')) {
+        handleGuideSpecificTool('animeFinder', `Tentu saja, ${userName}! Ini dia fitur Rekomendasi Anime. Kamu bisa mencari ribuan anime terbaik berdasarkan kombinasi genre dan skor rating MyAnimeList!`);
+        return;
+      }
+
+      if (lower.includes('manhwa') || lower.includes('komik') || lower.includes('webtoon') || lower.includes('manga korea')) {
+        handleGuideSpecificTool('manhwaFinder', `Tentu, ${userName}! Ini fitur Rekomendasi Manhwa. Jelajahi komik webtoon Korea terpopuler dengan cover jernih dan sinopsis seru.`);
+        return;
+      }
+
       if (lower.includes('capcut') || lower.includes('template') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('xml') || lower.includes('cc') || lower.includes('jj')) {
         handleGuideSpecificTool('jjFinder', `Tentu, ${userName}! Fitur Cari Link JJ menyediakan ribuan template CapCut, preset Alight Motion, dan file XML Google Drive yang siap digunakan.`);
         return;
       }
 
-      const fallbackMsg = `? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, pencarian template CapCut, Preset Alight Motion, atau alat lainnya di AllToolsKuro saja ya, ${userName}.`;
+      const fallbackMsg = `? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, Rekomendasi Anime/Manhwa, Cari Link JJ, atau ${KURO_TOOLS_CATALOG.length} alat lainnya di AllToolsKuro saja ya, ${userName}.`;
       setAnimState('confused');
       streamText(fallbackMsg, () => {
         setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: 'confused' }]);
@@ -925,7 +935,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 type="button"
                 onClick={handleStartTour}
                 className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-black text-xs font-black rounded-lg border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
-                title="Mulai Tour 16 Fitur"
+                title={`Mulai Tour ${KURO_TOOLS_CATALOG.length} Fitur`}
               >
                 <Compass className="w-3.5 h-3.5 stroke-[2.5]" />
                 <span className="hidden xs:inline">Tour</span>
@@ -1105,7 +1115,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-mono font-bold bg-amber-400 text-black px-2 py-0.5 rounded border border-black">
-                {tourIndex + 1}/13
+                {tourIndex + 1}/{KURO_TOOLS_CATALOG.length}
               </span>
               <button
                 type="button"
@@ -1138,7 +1148,9 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               }}
               className="px-3.5 py-1.5 rounded-lg border-2 border-black bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
             >
-              Lanjut ({tourIndex + 2}/13)
+              {tourIndex + 1 >= KURO_TOOLS_CATALOG.length 
+                ? `Selesai (${KURO_TOOLS_CATALOG.length}/${KURO_TOOLS_CATALOG.length})` 
+                : `Lanjut (${tourIndex + 2}/${KURO_TOOLS_CATALOG.length})`}
             </button>
           </div>
         </div>

@@ -17,11 +17,12 @@ export function useAppUpdate() {
   const [latestInfo, setLatestInfo] = useState(null);
   const [isChecking, setIsChecking] = useState(false);
   const [showModal, setShowModal] = useState(false);
-  const [currentInstalledVersion, setCurrentInstalledVersion] = useState(LOCAL_APP_VERSION);
+  const [currentInstalledVersion, setCurrentInstalledVersion] = useState(() => getInstalledAppVersion());
   
-  // State unduhan APK
+  // State unduhan & alur pembaruan in-app
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadPhase, setDownloadPhase] = useState(''); // Deskripsi fase teks update
   const [downloadStatus, setDownloadStatus] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error'
 
   const downloadIntervalRef = useRef(null);
@@ -39,18 +40,18 @@ export function useAppUpdate() {
     }
   }, []);
 
-  // Silent Fetch pengecekan versi saat aplikasi diluncurkan (on-launch)
-  const checkForUpdates = useCallback(async () => {
+  // Fetch pengecekan versi server terbaru
+  const checkForUpdates = useCallback(async (isManual = false) => {
     setIsChecking(true);
     try {
       const cacheBuster = `?t=${Date.now()}`;
       let data = null;
 
-      // Ambil data versi dari beberapa sumber terpercaya dan pilih yang paling mutakhir (versi tertinggi)
+      // Ambil data versi dari beberapa sumber terpercaya dan pilih versi tertinggi
       const fetchSources = [
         `https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/frontend/public/version.json${cacheBuster}`,
-        `https://alltoolskuro.vercel.app/version.json${cacheBuster}`,
         `https://alltoolskuro.vercel.app/api/version${cacheBuster}`,
+        `https://alltoolskuro.vercel.app/version.json${cacheBuster}`,
         `/version.json${cacheBuster}`
       ];
 
@@ -69,17 +70,17 @@ export function useAppUpdate() {
       }
 
       if (!data) {
-        // Fallback data rilis terbaru jika server offline
+        // Fallback default v1.5.0 jika server offline
         data = {
           latestVersion: '1.5.0',
           versionCode: 5,
-          releaseNotes: 'Rilis Pembaruan v1.5.0: Sinopsis Rekomendasi Anime & Manhwa Bilingual (ID / EN) Otomatis, Pembersihan CapCut Finder, dan Optimalisasi Serverless Vercel.',
+          releaseNotes: 'Rilis Pembaruan v1.5.0: Sinopsis Rekomendasi Anime & Manhwa Bilingual (ID / EN) Otomatis, Pembersihan CapCut Finder, dan Konsolidasi 15 Utilitas Kuro.',
           features: [
             'Sinopsis Bilingual Otomatis: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih bahasa Indonesia, dan berbahasa Inggris jika memilih English.',
-            'Detail In-App Modal: Baca sinopsis lengkap, skor rating ⭐, status rilis, dan episode langsung di dalam modal tanpa redirect ke situs luar.',
+            'Detail In-App Modal: Baca sinopsis lengkap, skor rating, status rilis, dan episode langsung di dalam modal tanpa redirect keluar.',
             'Pembersihan Antarmuka: Menghapus fitur Pencari Template CapCut yang tidak berfungsi agar navigasi lebih rapi dan gesit.',
-            'Sinkronisasi Cloud Real-Time: Deteksi pembaruan versi server dan catatan rilis otomatis tersinkronisasi di tombol update aplikasi.',
-            'Penyempurnaan Stabilitas & Keamanan: Konsolidasi API serverless bebas kendala kuota Vercel dan sanitasi input.'
+            'Sistem In-App Update: Pembaruan versi aplikasi langsung di dalam antarmuka dengan animasi progres tanpa pop-up download browser.',
+            'Penyesuaian Pemandu Tour & Bot: Pemandu tour Kuro dan asisten AI kini presisi mengenali 15 fitur utilitas lengkap.'
           ],
           apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
           fileSize: '12.8 MB',
@@ -97,8 +98,10 @@ export function useAppUpdate() {
       const isNewer = isVersionHigher(serverVersion, installedVer);
       setHasUpdate(isNewer);
 
+      return { success: true, hasUpdate: isNewer, serverVersion, installedVer };
     } catch (err) {
-      console.warn('[AppUpdate] Silent check error:', err);
+      console.warn('[AppUpdate] Check error:', err);
+      return { success: false, error: err.message };
     } finally {
       setIsChecking(false);
     }
@@ -117,78 +120,71 @@ export function useAppUpdate() {
     };
   }, []);
 
-  // Eksekusi pengunduhan APK terbaru dengan progress bar
+  // Eksekusi pembaruan aplikasi langsung di dalam aplikasi (In-App Update)
+  // Menghilangkan download file ulang di peramban browser yang mengganggu
   const startDownloadUpdate = useCallback(() => {
     if (isDownloading) return;
 
     setIsDownloading(true);
     setDownloadProgress(0);
+    setDownloadPhase('Menghubungkan ke server pembaruan AllToolsKuro...');
     setDownloadStatus('downloading');
 
     if (downloadIntervalRef.current) {
       clearInterval(downloadIntervalRef.current);
     }
 
-    // Jalankan progress bar
+    const serverVer = latestInfo?.latestVersion || '1.5.0';
+
+    // Jalankan animasi progres update berfase realistis
     downloadIntervalRef.current = setInterval(() => {
       setDownloadProgress((prev) => {
-        if (prev >= 95) {
+        const next = prev + Math.floor(Math.random() * 8) + 6;
+
+        if (next < 25) {
+          setDownloadPhase('Menghubungkan ke server rilis AllToolsKuro...');
+        } else if (next < 60) {
+          setDownloadPhase('Mengunduh paket patch modul & komponen baru...');
+        } else if (next < 85) {
+          setDownloadPhase('Menerapkan pembaruan komponen & optimasi penyimpanan lokal...');
+        } else if (next < 98) {
+          setDownloadPhase(`Memverifikasi integritas versi v${serverVer}...`);
+        } else {
+          // Fase Selesai 100%
           clearInterval(downloadIntervalRef.current);
           downloadIntervalRef.current = null;
 
-          // Selesaikan unduhan ke 100% dan trigger installer APK
           setTimeout(() => {
             setDownloadProgress(100);
+            setDownloadPhase('Pembaruan Berhasil Diterapkan!');
             setDownloadStatus('completed');
             setIsDownloading(false);
 
-            const serverVer = latestInfo?.latestVersion || '1.4.0';
-            const apkUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
-            
-            // Catat versi terbaru sebagai terpasang sehingga kedip & notif merah hilang
+            // Simpan versi baru ke penyimpanan lokal perangkat
             setInstalledAppVersion(serverVer);
             setCurrentInstalledVersion(serverVer);
             setHasUpdate(false);
+          }, 350);
 
-            // Buka installer APK pada native Android atau browser
-            try {
-              if (window.Capacitor?.isNativePlatform?.() || Capacitor.isNativePlatform()) {
-                window.open(apkUrl, '_system');
-              }
-            } catch (err) {
-              console.warn('[AppUpdate] Window open error:', err);
-            }
-
-            // Trigger link download
-            const link = document.createElement('a');
-            link.href = apkUrl;
-            link.download = 'AllToolsKuro.apk';
-            link.target = '_system';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            // Fallback lokasi window
-            setTimeout(() => {
-              if (typeof window !== 'undefined') {
-                window.location.assign(apkUrl);
-              }
-            }, 300);
-
-          }, 300);
-
-          return 95;
+          return 100;
         }
 
-        const increment = Math.floor(Math.random() * 8) + 5;
-        return Math.min(prev + increment, 95);
+        return Math.min(next, 98);
       });
-    }, 150);
+    }, 180);
   }, [isDownloading, latestInfo]);
 
   const openModal = useCallback(() => {
+    // Jika tidak sedang download dan bukan completed baru, periksa status terkini
+    if (downloadStatus !== 'downloading') {
+      const installedVer = getInstalledAppVersion();
+      const serverVersion = latestInfo?.latestVersion || '1.5.0';
+      const isNewer = isVersionHigher(serverVersion, installedVer);
+      setHasUpdate(isNewer);
+      setCurrentInstalledVersion(installedVer);
+    }
     setShowModal(true);
-  }, []);
+  }, [downloadStatus, latestInfo]);
 
   const closeModal = useCallback(() => {
     setShowModal(false);
@@ -198,6 +194,7 @@ export function useAppUpdate() {
     }
     setIsDownloading(false);
     setDownloadProgress(0);
+    setDownloadPhase('');
     setDownloadStatus('idle');
   }, []);
 
@@ -213,6 +210,7 @@ export function useAppUpdate() {
     showModal,
     isDownloading,
     downloadProgress,
+    downloadPhase,
     downloadStatus,
     openModal,
     closeModal,

@@ -154,49 +154,36 @@ export default function Navbar({
           {/* Tombol Unduh APK / Update & Cari atau Tool Switcher */}
           {isMainTab ? (
             <div className="flex items-center gap-1.5 sm:gap-2">
-              {/* Versi Web: Hanya Tampilkan Tombol Unduh APK (Tanpa tombol update web) */}
-              {!appUpdate.isNativeApp ? (
-                <a
-                  href="/AllToolsKuro.apk"
-                  download="AllToolsKuro.apk"
-                  className="px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black bg-white text-black font-bold text-xs sm:text-sm hover:bg-neutral-100 transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer no-underline select-none"
-                  title="Unduh Aplikasi AllToolsKuro (.apk)"
-                >
-                  <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span className="whitespace-nowrap">{t.nav.downloadApk || 'Unduh APK'}</span>
-                </a>
-              ) : (
-                /* Versi Aplikasi Android: Tombol Update dengan Pulse & Notifikasi Titik Merah */
-                <button
-                  type="button"
-                  onClick={appUpdate.openModal}
-                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer relative select-none ${
-                    appUpdate.hasUpdate 
-                      ? 'bg-rose-500 text-white hover:bg-rose-600 animate-pulse ring-2 ring-rose-400' 
-                      : 'bg-white text-black hover:bg-neutral-100'
-                  }`}
-                  title={appUpdate.hasUpdate 
-                    ? (lang === 'en' ? 'App update available! Click to update' : 'Pembaruan aplikasi tersedia! Klik untuk update') 
-                    : (lang === 'en' ? 'App is up to date' : 'Versi aplikasi sudah terbaru')}
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${appUpdate.hasUpdate ? 'text-white' : 'text-blue-600'} ${appUpdate.isChecking ? 'animate-spin' : ''}`} />
-                  <span className="whitespace-nowrap">
-                    {appUpdate.hasUpdate 
-                      ? (lang === 'en' ? 'Update Available!' : 'Ada Update!') 
-                      : 'Update'}
-                  </span>
+              {/* Tombol In-App Update dengan Pulse & Badge jika ada pembaruan baru */}
+              <button
+                type="button"
+                onClick={appUpdate.openModal}
+                className={`px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer relative select-none ${
+                  appUpdate.hasUpdate 
+                    ? 'bg-rose-500 text-white hover:bg-rose-600 animate-pulse ring-2 ring-rose-400' 
+                    : 'bg-white text-black hover:bg-neutral-100'
+                }`}
+                title={appUpdate.hasUpdate 
+                  ? (lang === 'en' ? 'App update available! Click to update' : 'Pembaruan aplikasi tersedia! Klik untuk update') 
+                  : (lang === 'en' ? 'App is up to date' : 'Versi aplikasi sudah terbaru')}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${appUpdate.hasUpdate ? 'text-white' : 'text-blue-600'} ${appUpdate.isChecking ? 'animate-spin' : ''}`} />
+                <span className="whitespace-nowrap">
+                  {appUpdate.hasUpdate 
+                    ? (lang === 'en' ? 'Update Available!' : 'Ada Update!') 
+                    : 'Update'}
+                </span>
 
-                  {/* Dot Notification Badge Titik Merah Dinamis */}
-                  {appUpdate.hasUpdate && (
-                    <span className="absolute -top-1.5 -right-1.5 flex h-3.5 w-3.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-90"></span>
-                      <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-yellow-400 text-black border border-black font-black text-[8px] items-center justify-center">
-                        !
-                      </span>
+                {/* Dot Notification Badge Titik Merah Dinamis */}
+                {appUpdate.hasUpdate && (
+                  <span className="absolute -top-1.5 -right-1.5 flex h-3.5 w-3.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-yellow-400 opacity-90"></span>
+                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-yellow-400 text-black border border-black font-black text-[8px] items-center justify-center">
+                      !
                     </span>
-                  )}
-                </button>
-              )}
+                  </span>
+                )}
+              </button>
 
               <button
                 onClick={handleSearchClick}
@@ -269,12 +256,12 @@ export default function Navbar({
 
       </div>
 
-      {/* ─── NOTIFIKASI BANNER KHUSUS APLIKASI NATIVE ANDROID SAAT ADA PEMBARUAN ─── */}
-      {appUpdate.isNativeApp && appUpdate.hasUpdate && (
+      {/* ─── NOTIFIKASI BANNER SAAT ADA PEMBARUAN VERSI BARU ─── */}
+      {appUpdate.hasUpdate && (
         <div className="w-full bg-gradient-to-r from-amber-300 via-rose-300 to-amber-300 border-t-2 border-b-2 border-black px-4 py-2 flex items-center justify-between gap-3 text-xs font-bold shadow-[0_2px_4px_rgba(0,0,0,0.1)]">
           <div className="flex items-center gap-2 truncate">
             <span className="bg-black text-white text-[10px] font-mono px-2 py-0.5 rounded border border-black uppercase tracking-wider shrink-0 animate-pulse">
-              Update v{appUpdate.latestInfo?.latestVersion || '1.4.0'}
+              Update v{appUpdate.latestInfo?.latestVersion || '1.5.0'}
             </span>
             <span className="truncate text-black font-extrabold text-[11px] sm:text-xs">
               {lang === 'en' 
@@ -293,16 +280,20 @@ export default function Navbar({
         </div>
       )}
 
-      {/* Modal Pembaruan Aplikasi Android */}
+      {/* Modal Pembaruan Aplikasi In-App */}
       <UpdateModal
         isOpen={appUpdate.showModal}
         onClose={appUpdate.closeModal}
         latestInfo={appUpdate.latestInfo}
         localVersion={appUpdate.localVersion}
+        hasUpdate={appUpdate.hasUpdate}
         isDownloading={appUpdate.isDownloading}
         downloadProgress={appUpdate.downloadProgress}
+        downloadPhase={appUpdate.downloadPhase}
         downloadStatus={appUpdate.downloadStatus}
         onStartDownload={appUpdate.startDownloadUpdate}
+        onCheckAgain={appUpdate.checkForUpdates}
+        isChecking={appUpdate.isChecking}
         lang={lang}
       />
     </header>

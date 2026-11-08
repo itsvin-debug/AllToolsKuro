@@ -408,7 +408,7 @@ export default async function handler(req, res) {
     if (isTourRequest) {
       const first = TOUR_ORDER[0];
       return res.status(200).json({
-        reply: 'Fufufu~ Pilihan tepat! Saya akan memandu Anda melihat dan memahami seluruh 16 fitur hebat di AllToolsKuro satu per satu. Ayo ikuti saya!',
+        reply: `Fufufu~ Pilihan tepat! Saya akan memandu Anda melihat dan memahami seluruh ${TOUR_ORDER.length} fitur hebat di AllToolsKuro satu per satu. Ayo ikuti saya!`,
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
@@ -528,10 +528,10 @@ export default async function handler(req, res) {
     // 9. DETEKSI PERTANYAAN UMUM FITUR / PANDUAN APLIKASI
     if (lowerMsg.includes('fitur') || lowerMsg.includes('alat') || lowerMsg.includes('bisa apa') || lowerMsg.includes('panduan') || lowerMsg.includes('cara')) {
       const overviewText = 
-        'AllToolsKuro memiliki 16 fitur utilitas lengkap:\n' +
-        '1. Media & Template: Media Downloader (4K & 1080p Status WA Anti-Burik), Pencari Template CapCut (Cari JJ lirik & pratinjau loop video), Cari Link JJ (Preset Alight Motion), dan Audio Merger.\n' +
-        '2. Entertainment & Rekomendasi: Rekomendasi Anime (Filter multi-genre & rating skor MAL) dan Rekomendasi Manhwa (Webtoon Korea, cover & sinopsis).\n' +
-        '3. Dokumen: Safelink Bypasser (Bypass link iklan Sfl.gl/SafelinkU ke direct link), PNG to PDF, Link to PDF/PPT (Scribd/SlideShare), dan File ke Link.\n' +
+        `AllToolsKuro memiliki ${TOUR_ORDER.length} fitur utilitas lengkap:\n` +
+        '1. Media & Template: Media Downloader (4K & 1080p Status WA Anti-Burik), Cari Link JJ (Preset Alight Motion & XML Drive), dan Audio Merger.\n' +
+        '2. Hiburan & Rekomendasi: Rekomendasi Anime (Filter multi-genre & rating skor MAL) dan Rekomendasi Manhwa (Webtoon Korea, cover & sinopsis).\n' +
+        '3. Dokumen & Bypass: Safelink Bypasser (Bypass link iklan Sfl.gl/SafelinkU ke direct link), PNG to PDF, Link to PDF/PPT (Scribd/SlideShare), dan File ke Link.\n' +
         '4. Studio & Visual: Hapus Background AI, QR Code Studio, Photo Studio, Video Studio, Kompres Media HD, dan Video Trimmer.\n\n' +
         'Fitur mana yang ingin Anda gunakan hari ini?';
 

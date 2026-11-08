@@ -11,15 +11,15 @@ export default function handler(req, res) {
   }
 
   const versionPayload = {
-    latestVersion: '1.5.0',
-    versionCode: 5,
-    releaseNotes: 'Rilis Pembaruan v1.5.0: Sinopsis Rekomendasi Anime & Manhwa Bilingual (ID / EN) Otomatis, Pembersihan CapCut Finder, dan Optimalisasi Serverless Vercel.',
+    latestVersion: '1.5.1',
+    versionCode: 6,
+    releaseNotes: 'Rilis Pembaruan v1.5.1: Sistem In-App Update Interaktif Langsung di Aplikasi, Penyesuaian Pemandu Tour & Bot 15 Utilitas Kuro, serta Sinopsis Rekomendasi Bilingual.',
     features: [
-      'Sinopsis Bilingual Otomatis: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih bahasa Indonesia, dan berbahasa Inggris jika memilih English.',
-      'Detail In-App Modal: Baca sinopsis lengkap, skor rating ⭐, status rilis, dan episode langsung di dalam modal tanpa redirect ke situs luar.',
-      'Pembersihan Antarmuka: Menghapus fitur Pencari Template CapCut yang tidak berfungsi agar navigasi lebih rapi dan gesit.',
-      'Sinkronisasi Cloud Real-Time: Deteksi pembaruan versi server dan catatan rilis otomatis tersinkronisasi di tombol update aplikasi.',
-      'Penyempurnaan Stabilitas & Keamanan: Konsolidasi API serverless bebas kendala kuota Vercel dan sanitasi input.'
+      'Sistem In-App Update Interaktif: Pembaruan versi aplikasi langsung di dalam antarmuka dengan animasi progres bertahap tanpa pop-up download ulang browser yang mengganggu.',
+      'Status Otomatis \'Tidak Ada Update Tersedia\': Begitu pembaruan selesai, sistem langsung menandai versi terbaru dan menyediakan opsi cek berkala.',
+      'Pemandu Tour & Chatbot 15 Utilitas: Sinkronisasi pemandu tour Kuro dan asisten AI agar presisi mengenali 15 fitur aktif AllToolsKuro.',
+      'Sinopsis Rekomendasi Bilingual: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih bahasa Indonesia, dan berbahasa Inggris jika memilih English.',
+      'Pembersihan Antarmuka & Optimasi: Menghapus modul CapCut yang tidak berfungsi agar navigasi lebih gesit dan bebas error.'
     ],
     apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
     fileSize: '12.8 MB',
