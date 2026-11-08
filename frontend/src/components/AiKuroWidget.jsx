@@ -112,12 +112,6 @@ const KURO_TOOLS_CATALOG = [
     desc: 'Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
   },
   {
-    id: 'capcutFinder',
-    name: 'Pencari Template CapCut',
-    tag: 'Preset JJ & Video Loop',
-    desc: 'Cari template CapCut dan preset jedag-jedug berdasarkan lirik lagu atau kata kunci dengan pratinjau video loop dan direct link resmi ke aplikasi CapCut.'
-  },
-  {
     id: 'animeFinder',
     name: 'Rekomendasi Anime',
     tag: 'Database Anime HD',

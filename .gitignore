@@ -51,3 +51,4 @@ backend/uploads/temp/*
 capacitor-cordova-android-plugins/
 
 
+.vercel

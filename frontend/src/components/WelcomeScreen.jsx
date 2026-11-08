@@ -187,15 +187,6 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       onClick: () => onOpenTool('resolver')
     },
     {
-      id: 'capcutFinder',
-      category: 'creative',
-      name: wt.tools.capcutFinder?.name || 'Pencari Template CapCut',
-      desc: wt.tools.capcutFinder?.desc || 'Cari preset JJ & template CapCut dengan pratinjau video loop.',
-      tag: wt.tools.capcutFinder?.tag || 'CAPCUT JJ',
-      icon: Film,
-      onClick: () => onOpenTool('capcutFinder')
-    },
-    {
       id: 'animeFinder',
       category: 'utility',
       name: wt.tools.animeFinder?.name || 'Rekomendasi Anime',

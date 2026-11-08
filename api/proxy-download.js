@@ -92,7 +92,11 @@ export default async function handler(req, res) {
       validateStatus: (status) => status >= 200 && status < 400
     });
 
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    if (req.query.stream === 'true' || req.query.type === 'stream') {
+      res.setHeader('Content-Disposition', 'inline');
+    } else {
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    }
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
     if (response.headers['content-length']) {
       res.setHeader('Content-Length', response.headers['content-length']);

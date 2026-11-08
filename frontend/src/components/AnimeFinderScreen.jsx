@@ -7,6 +7,7 @@ import {
   Tv, 
   Search, 
   Star, 
+  BookOpen,
   ExternalLink, 
   Copy, 
   Check, 

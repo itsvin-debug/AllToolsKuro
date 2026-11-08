@@ -57,7 +57,6 @@ export default function Navbar({
     { id: 'videoTrimmer', label: t.welcome?.tools?.videoTrimmer?.name || 'Video Trimmer', icon: Scissors },
     { id: 'bgRemover', label: t.welcome?.tools?.bgRemover?.name || 'Hapus Background', icon: Scissors },
     { id: 'resolver', label: t.welcome?.tools?.resolver?.name || 'Safelink Resolver', icon: Link2 },
-    { id: 'capcutFinder', label: t.welcome?.tools?.capcutFinder?.name || 'Pencari Template CapCut', icon: Film },
     { id: 'animeFinder', label: t.welcome?.tools?.animeFinder?.name || 'Rekomendasi Anime', icon: Tv },
     { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen }
   ];

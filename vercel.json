@@ -45,6 +45,22 @@
   ],
   "rewrites": [
     {
+      "source": "/api/anime/search",
+      "destination": "/api/media?type=anime"
+    },
+    {
+      "source": "/api/manhwa/search",
+      "destination": "/api/media?type=manhwa"
+    },
+    {
+      "source": "/api/proxy-stream",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
+      "source": "/api/ping",
+      "destination": "/api/locked-tools?action=ping"
+    },
+    {
       "source": "/api/jj/find",
       "destination": "/api/jj-finder"
     },
@@ -57,7 +73,7 @@
       "destination": "/api/locked-tools"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|version\\.json|.*\\.apk|assets/).*)",
       "destination": "/index.html"
     }
   ]

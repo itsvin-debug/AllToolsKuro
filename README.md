@@ -38,7 +38,7 @@ Arsitektur aplikasi terbagi menjadi tiga komponen utama yang terisolasi dan modu
 
 ### Karakteristik Arsitektur
 1. **Desain Antarmuka Neobrutalist**: Border tegas 2px hitam, bayangan kontras tanpa blur (`shadow-[3px_3px_0px_#000000]`), layout fluid mobile-first, dan aksesibilitas keyboard lengkap.
-2. **Kepatuhan Vercel Serverless (Hobby Plan)**: Seluruh endpoint terdistribusi dalam 10 serverless function mandiri (di bawah ambang batas 12 fungsi Hobby Plan) dengan durasi eksekusi maksimum 15 detik.
+2. **Kepatuhan Vercel Serverless (Hobby Plan)**: Seluruh endpoint terdistribusi dalam 11 serverless function mandiri (di bawah ambang batas 12 fungsi Hobby Plan) dengan durasi eksekusi maksimum 15 detik.
 3. **Pemisahan Logika Proteksi**: Fitur administratif dilindungi oleh `EnvGuard` di tingkat middleware untuk memastikan repositori publik yang di-fork atau di-clone berjalan aman tanpa membocorkan credential internal.
 
 ---
@@ -63,7 +63,6 @@ Berikut adalah daftar modul yang tersedia pada Kuro Studio:
 | `videoTrimmer` | **Video Trimmer** | Pemotong Presisi | Pangkas detik awal atau akhir klip videomu secara akurat tanpa menurunkan bitrate asli atau merusak kualitas audionya. | Aktif |
 | `bgRemover` | **Hapus Background** | AI Background Remover | Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi. | Aktif |
 | `resolver` | **Safelink & Link Resolver** | Bypass Link & Iklan | Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman. | Aktif |
-| `capcutFinder` | **Pencari Template CapCut** | Preset JJ & Video Loop | Cari template CapCut dan preset jedag-jedug berdasarkan lirik lagu atau kata kunci dengan pratinjau video loop dan direct link resmi ke aplikasi CapCut. | Aktif |
 | `animeFinder` | **Rekomendasi Anime** | Database Anime HD | Jelajahi ribuan anime terbaik berdasarkan genre favorit, skor rating MyAnimeList, poster visual resolusi tinggi, dan sinopsis lengkap. | Aktif |
 | `manhwaFinder` | **Rekomendasi Manhwa** | Komik Webtoon Korea | Temukan komik Korea (Manhwa) terpopuler dengan filter genre, rating pembaca, cover jernih, dan rangkuman jalan cerita seru. | Aktif |
 <!-- AUTO-FEATURES-END -->

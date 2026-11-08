@@ -46,55 +46,40 @@ export function useAppUpdate() {
       const cacheBuster = `?t=${Date.now()}`;
       let data = null;
 
-      // 1. Ambil dari remote Vercel live server agar APK selalu sinkron dengan rilis web terbaru
-      try {
-        const remoteRes = await fetch(`https://alltoolskuro.vercel.app/version.json${cacheBuster}`, {
-          cache: 'no-store'
-        });
-        if (remoteRes.ok) {
-          data = await remoteRes.json();
-        }
-      } catch {
-        // Abaikan jika network offline
-      }
+      // Ambil data versi dari beberapa sumber terpercaya dan pilih yang paling mutakhir (versi tertinggi)
+      const fetchSources = [
+        `https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/frontend/public/version.json${cacheBuster}`,
+        `https://alltoolskuro.vercel.app/version.json${cacheBuster}`,
+        `https://alltoolskuro.vercel.app/api/version${cacheBuster}`,
+        `/version.json${cacheBuster}`
+      ];
 
-      // 2. Cek endpoint API remote jika version.json belum terupdate
-      if (!data) {
+      for (const src of fetchSources) {
         try {
-          const apiRes = await fetch(`https://alltoolskuro.vercel.app/api/version${cacheBuster}`);
-          if (apiRes.ok) {
-            data = await apiRes.json();
+          const res = await fetch(src, { cache: 'no-store' });
+          if (res.ok) {
+            const candidate = await res.json();
+            if (candidate && candidate.latestVersion) {
+              if (!data || isVersionHigher(candidate.latestVersion, data.latestVersion)) {
+                data = candidate;
+              }
+            }
           }
-        } catch {
-          // Abaikan
-        }
-      }
-
-      // 3. Bandingkan dengan file version.json lokal (gunakan versi tertinggi jika lokal lebih baru)
-      try {
-        const localRes = await fetch(`/version.json${cacheBuster}`);
-        if (localRes.ok) {
-          const localData = await localRes.json();
-          if (localData && (!data || isVersionHigher(localData.latestVersion, data.latestVersion))) {
-            data = localData;
-          }
-        }
-      } catch {
-        // Abaikan
+        } catch (_) {}
       }
 
       if (!data) {
         // Fallback data rilis terbaru jika server offline
         data = {
-          latestVersion: '1.4.0',
-          versionCode: 4,
-          releaseNotes: 'Rilis Pembaruan v1.4.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dengan Real-Time Search dan In-App Modal Detail.',
+          latestVersion: '1.5.0',
+          versionCode: 5,
+          releaseNotes: 'Rilis Pembaruan v1.5.0: Sinopsis Rekomendasi Anime & Manhwa Bilingual (ID / EN) Otomatis, Pembersihan CapCut Finder, dan Optimalisasi Serverless Vercel.',
           features: [
-            'Pencari Template CapCut JJ: Cari preset JJ viral via lirik/lagu dengan direct link resmi CapCut dan cover aesthetic (bebas video dummy).',
-            'Pencari Rekomendasi Anime: Rekomendasi cerdas modal genre tunggal & kombinasi multi-genre, skor rating MAL, dan Modal Detail In-App tanpa redirect keluar.',
-            'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover HD, dan Modal Detail In-App sinopsis lengkap.',
-            'LiveChart.me & Kitsu Manga API: Integrasi data episode & webtoon Korea secara real-time.',
-            'Sistem Update Otomatis: Deteksi perubahan web secara real-time langsung melalui tombol update aplikasi.'
+            'Sinopsis Bilingual Otomatis: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih bahasa Indonesia, dan berbahasa Inggris jika memilih English.',
+            'Detail In-App Modal: Baca sinopsis lengkap, skor rating ⭐, status rilis, dan episode langsung di dalam modal tanpa redirect ke situs luar.',
+            'Pembersihan Antarmuka: Menghapus fitur Pencari Template CapCut yang tidak berfungsi agar navigasi lebih rapi dan gesit.',
+            'Sinkronisasi Cloud Real-Time: Deteksi pembaruan versi server dan catatan rilis otomatis tersinkronisasi di tombol update aplikasi.',
+            'Penyempurnaan Stabilitas & Keamanan: Konsolidasi API serverless bebas kendala kuota Vercel dan sanitasi input.'
           ],
           apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
           fileSize: '12.8 MB',
@@ -104,7 +89,7 @@ export function useAppUpdate() {
 
       setLatestInfo(data);
 
-      const serverVersion = data.latestVersion || '1.4.0';
+      const serverVersion = data.latestVersion || '1.5.0';
       const installedVer = getInstalledAppVersion();
       setCurrentInstalledVersion(installedVer);
 

@@ -135,16 +135,6 @@ const KURO_TOOLS = {
     ],
     desc: 'Fitur Safelink Bypasser untuk melewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll), melewati hitungan waktu dan iklan membingungkan agar langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
   },
-  capcutFinder: {
-    id: 'capcutFinder',
-    name: 'Pencari Template CapCut',
-    element_id: 'tool-capcutFinder',
-    keywords: [
-      'capcut template', 'template capcut', 'preset capcut', 'wong ai ni', 'cari capcut',
-      'preset jj', 'capcut', 'capcut finder', 'lirik capcut', 'jedag jedug capcut'
-    ],
-    desc: 'Fitur Pencari Template CapCut untuk menemukan preset video Jedag-Jedug (JJ) berdasarkan lirik lagu atau judul dengan pratinjau video loop tanpa suara dan tombol langsung membuka template di CapCut.'
-  },
   animeFinder: {
     id: 'animeFinder',
     name: 'Rekomendasi Anime',
@@ -171,7 +161,7 @@ const TOUR_ORDER = [
   'downloader', 'jjFinder', 'pngToPdf', 'linkToDoc',
   'imageToLink', 'compressor', 'qrStudio', 'audioMerger',
   'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover', 'resolver',
-  'capcutFinder', 'animeFinder', 'manhwaFinder'
+  'animeFinder', 'manhwaFinder'
 ];
 
 function cleanSpeechText(text) {

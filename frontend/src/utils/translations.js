@@ -127,11 +127,6 @@ export const translations = {
           desc: 'Lewati safelink bertingkat (Sfl.gl, SafelinkU, dll), lewati iklan & countdown langsung ke link file asli (Mediafire, Drive, dll).',
           tag: 'BYPASS'
         },
-        capcutFinder: {
-          name: 'Pencari Template CapCut',
-          desc: 'Cari preset JJ & template CapCut berdasarkan lirik atau judul dengan pratinjau video loop.',
-          tag: 'CAPCUT JJ'
-        },
         animeFinder: {
           name: 'Rekomendasi Anime',
           desc: 'Jelajahi rekomendasi dan cari anime berdasarkan saringan multi-genre, rating skor, dan sinopsis.',
@@ -511,22 +506,6 @@ export const translations = {
       fileNameLabel: 'Nama Berkas PDF',
       confirmDownloadBtn: 'Simpan PDF ke Perangkat'
     },
-    capcutFinder: {
-      title: 'Pencari Template CapCut',
-      subtitle: 'Cari template CapCut dan preset Jedag-Jedug (JJ) berdasarkan lirik, lagu, atau nama kreator.',
-      searchPlaceholder: 'Ketik lirik atau judul (contoh: wong ai ni, dj remix, jj tipis)...',
-      searchBtn: 'Cari Preset',
-      searching: 'Mencari Template...',
-      openInCapcut: 'Buka di CapCut',
-      copyLink: 'Salin Tautan',
-      copied: 'Tautan CapCut berhasil disalin!',
-      popularSearches: 'Pencarian Populer:',
-      resultsFound: 'template ditemukan',
-      noResultsTitle: 'Template Tidak Ditemukan',
-      noResultsDesc: 'Coba gunakan kata kunci lirik lain seperti "wong ai ni", "dj", atau "mengkane".',
-      filterAll: 'Semua',
-      videoLoopNote: 'Pratinjau berputar otomatis tanpa suara'
-    },
     animeFinder: {
       title: 'Pencari Rekomendasi Anime',
       subtitle: 'Jelajahi ribuan anime terbaik berdasarkan genre favorit, rating MyAnimeList, dan sinopsis lengkap.',
@@ -698,11 +677,6 @@ export const translations = {
           name: 'Safelink Resolver',
           desc: 'Bypass multi-level safelinks (Sfl.gl, SafelinkU, etc), skip ads and countdowns straight to the direct download link.',
           tag: 'BYPASS'
-        },
-        capcutFinder: {
-          name: 'CapCut Preset Finder',
-          desc: 'Search CapCut templates and JJ presets by song lyrics or keywords with autoplay looping video.',
-          tag: 'CAPCUT JJ'
         },
         animeFinder: {
           name: 'Anime Recommendations',
@@ -1082,22 +1056,6 @@ export const translations = {
       downloadModalDesc: 'Provide a filename for the PDF document ready to be saved to your device.',
       fileNameLabel: 'PDF File Name',
       confirmDownloadBtn: 'Save PDF to Device'
-    },
-    capcutFinder: {
-      title: 'CapCut Preset Finder',
-      subtitle: 'Search CapCut templates and Jedag-Jedug (JJ) presets by lyrics, song name, or creator.',
-      searchPlaceholder: 'Type lyrics or title (e.g. wong ai ni, dj remix, jj tipis)...',
-      searchBtn: 'Search Presets',
-      searching: 'Searching Templates...',
-      openInCapcut: 'Open in CapCut',
-      copyLink: 'Copy Link',
-      copied: 'CapCut link copied to clipboard!',
-      popularSearches: 'Popular Searches:',
-      resultsFound: 'templates found',
-      noResultsTitle: 'No Templates Found',
-      noResultsDesc: 'Try searching other lyrics or phrases like "wong ai ni", "dj", or "mengkane".',
-      filterAll: 'All',
-      videoLoopNote: 'Previews loop automatically muted'
     },
     animeFinder: {
       title: 'Anime Recommendations',

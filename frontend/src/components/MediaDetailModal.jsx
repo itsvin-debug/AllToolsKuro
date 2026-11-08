@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Star, 
@@ -7,16 +7,18 @@ import {
   Calendar, 
   Copy, 
   Check, 
-  Share2, 
   ExternalLink,
   Layers,
   Sparkles
 } from 'lucide-react';
 
+// Cache memori untuk terjemahan sinopsis agar pergantian bahasa seketika
+const translationCache = new Map();
+
 /**
  * frontend/src/components/MediaDetailModal.jsx
  * Modal Popup Detail In-App Neobrutalism untuk Anime & Manhwa
- * Menampilkan detail lengkap karya tanpa me-redirect pengguna ke situs luar.
+ * Mendukung teks sinopsis bilingual dinamis (ID / EN) sesuai bahasa yang dipilih.
  */
 export default function MediaDetailModal({
   isOpen,
@@ -27,6 +29,64 @@ export default function MediaDetailModal({
   onShowToast
 }) {
   const [copied, setCopied] = useState(false);
+  const [synopsisText, setSynopsisText] = useState(item?.description || '');
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  // Terjemahkan atau sesuaikan sinopsis berdasarkan preferensi bahasa (ID / EN)
+  useEffect(() => {
+    if (!item) return;
+    const baseText = item.description || '';
+    if (!baseText) {
+      setSynopsisText('');
+      return;
+    }
+
+    const isIndonesian = lang === 'id';
+    const looksIndonesian = /\b(dan|yang|di|dengan|adalah|pemburu|dunia|setelah|sebuah|mereka|karena)\b/i.test(baseText);
+
+    if (isIndonesian && looksIndonesian) {
+      setSynopsisText(baseText);
+      return;
+    }
+    if (!isIndonesian && !looksIndonesian) {
+      setSynopsisText(baseText);
+      return;
+    }
+
+    const targetLang = isIndonesian ? 'id' : 'en';
+    const cacheKey = `${item.id || item.title?.english}_${targetLang}`;
+    if (translationCache.has(cacheKey)) {
+      setSynopsisText(translationCache.get(cacheKey));
+      return;
+    }
+
+    let isCancelled = false;
+    setIsTranslating(true);
+    const sourceLang = isIndonesian ? 'en' : 'id';
+    const cleanText = baseText.replace(/<[^>]+>/g, '').slice(0, 1500);
+
+    fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(cleanText)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (!isCancelled && data && Array.isArray(data[0])) {
+          const translated = data[0].map(chunk => chunk[0]).join('');
+          if (translated) {
+            translationCache.set(cacheKey, translated);
+            setSynopsisText(translated);
+          }
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) setSynopsisText(baseText);
+      })
+      .finally(() => {
+        if (!isCancelled) setIsTranslating(false);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [item, lang]);
 
   if (!isOpen || !item) return null;
 
@@ -164,7 +224,14 @@ export default function MediaDetailModal({
               <span>{lang === 'en' ? 'Full Synopsis' : 'Sinopsis Cerita Lengkap'}</span>
             </h3>
             <div className="p-3.5 rounded-xl bg-neutral-50 dark:bg-zinc-900 border-2 border-black shadow-[2px_2px_0px_#000000] text-xs sm:text-sm leading-relaxed max-h-56 overflow-y-auto custom-scrollbar whitespace-pre-line text-neutral-800 dark:text-neutral-200">
-              {item.description || (lang === 'en' ? 'No synopsis available for this title.' : 'Sinopsis cerita lengkap belum tersedia untuk judul ini.')}
+              {isTranslating ? (
+                <div className="flex items-center gap-2 text-neutral-500 py-2">
+                  <span className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                  <span>{lang === 'en' ? 'Translating synopsis...' : 'Menyesuaikan bahasa sinopsis...'}</span>
+                </div>
+              ) : (
+                synopsisText || (lang === 'en' ? 'No synopsis available for this title.' : 'Sinopsis cerita lengkap belum tersedia untuk judul ini.')
+              )}
             </div>
           </div>
         </div>

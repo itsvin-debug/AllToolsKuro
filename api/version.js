@@ -11,15 +11,15 @@ export default function handler(req, res) {
   }
 
   const versionPayload = {
-    latestVersion: '1.4.0',
-    versionCode: 4,
-    releaseNotes: 'Rilis Pembaruan v1.4.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dengan Real-Time Search dan In-App Modal Detail.',
+    latestVersion: '1.5.0',
+    versionCode: 5,
+    releaseNotes: 'Rilis Pembaruan v1.5.0: Sinopsis Rekomendasi Anime & Manhwa Bilingual (ID / EN) Otomatis, Pembersihan CapCut Finder, dan Optimalisasi Serverless Vercel.',
     features: [
-      'Pencari Template CapCut JJ: Cari preset JJ viral via lirik/lagu dengan direct link resmi CapCut dan cover aesthetic (bebas video dummy).',
-      'Pencari Rekomendasi Anime: Rekomendasi cerdas modal genre tunggal & kombinasi multi-genre, skor rating MAL, dan Modal Detail In-App tanpa redirect keluar.',
-      'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover HD, dan Modal Detail In-App sinopsis lengkap.',
-      'LiveChart.me & Kitsu Manga API: Integrasi data episode & webtoon Korea secara real-time.',
-      'Sistem Update Otomatis: Deteksi perubahan web secara real-time langsung melalui tombol update aplikasi.'
+      'Sinopsis Bilingual Otomatis: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih bahasa Indonesia, dan berbahasa Inggris jika memilih English.',
+      'Detail In-App Modal: Baca sinopsis lengkap, skor rating ⭐, status rilis, dan episode langsung di dalam modal tanpa redirect ke situs luar.',
+      'Pembersihan Antarmuka: Menghapus fitur Pencari Template CapCut yang tidak berfungsi agar navigasi lebih rapi dan gesit.',
+      'Sinkronisasi Cloud Real-Time: Deteksi pembaruan versi server dan catatan rilis otomatis tersinkronisasi di tombol update aplikasi.',
+      'Penyempurnaan Stabilitas & Keamanan: Konsolidasi API serverless bebas kendala kuota Vercel dan sanitasi input.'
     ],
     apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
     fileSize: '12.8 MB',
