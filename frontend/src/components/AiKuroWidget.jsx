@@ -110,6 +110,24 @@ const KURO_TOOLS_CATALOG = [
     name: 'Safelink & Link Resolver',
     tag: 'Bypass Link & Iklan',
     desc: 'Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
+  },
+  {
+    id: 'capcutFinder',
+    name: 'Pencari Template CapCut',
+    tag: 'Preset JJ & Video Loop',
+    desc: 'Cari template CapCut dan preset jedag-jedug berdasarkan lirik lagu atau kata kunci dengan pratinjau video loop dan direct link resmi ke aplikasi CapCut.'
+  },
+  {
+    id: 'animeFinder',
+    name: 'Rekomendasi Anime',
+    tag: 'Database Anime HD',
+    desc: 'Jelajahi ribuan anime terbaik berdasarkan genre favorit, skor rating MyAnimeList, poster visual resolusi tinggi, dan sinopsis lengkap.'
+  },
+  {
+    id: 'manhwaFinder',
+    name: 'Rekomendasi Manhwa',
+    tag: 'Komik Webtoon Korea',
+    desc: 'Temukan komik Korea (Manhwa) terpopuler dengan filter genre, rating pembaca, cover jernih, dan rangkuman jalan cerita seru.'
   }
 ];
 
@@ -913,7 +931,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 type="button"
                 onClick={handleStartTour}
                 className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-black text-xs font-black rounded-lg border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
-                title="Mulai Tour 13 Fitur"
+                title="Mulai Tour 16 Fitur"
               >
                 <Compass className="w-3.5 h-3.5 stroke-[2.5]" />
                 <span className="hidden xs:inline">Tour</span>
@@ -1018,10 +1036,24 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             </button>
             <button
               type="button"
-              onClick={() => handleSendMessage('cara cari template capcut dan preset alight motion?')}
+              onClick={() => handleSendMessage('cara cari template capcut dan preset jedag-jedug?')}
               className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
             >
-              Cari Link JJ
+              Template CapCut
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendMessage('rekomendasi anime apa yang bagus ditonton?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+            >
+              Rekomendasi Anime
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendMessage('apa saja rekomendasi manhwa seru?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+            >
+              Rekomendasi Manhwa
             </button>
             <button
               type="button"

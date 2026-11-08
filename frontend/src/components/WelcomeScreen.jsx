@@ -15,7 +15,9 @@ import {
   Filter,
   Images,
   Lock,
-  Unlock
+  Unlock,
+  Tv,
+  BookOpen
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
@@ -59,11 +61,11 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
   const wt = t.welcome;
 
   const categories = [
-    { id: 'all', label: wt.catAll, count: 13 },
+    { id: 'all', label: wt.catAll, count: 16 },
     { id: 'downloader', label: wt.catDownloader, count: 2 },
     { id: 'file', label: wt.catFile, count: 4 },
-    { id: 'creative', label: wt.catCreative, count: 5 },
-    { id: 'utility', label: wt.catUtility, count: 2 }
+    { id: 'creative', label: wt.catCreative, count: 6 },
+    { id: 'utility', label: wt.catUtility, count: 4 }
   ];
 
   const tools = [
@@ -183,6 +185,33 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       tag: wt.tools.resolver?.tag || 'BYPASS',
       icon: Link2,
       onClick: () => onOpenTool('resolver')
+    },
+    {
+      id: 'capcutFinder',
+      category: 'creative',
+      name: wt.tools.capcutFinder?.name || 'Pencari Template CapCut',
+      desc: wt.tools.capcutFinder?.desc || 'Cari preset JJ & template CapCut dengan pratinjau video loop.',
+      tag: wt.tools.capcutFinder?.tag || 'CAPCUT JJ',
+      icon: Film,
+      onClick: () => onOpenTool('capcutFinder')
+    },
+    {
+      id: 'animeFinder',
+      category: 'utility',
+      name: wt.tools.animeFinder?.name || 'Rekomendasi Anime',
+      desc: wt.tools.animeFinder?.desc || 'Jelajahi rekomendasi anime berdasarkan multi-genre dan rating MyAnimeList.',
+      tag: wt.tools.animeFinder?.tag || 'ANIME HD',
+      icon: Tv,
+      onClick: () => onOpenTool('animeFinder')
+    },
+    {
+      id: 'manhwaFinder',
+      category: 'utility',
+      name: wt.tools.manhwaFinder?.name || 'Rekomendasi Manhwa',
+      desc: wt.tools.manhwaFinder?.desc || 'Koleksi manhwa Korea terpopuler dengan filter genre, cover, dan sinopsis.',
+      tag: wt.tools.manhwaFinder?.tag || 'MANHWA',
+      icon: BookOpen,
+      onClick: () => onOpenTool('manhwaFinder')
     }
   ];
 

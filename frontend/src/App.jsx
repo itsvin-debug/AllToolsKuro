@@ -10,6 +10,9 @@ import VideoTrimmerScreen from './components/VideoTrimmerScreen';
 import BgRemoverScreen from './components/BgRemoverScreen';
 import LinkResolverScreen from './components/LinkResolverScreen';
 import JjFinderScreen from './components/JjFinderScreen';
+import CapCutFinderScreen from './components/CapCutFinderScreen';
+import AnimeFinderScreen from './components/AnimeFinderScreen';
+import ManhwaFinderScreen from './components/ManhwaFinderScreen';
 import PngToPdfScreen from './components/PngToPdfScreen';
 import MediaCompressorScreen from './components/MediaCompressorScreen';
 import QrStudioScreen from './components/QrStudioScreen';
@@ -41,7 +44,10 @@ const TOOL_NAMES = {
   videoStudio: 'Video Studio',
   videoTrimmer: 'Video Trimmer',
   bgRemover: 'Hapus Background',
-  resolver: 'Safelink Resolver'
+  resolver: 'Safelink Resolver',
+  capcutFinder: 'Pencari Template CapCut',
+  animeFinder: 'Rekomendasi Anime',
+  manhwaFinder: 'Rekomendasi Manhwa'
 };
 
 export default function App() {
@@ -299,6 +305,30 @@ export default function App() {
             <LinkResolverScreen
               onBack={() => handleNavigate('welcome')}
               onShowToast={handleShowToast}
+            />
+          )}
+
+          {currentScreen === 'capcutFinder' && (
+            <CapCutFinderScreen
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'animeFinder' && (
+            <AnimeFinderScreen
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'manhwaFinder' && (
+            <ManhwaFinderScreen
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
             />
           )}
           </ErrorBoundary>

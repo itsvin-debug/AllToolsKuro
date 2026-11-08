@@ -515,4 +515,34 @@ router.post('/verify-admin', (req, res) => {
   return res.status(401).json({ success: false, message: 'Kata sandi admin tidak valid.' });
 });
 
+// ==========================================
+// 9. CAPCUT, ANIME & MANHWA UTILITY ENDPOINTS
+// ==========================================
+router.all('/capcut/search', async (req, res) => {
+  try {
+    const handler = (await import('../../../api/capcut/search.js')).default;
+    return handler(req, res);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.all('/anime/search', async (req, res) => {
+  try {
+    const handler = (await import('../../../api/anime/search.js')).default;
+    return handler(req, res);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.all('/manhwa/search', async (req, res) => {
+  try {
+    const handler = (await import('../../../api/manhwa/search.js')).default;
+    return handler(req, res);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;

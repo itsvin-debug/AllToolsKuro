@@ -18,7 +18,9 @@ import {
   Home,
   History,
   Settings,
-  RefreshCw
+  RefreshCw,
+  Tv,
+  BookOpen
 } from 'lucide-react';
 import { translations } from '../utils/translations';
 import { useAppUpdate } from '../hooks/useAppUpdate';
@@ -54,7 +56,10 @@ export default function Navbar({
     { id: 'videoStudio', label: t.welcome?.tools?.videoStudio?.name || 'Video Studio', icon: Film },
     { id: 'videoTrimmer', label: t.welcome?.tools?.videoTrimmer?.name || 'Video Trimmer', icon: Scissors },
     { id: 'bgRemover', label: t.welcome?.tools?.bgRemover?.name || 'Hapus Background', icon: Scissors },
-    { id: 'resolver', label: t.welcome?.tools?.resolver?.name || 'Safelink Resolver', icon: Link2 }
+    { id: 'resolver', label: t.welcome?.tools?.resolver?.name || 'Safelink Resolver', icon: Link2 },
+    { id: 'capcutFinder', label: t.welcome?.tools?.capcutFinder?.name || 'Pencari Template CapCut', icon: Film },
+    { id: 'animeFinder', label: t.welcome?.tools?.animeFinder?.name || 'Rekomendasi Anime', icon: Tv },
+    { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);

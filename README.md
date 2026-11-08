@@ -63,6 +63,9 @@ Berikut adalah daftar modul yang tersedia pada Kuro Studio:
 | `videoTrimmer` | **Video Trimmer** | Pemotong Presisi | Pangkas detik awal atau akhir klip videomu secara akurat tanpa menurunkan bitrate asli atau merusak kualitas audionya. | Aktif |
 | `bgRemover` | **Hapus Background** | AI Background Remover | Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi. | Aktif |
 | `resolver` | **Safelink & Link Resolver** | Bypass Link & Iklan | Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman. | Aktif |
+| `capcutFinder` | **Pencari Template CapCut** | Preset JJ & Video Loop | Cari template CapCut dan preset jedag-jedug berdasarkan lirik lagu atau kata kunci dengan pratinjau video loop dan direct link resmi ke aplikasi CapCut. | Aktif |
+| `animeFinder` | **Rekomendasi Anime** | Database Anime HD | Jelajahi ribuan anime terbaik berdasarkan genre favorit, skor rating MyAnimeList, poster visual resolusi tinggi, dan sinopsis lengkap. | Aktif |
+| `manhwaFinder` | **Rekomendasi Manhwa** | Komik Webtoon Korea | Temukan komik Korea (Manhwa) terpopuler dengan filter genre, rating pembaca, cover jernih, dan rangkuman jalan cerita seru. | Aktif |
 <!-- AUTO-FEATURES-END -->
 
 ### Detail Spesifikasi Modul Inti
@@ -175,6 +178,21 @@ AllToolsKuro/
 │   ├── .gitignore
 │   └── agent-manager.json
 ├── android/
+│   ├── .gradle/
+│   │   ├── 8.14.3/
+│   │   ├── buildOutputCleanup/
+│   │   ├── vcs-1/
+│   │   └── file-system.probe
+│   ├── .idea/
+│   │   ├── caches/
+│   │   ├── .gitignore
+│   │   ├── android.iml
+│   │   ├── AndroidProjectSystem.xml
+│   │   ├── gradle.xml
+│   │   ├── misc.xml
+│   │   ├── modules.xml
+│   │   ├── runConfigurations.xml
+│   │   └── workspace.xml
 │   ├── app/
 │   │   ├── src/
 │   │   ├── .gitignore
@@ -193,9 +211,16 @@ AllToolsKuro/
 │   ├── gradle.properties
 │   ├── gradlew
 │   ├── gradlew.bat
+│   ├── local.properties
 │   ├── settings.gradle
 │   └── variables.gradle
 ├── api/
+│   ├── anime/
+│   │   └── search.js
+│   ├── capcut/
+│   │   └── search.js
+│   ├── manhwa/
+│   │   └── search.js
 │   ├── _envGuard.js
 │   ├── _security.js
 │   ├── chat.js
@@ -207,7 +232,9 @@ AllToolsKuro/
 │   ├── proxy-doc-image.js
 │   ├── proxy-download.js
 │   ├── proxy-stream.js
-│   └── resolve.js
+│   ├── resolve.js
+│   ├── system-battery.js
+│   └── version.js
 ├── assets/
 │   ├── icon-background.png
 │   ├── icon-foreground.png
@@ -249,11 +276,15 @@ AllToolsKuro/
 │   ├── public/
 │   │   ├── photos/
 │   │   ├── videos/
+│   │   ├── AllToolsKuro.apk
 │   │   ├── favicon.svg
-│   │   └── icons.svg
+│   │   ├── icons.svg
+│   │   └── version.json
 │   ├── src/
 │   │   ├── assets/
 │   │   ├── components/
+│   │   ├── config/
+│   │   ├── hooks/
 │   │   ├── services/
 │   │   ├── utils/
 │   │   ├── App.css
@@ -283,6 +314,7 @@ AllToolsKuro/
 ├── .gitignore
 ├── .vercelignore
 ├── AGENTS.md
+├── AllToolsKuro.apk
 ├── capacitor.config.json
 ├── GEMINI.md
 ├── install.ps1
@@ -302,11 +334,11 @@ AllToolsKuro/
 5 riwayat pembaruan commit terakhir pada repositori:
 
 <!-- AUTO-CHANGELOG-START -->
-- [ee38381] feat: add clipboard utility for reading text with browser fallbacks (2026-11-06)
-- [7da8ad4] fix(ui): prevent video preview clipping and implement universal clipboard paste (2026-11-06)
-- [4ed5e96] chore: remove bot workflow to maintain solo developer contribution history (2026-11-06)
-- [cc9ec02] feat: complete security audit, global CLI opkuro, env guard, dynamic zero-emoji docs, and UI fixes (2026-11-06)
-- [a3db3e5] feat: add Python script and JJ preset service for video extraction (2026-11-06)
+- [a835be6] chore: trigger github metadata re-index for solo contributor profile (2026-11-07)
+- [ceb2013] fix(kurobot): enhance context comprehension to answer web introduction and identity queries (2026-11-07)
+- [9a24b98] fix(kurobot): implement mobile touch drag and snap strictly to left or right edges (2026-11-07)
+- [99f15b9] feat: add dynamic API base URL configuration for native Android and web platforms (2026-11-07)
+- [8f878a5] feat(kurobot): overhaul anime neobrutalist UI, strict nickname validation, touch drag snap & 30-min anger lockout (2026-11-07)
 <!-- AUTO-CHANGELOG-END -->
 
 ---

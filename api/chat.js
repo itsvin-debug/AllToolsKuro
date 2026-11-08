@@ -134,13 +134,44 @@ const KURO_TOOLS = {
       'bypasser', 'link safelink', 'iklan link', 'lewati iklan', 'lewat link', 'safelink bypasser'
     ],
     desc: 'Fitur Safelink Bypasser untuk melewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, Bitly, dll), melewati hitungan waktu dan iklan membingungkan agar langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
+  },
+  capcutFinder: {
+    id: 'capcutFinder',
+    name: 'Pencari Template CapCut',
+    element_id: 'tool-capcutFinder',
+    keywords: [
+      'capcut template', 'template capcut', 'preset capcut', 'wong ai ni', 'cari capcut',
+      'preset jj', 'capcut', 'capcut finder', 'lirik capcut', 'jedag jedug capcut'
+    ],
+    desc: 'Fitur Pencari Template CapCut untuk menemukan preset video Jedag-Jedug (JJ) berdasarkan lirik lagu atau judul dengan pratinjau video loop tanpa suara dan tombol langsung membuka template di CapCut.'
+  },
+  animeFinder: {
+    id: 'animeFinder',
+    name: 'Rekomendasi Anime',
+    element_id: 'tool-animeFinder',
+    keywords: [
+      'anime', 'rekomendasi anime', 'cari anime', 'anime jepang', 'mal', 'myanimelist',
+      'frieren', 'jujutsu', 'genre anime', 'skor anime', 'sinopsis anime'
+    ],
+    desc: 'Fitur Rekomendasi Anime untuk menjelajahi ribuan anime terbaik berdasarkan saringan multi-genre, skor rating MyAnimeList, poster jernih, dan sinopsis cerita lengkap.'
+  },
+  manhwaFinder: {
+    id: 'manhwaFinder',
+    name: 'Rekomendasi Manhwa',
+    element_id: 'tool-manhwaFinder',
+    keywords: [
+      'manhwa', 'rekomendasi manhwa', 'komik korea', 'webtoon', 'solo leveling',
+      'omniscient reader', 'tower of god', 'genre manhwa', 'baca manhwa'
+    ],
+    desc: 'Fitur Rekomendasi Manhwa untuk menemukan komik webtoon Korea terpopuler dengan filter genre favorit, rating pembaca, cover visual, dan sinopsis alur cerita seru.'
   }
 };
 
 const TOUR_ORDER = [
   'downloader', 'jjFinder', 'pngToPdf', 'linkToDoc',
   'imageToLink', 'compressor', 'qrStudio', 'audioMerger',
-  'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover', 'resolver'
+  'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover', 'resolver',
+  'capcutFinder', 'animeFinder', 'manhwaFinder'
 ];
 
 function cleanSpeechText(text) {
@@ -232,7 +263,8 @@ function isAllToolsKuroTopic(text) {
     'image to link', 'file ke link', 'kompres', 'compress', 'kecilkan', 'qrcode',
     'audio', 'musik', 'lagu', 'merger', 'photo studio', 'video studio', 'trimmer', 'potong video',
     'hapus background', 'bg remover', 'hapus bg', 'transparan', 'gratis', 'update', 'pembaruan', 'apk', 'aplikasi',
-    'web', 'website', 'situs', 'platform', 'fungsi', 'kegunaan', 'manfaat', 'tujuan'
+    'web', 'website', 'situs', 'platform', 'fungsi', 'kegunaan', 'manfaat', 'tujuan',
+    'wong ai ni', 'anime', 'manhwa', 'komik', 'webtoon', 'preset jj', 'rekomendasi'
   ];
 
   // Kata kunci pendek wajib menggunakan word boundary agar tidak cocok dengan substring kata lain (misal "ig" di dalam "nigga")
@@ -386,7 +418,7 @@ export default async function handler(req, res) {
     if (isTourRequest) {
       const first = TOUR_ORDER[0];
       return res.status(200).json({
-        reply: 'Fufufu~ Pilihan tepat! Saya akan memandu Anda melihat dan memahami seluruh 13 fitur hebat di AllToolsKuro satu per satu. Ayo ikuti saya!',
+        reply: 'Fufufu~ Pilihan tepat! Saya akan memandu Anda melihat dan memahami seluruh 16 fitur hebat di AllToolsKuro satu per satu. Ayo ikuti saya!',
         is_valid_context: true,
         isValidContext: true,
         animation: 'talking',
@@ -506,10 +538,11 @@ export default async function handler(req, res) {
     // 9. DETEKSI PERTANYAAN UMUM FITUR / PANDUAN APLIKASI
     if (lowerMsg.includes('fitur') || lowerMsg.includes('alat') || lowerMsg.includes('bisa apa') || lowerMsg.includes('panduan') || lowerMsg.includes('cara')) {
       const overviewText = 
-        'AllToolsKuro memiliki 13 fitur utilitas lengkap:\n' +
-        '1. Media: Media Downloader (4K & 1080p Status WA Anti-Burik), Cari Link JJ (Template CapCut & Preset Alight Motion), dan Audio Merger.\n' +
-        '2. Dokumen: Safelink Bypasser (Bypass link iklan Sfl.gl/SafelinkU ke direct link), PNG to PDF, Link to PDF/PPT (Scribd/SlideShare), dan File ke Link.\n' +
-        '3. Studio & Visual: Hapus Background AI, QR Code Studio, Photo Studio, Video Studio, Kompres Media HD, dan Video Trimmer.\n\n' +
+        'AllToolsKuro memiliki 16 fitur utilitas lengkap:\n' +
+        '1. Media & Template: Media Downloader (4K & 1080p Status WA Anti-Burik), Pencari Template CapCut (Cari JJ lirik & pratinjau loop video), Cari Link JJ (Preset Alight Motion), dan Audio Merger.\n' +
+        '2. Entertainment & Rekomendasi: Rekomendasi Anime (Filter multi-genre & rating skor MAL) dan Rekomendasi Manhwa (Webtoon Korea, cover & sinopsis).\n' +
+        '3. Dokumen: Safelink Bypasser (Bypass link iklan Sfl.gl/SafelinkU ke direct link), PNG to PDF, Link to PDF/PPT (Scribd/SlideShare), dan File ke Link.\n' +
+        '4. Studio & Visual: Hapus Background AI, QR Code Studio, Photo Studio, Video Studio, Kompres Media HD, dan Video Trimmer.\n\n' +
         'Fitur mana yang ingin Anda gunakan hari ini?';
 
       return res.status(200).json({

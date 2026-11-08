@@ -126,6 +126,21 @@ export const translations = {
           name: 'Safelink Resolver',
           desc: 'Lewati safelink bertingkat (Sfl.gl, SafelinkU, dll), lewati iklan & countdown langsung ke link file asli (Mediafire, Drive, dll).',
           tag: 'BYPASS'
+        },
+        capcutFinder: {
+          name: 'Pencari Template CapCut',
+          desc: 'Cari preset JJ & template CapCut berdasarkan lirik atau judul dengan pratinjau video loop.',
+          tag: 'CAPCUT JJ'
+        },
+        animeFinder: {
+          name: 'Rekomendasi Anime',
+          desc: 'Jelajahi rekomendasi dan cari anime berdasarkan saringan multi-genre, rating skor, dan sinopsis.',
+          tag: 'ANIME HD'
+        },
+        manhwaFinder: {
+          name: 'Rekomendasi Manhwa',
+          desc: 'Koleksi dan kurasi manhwa Korea terpopuler dengan filter genre, rating, cover, dan sinopsis cerita.',
+          tag: 'MANHWA'
         }
       }
     },
@@ -496,6 +511,66 @@ export const translations = {
       fileNameLabel: 'Nama Berkas PDF',
       confirmDownloadBtn: 'Simpan PDF ke Perangkat'
     },
+    capcutFinder: {
+      title: 'Pencari Template CapCut',
+      subtitle: 'Cari template CapCut dan preset Jedag-Jedug (JJ) berdasarkan lirik, lagu, atau nama kreator.',
+      searchPlaceholder: 'Ketik lirik atau judul (contoh: wong ai ni, dj remix, jj tipis)...',
+      searchBtn: 'Cari Preset',
+      searching: 'Mencari Template...',
+      openInCapcut: 'Buka di CapCut',
+      copyLink: 'Salin Tautan',
+      copied: 'Tautan CapCut berhasil disalin!',
+      popularSearches: 'Pencarian Populer:',
+      resultsFound: 'template ditemukan',
+      noResultsTitle: 'Template Tidak Ditemukan',
+      noResultsDesc: 'Coba gunakan kata kunci lirik lain seperti "wong ai ni", "dj", atau "mengkane".',
+      filterAll: 'Semua',
+      videoLoopNote: 'Pratinjau berputar otomatis tanpa suara'
+    },
+    animeFinder: {
+      title: 'Pencari Rekomendasi Anime',
+      subtitle: 'Jelajahi ribuan anime terbaik berdasarkan genre favorit, rating MyAnimeList, dan sinopsis lengkap.',
+      searchPlaceholder: 'Cari judul anime (contoh: Frieren, Jujutsu Kaisen, Oshi no Ko)...',
+      searchBtn: 'Cari Anime',
+      searching: 'Memuat Rekomendasi...',
+      filterGenre: 'Saring Genre',
+      allGenres: 'Semua Genre',
+      sortPopular: 'Paling Populer',
+      sortScore: 'Skor Tertinggi',
+      sortTrending: 'Sedang Tren',
+      episodes: 'Episode',
+      statusFinished: 'Tamat',
+      statusReleasing: 'Sedang Tayang',
+      readMore: 'Baca Selengkapnya',
+      readLess: 'Tutup Sinopsis',
+      copyTitle: 'Salin Judul',
+      copiedTitle: 'Judul anime disalin ke papan klip!',
+      openOfficial: 'Detail Info Resmi',
+      noResultsTitle: 'Anime Tidak Ditemukan',
+      noResultsDesc: 'Coba ubah kata kunci pencarian atau sesuaikan kombinasi filter genre.'
+    },
+    manhwaFinder: {
+      title: 'Pencari Rekomendasi Manhwa',
+      subtitle: 'Temukan komik Korea (Manhwa) terbaik dengan rating tinggi, cover jernih, dan sinopsis seru.',
+      searchPlaceholder: 'Cari judul manhwa (contoh: Solo Leveling, Omniscient Reader)...',
+      searchBtn: 'Cari Manhwa',
+      searching: 'Memuat Manhwa...',
+      filterGenre: 'Saring Genre',
+      allGenres: 'Semua Genre',
+      sortPopular: 'Paling Populer',
+      sortScore: 'Skor Tertinggi',
+      sortTrending: 'Sedang Tren',
+      chapters: 'Chapter',
+      statusFinished: 'Tamat',
+      statusReleasing: 'Sedang Berjalan',
+      readMore: 'Baca Selengkapnya',
+      readLess: 'Tutup Sinopsis',
+      copyTitle: 'Salin Judul',
+      copiedTitle: 'Judul manhwa disalin ke papan klip!',
+      openOfficial: 'Detail Info Resmi',
+      noResultsTitle: 'Manhwa Tidak Ditemukan',
+      noResultsDesc: 'Coba kata kunci lain atau pilih filter genre berbeda.'
+    },
     footer: {
       suite: 'UTILITY SUITE',
       text: 'Platform utilitas all-in-one untuk media, dokumen, audio, dan alat kreatif digital.'
@@ -623,6 +698,21 @@ export const translations = {
           name: 'Safelink Resolver',
           desc: 'Bypass multi-level safelinks (Sfl.gl, SafelinkU, etc), skip ads and countdowns straight to the direct download link.',
           tag: 'BYPASS'
+        },
+        capcutFinder: {
+          name: 'CapCut Preset Finder',
+          desc: 'Search CapCut templates and JJ presets by song lyrics or keywords with autoplay looping video.',
+          tag: 'CAPCUT JJ'
+        },
+        animeFinder: {
+          name: 'Anime Recommendations',
+          desc: 'Explore anime recommendations filtered by multiple genres, ratings, synopsis, and posters.',
+          tag: 'ANIME HD'
+        },
+        manhwaFinder: {
+          name: 'Manhwa Recommendations',
+          desc: 'Discover top Korean manhwa with genre filters, reader ratings, covers, and full synopsis.',
+          tag: 'MANHWA'
         }
       }
     },
@@ -992,6 +1082,66 @@ export const translations = {
       downloadModalDesc: 'Provide a filename for the PDF document ready to be saved to your device.',
       fileNameLabel: 'PDF File Name',
       confirmDownloadBtn: 'Save PDF to Device'
+    },
+    capcutFinder: {
+      title: 'CapCut Preset Finder',
+      subtitle: 'Search CapCut templates and Jedag-Jedug (JJ) presets by lyrics, song name, or creator.',
+      searchPlaceholder: 'Type lyrics or title (e.g. wong ai ni, dj remix, jj tipis)...',
+      searchBtn: 'Search Presets',
+      searching: 'Searching Templates...',
+      openInCapcut: 'Open in CapCut',
+      copyLink: 'Copy Link',
+      copied: 'CapCut link copied to clipboard!',
+      popularSearches: 'Popular Searches:',
+      resultsFound: 'templates found',
+      noResultsTitle: 'No Templates Found',
+      noResultsDesc: 'Try searching other lyrics or phrases like "wong ai ni", "dj", or "mengkane".',
+      filterAll: 'All',
+      videoLoopNote: 'Previews loop automatically muted'
+    },
+    animeFinder: {
+      title: 'Anime Recommendations',
+      subtitle: 'Browse thousands of top anime filtered by your favorite genres, MyAnimeList scores, and full synopsis.',
+      searchPlaceholder: 'Search anime title (e.g. Frieren, Jujutsu Kaisen, Oshi no Ko)...',
+      searchBtn: 'Search Anime',
+      searching: 'Loading Recommendations...',
+      filterGenre: 'Filter Genres',
+      allGenres: 'All Genres',
+      sortPopular: 'Most Popular',
+      sortScore: 'Top Rated',
+      sortTrending: 'Trending Now',
+      episodes: 'Episodes',
+      statusFinished: 'Completed',
+      statusReleasing: 'Currently Airing',
+      readMore: 'Read More',
+      readLess: 'Collapse',
+      copyTitle: 'Copy Title',
+      copiedTitle: 'Anime title copied to clipboard!',
+      openOfficial: 'Official Details',
+      noResultsTitle: 'No Anime Found',
+      noResultsDesc: 'Try adjusting your search keywords or switching genre filters.'
+    },
+    manhwaFinder: {
+      title: 'Manhwa Recommendations',
+      subtitle: 'Discover top Korean manhwa with high ratings, crisp cover art, and captivating plot synopsis.',
+      searchPlaceholder: 'Search manhwa title (e.g. Solo Leveling, Omniscient Reader)...',
+      searchBtn: 'Search Manhwa',
+      searching: 'Loading Manhwa...',
+      filterGenre: 'Filter Genres',
+      allGenres: 'All Genres',
+      sortPopular: 'Most Popular',
+      sortScore: 'Top Rated',
+      sortTrending: 'Trending Now',
+      chapters: 'Chapters',
+      statusFinished: 'Completed',
+      statusReleasing: 'Ongoing',
+      readMore: 'Read More',
+      readLess: 'Collapse',
+      copyTitle: 'Copy Title',
+      copiedTitle: 'Manhwa title copied to clipboard!',
+      openOfficial: 'Official Details',
+      noResultsTitle: 'No Manhwa Found',
+      noResultsDesc: 'Try different search keywords or select different genres.'
     },
     footer: {
       suite: 'UTILITY SUITE',

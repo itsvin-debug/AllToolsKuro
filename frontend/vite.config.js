@@ -198,8 +198,99 @@ function downloadDevMiddleware() {
   };
 }
 
+// Middleware Vite untuk melayani /api/system-battery secara instan tanpa memicu proxy error
+function systemBatteryDevMiddleware() {
+  return {
+    name: 'system-battery-dev-middleware',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const pathname = req.url?.split('?')[0];
+        if (pathname === '/api/system-battery') {
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Cache-Control', 'no-store, no-cache');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.end(JSON.stringify({
+            success: true,
+            level: 100,
+            isCharging: true,
+            hasBattery: false,
+            source: 'local-dev'
+          }));
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
+// Middleware Vite untuk melayani endpoint utilitas baru (CapCut, Anime, Manhwa) di dev mode
+function apiServicesDevMiddleware() {
+  return {
+    name: 'api-services-dev-middleware',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const parsedUrl = new URL(req.url, 'http://localhost:5173');
+        const pathname = parsedUrl.pathname;
+
+        let targetModulePath = null;
+        if (pathname === '/api/capcut/search') {
+          targetModulePath = '../api/capcut/search.js';
+        } else if (pathname === '/api/anime/search') {
+          targetModulePath = '../api/anime/search.js';
+        } else if (pathname === '/api/manhwa/search') {
+          targetModulePath = '../api/manhwa/search.js';
+        }
+
+        if (targetModulePath) {
+          try {
+            const apiMod = await import(targetModulePath);
+            req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+            let body = '';
+            req.on('data', chunk => { body += chunk; });
+            req.on('end', async () => {
+              try {
+                req.body = body ? JSON.parse(body) : {};
+              } catch {
+                req.body = {};
+              }
+              const mockRes = {
+                setHeader: (k, v) => res.setHeader(k, v),
+                status: (code) => {
+                  res.statusCode = code;
+                  return {
+                    json: (data) => {
+                      if (!res.headersSent) res.setHeader('Content-Type', 'application/json');
+                      res.end(JSON.stringify(data));
+                    },
+                    send: (data) => res.end(data),
+                    end: () => res.end()
+                  };
+                }
+              };
+              await apiMod.default(req, mockRes);
+            });
+            return;
+          } catch (err) {
+            console.warn(`apiServicesDevMiddleware error (${pathname}):`, err.message);
+          }
+        }
+        next();
+      });
+    }
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), pingDevMiddleware(), lockedToolsDevMiddleware(), chatDevMiddleware(), downloadDevMiddleware()],
+  plugins: [
+    react(),
+    pingDevMiddleware(),
+    systemBatteryDevMiddleware(),
+    lockedToolsDevMiddleware(),
+    chatDevMiddleware(),
+    downloadDevMiddleware(),
+    apiServicesDevMiddleware()
+  ],
   clearScreen: false,
   resolve: {
     preserveSymlinks: true,
@@ -215,9 +306,9 @@ export default defineConfig({
         configure: (proxy) => {
           proxy.on('error', (err, req, res) => {
             if (!res.headersSent) {
-              if (req.url && req.url.startsWith('/api/ping')) {
+              if (req.url && (req.url.startsWith('/api/ping') || req.url.startsWith('/api/system-battery'))) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ ok: true, fallback: true, timestamp: Date.now() }));
+                res.end(JSON.stringify({ ok: true, success: true, level: 100, isCharging: true, hasBattery: false, fallback: true, timestamp: Date.now() }));
                 return;
               }
               res.writeHead(502, { 'Content-Type': 'application/json' });
