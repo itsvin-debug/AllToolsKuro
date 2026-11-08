@@ -18,19 +18,34 @@ export default function UpdateModal({
   isDownloading,
   downloadProgress,
   downloadStatus,
-  onStartDownload
+  onStartDownload,
+  lang = 'id'
 }) {
   if (!isOpen) return null;
 
+  const isEn = lang === 'en';
   const newVersion = latestInfo?.latestVersion || '1.4.0';
-  const releaseNotes = latestInfo?.releaseNotes || 'Rilis Pembaruan v1.4.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dengan Real-Time Search dan In-App Modal Detail.';
-  const features = latestInfo?.features || [
+  const releaseNotes = latestInfo?.releaseNotes || (isEn 
+    ? 'Release Update v1.4.0: 3 New Features (CapCut JJ, Anime & Manhwa Recommendations) with Real-Time Search and In-App Detail Modal.'
+    : 'Rilis Pembaruan v1.4.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dengan Real-Time Search dan In-App Modal Detail.');
+  
+  const defaultFeaturesId = [
     'Pencari Template CapCut JJ: Cari preset JJ viral via lirik/lagu dengan direct link resmi CapCut dan cover aesthetic (bebas video dummy).',
     'Pencari Rekomendasi Anime: Rekomendasi cerdas modal genre tunggal & kombinasi multi-genre, skor rating MAL, dan Modal Detail In-App tanpa redirect keluar.',
     'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover HD, dan Modal Detail In-App sinopsis lengkap.',
     'LiveChart.me & Kitsu Manga API: Integrasi data episode & webtoon Korea secara real-time.',
     'Sistem Update Otomatis: Deteksi perubahan web secara real-time langsung melalui tombol update aplikasi.'
   ];
+
+  const defaultFeaturesEn = [
+    'CapCut JJ Template Finder: Find viral JJ presets via lyrics/song with official CapCut direct links and clean aesthetic covers (no dummy videos).',
+    'Anime Recommendation Finder: Smart multi-genre combination presets, MAL scores, and In-App Detail Modal with no external redirects.',
+    'Manhwa Recommendation Finder: Korean webtoon curation with genre combinations, reader ratings, HD covers, and In-App full synopsis modal.',
+    'LiveChart.me & Kitsu Manga API: Real-time sync for airing episodes and rich Korean manhwa metadata.',
+    'Automated In-App Updater: Real-time detection of web features directly via the app update button.'
+  ];
+
+  const features = latestInfo?.features || (isEn ? defaultFeaturesEn : defaultFeaturesId);
   const fileSize = latestInfo?.fileSize || '12.8 MB';
   const apkDownloadUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
 
@@ -61,7 +76,7 @@ export default function UpdateModal({
                 </span>
               </div>
               <h2 id="modal-update-title" className="text-base sm:text-lg font-black tracking-tight text-black mt-1">
-                Pembaruan Aplikasi Tersedia!
+                {isEn ? 'App Update Available!' : 'Pembaruan Aplikasi Tersedia!'}
               </h2>
             </div>
           </div>
@@ -71,7 +86,7 @@ export default function UpdateModal({
             onClick={onClose}
             disabled={isDownloading}
             className="p-1.5 rounded-lg border-2 border-black bg-white text-black hover:bg-neutral-100 shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
-            aria-label="Tutup dialog"
+            aria-label={isEn ? 'Close dialog' : 'Tutup dialog'}
           >
             <X className="w-4 h-4 stroke-[2.5]" />
           </button>
@@ -84,7 +99,7 @@ export default function UpdateModal({
           <div className="grid grid-cols-2 gap-2.5 p-3 rounded-xl bg-neutral-50 border-2 border-black shadow-[2px_2px_0px_#000000]">
             <div>
               <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-500 block font-bold">
-                Aplikasi & ID
+                {isEn ? 'App & Package' : 'Aplikasi & ID'}
               </span>
               <span className="font-black text-black text-xs sm:text-sm block truncate mt-0.5">
                 AllToolsKuro
@@ -96,7 +111,7 @@ export default function UpdateModal({
 
             <div className="text-right border-l-2 border-black pl-2.5">
               <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-500 block font-bold">
-                Versi Baru
+                {isEn ? 'New Version' : 'Versi Baru'}
               </span>
               <div className="flex items-center justify-end gap-1.5 mt-0.5">
                 <span className="text-[11px] font-mono text-neutral-400 line-through">
@@ -117,7 +132,7 @@ export default function UpdateModal({
           <div className="p-3 rounded-xl bg-blue-50/60 border-2 border-black shadow-[2px_2px_0px_#000000]">
             <span className="text-[10px] uppercase font-mono tracking-wider text-blue-700 font-extrabold block mb-1 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              Catatan Rilis
+              {isEn ? 'Release Notes' : 'Catatan Rilis'}
             </span>
             <p className="text-neutral-800 leading-relaxed font-medium">
               {releaseNotes}
@@ -127,7 +142,7 @@ export default function UpdateModal({
           {/* Daftar Fitur Baru & Penyempurnaan */}
           <div>
             <span className="text-[10px] uppercase font-mono tracking-wider text-neutral-700 font-extrabold block mb-2">
-              Fitur Baru & Penyempurnaan:
+              {isEn ? 'New Features & Enhancements:' : 'Fitur Baru & Penyempurnaan:'}
             </span>
             <div className="space-y-2">
               {features.map((feat, idx) => (
@@ -148,7 +163,9 @@ export default function UpdateModal({
               <div className="flex items-center justify-between text-[11px] font-mono">
                 <span className="text-blue-700 flex items-center gap-1.5 font-bold">
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600 stroke-[2.5]" />
-                  {downloadStatus === 'completed' ? 'Unduhan Selesai' : 'Mengunduh Pembaruan APK...'}
+                  {downloadStatus === 'completed' 
+                    ? (isEn ? 'Download Finished' : 'Unduhan Selesai') 
+                    : (isEn ? 'Downloading APK Update...' : 'Mengunduh Pembaruan APK...')}
                 </span>
                 <span className="text-white font-mono font-black bg-blue-600 px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
                   {downloadProgress}%
@@ -165,8 +182,8 @@ export default function UpdateModal({
 
               <p className="text-[10px] text-neutral-600 font-mono">
                 {downloadStatus === 'completed' 
-                  ? 'Membuka installer paket Android... Silakan pasang pembaruan.' 
-                  : 'Mohon tunggu sejenak, berkas APK sedang disiapkan di latar belakang.'}
+                  ? (isEn ? 'Launching Android package installer... Please apply update.' : 'Membuka installer paket Android... Silakan pasang pembaruan.') 
+                  : (isEn ? 'Please wait, APK file is being prepared in background.' : 'Mohon tunggu sejenak, berkas APK sedang disiapkan di latar belakang.')}
               </p>
             </div>
           )}
@@ -183,7 +200,7 @@ export default function UpdateModal({
             disabled={isDownloading}
             className="px-4 py-2 rounded-xl border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold text-xs shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all disabled:opacity-40 cursor-pointer"
           >
-            Batal
+            {isEn ? 'Cancel' : 'Batal'}
           </button>
 
           {/* Tombol Update atau Buka Installer Jika Unduhan Selesai */}
@@ -195,7 +212,7 @@ export default function UpdateModal({
               className="px-5 py-2 rounded-xl border-2 border-black bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all flex items-center gap-1.5 cursor-pointer"
             >
               <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>Buka Berkas APK</span>
+              <span>{isEn ? 'Open APK File' : 'Buka Berkas APK'}</span>
             </a>
           ) : (
             <button
@@ -207,12 +224,12 @@ export default function UpdateModal({
               {isDownloading ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin stroke-[2.5]" />
-                  <span>Memproses...</span>
+                  <span>{isEn ? 'Processing...' : 'Memproses...'}</span>
                 </>
               ) : (
                 <>
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>Update Sekarang</span>
+                  <span>{isEn ? 'Update Now' : 'Update Sekarang'}</span>
                 </>
               )}
             </button>
