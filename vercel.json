@@ -45,6 +45,10 @@
   ],
   "rewrites": [
     {
+      "source": "/api/app/version",
+      "destination": "/api/version"
+    },
+    {
       "source": "/api/anime/search",
       "destination": "/api/media?type=anime"
     },

@@ -37,14 +37,14 @@ export default function UpdateModal({
   if (!isOpen) return null;
 
   const isEn = lang === 'en';
-  const newVersion = latestInfo?.latestVersion || '1.5.1';
+  const newVersion = latestInfo?.latestVersion || '1.5.2';
   const effectiveCount = missedCount || pendingCount || 0;
   const rawList = (missedUpdates && missedUpdates.length > 0) 
     ? missedUpdates 
     : (pendingUpdates && pendingUpdates.length > 0 ? pendingUpdates : []);
   const releaseNotes = latestInfo?.releaseNotes || (isEn 
-    ? 'Release Update v1.5.1: In-App OTA Update Engine, Accumulated Changelog, and KuroBot 4-Quadrant Docking.'
-    : 'Rilis Pembaruan v1.5.1: Sistem In-App OTA Update Internal (Tanpa Keluar APK), Akumulasi Changelog, dan Docking KuroBot 4-Kuadran.');
+    ? 'Release Update v1.5.2: In-App OTA Sync Engine, Anti-Looping State Persistence, and Dynamic Versioning.'
+    : 'Rilis Pembaruan v1.5.2: Penyempurnaan Sinkronisasi State OTA, Pencegahan Loop Pop-Up, Notifikasi Non-Intrusif, dan Endpoint Dinamis /api/app/version.');
   
   const defaultFeaturesId = [
     'Sistem In-App OTA Update: Pembaruan internal langsung di dalam aplikasi Android tanpa download file APK lewat browser.',

@@ -43,7 +43,23 @@ export function useAppUpdate() {
   const [downloadStatus, setDownloadStatus] = useState('idle'); // 'idle' | 'downloading' | 'completed' | 'error'
   const [networkSpeedLabel, setNetworkSpeedLabel] = useState('');
 
+  // State toast notification real-time non-intrusif
+  const [toastNotification, setToastNotification] = useState({ show: false, message: '', type: 'info' });
+  const toastTimeoutRef = useRef(null);
   const downloadIntervalRef = useRef(null);
+
+  const showToast = useCallback((message, type = 'info', duration = 3500) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastNotification({ show: true, message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastNotification(prev => ({ ...prev, show: false }));
+    }, duration);
+  }, []);
+
+  const hideToast = useCallback(() => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastNotification(prev => ({ ...prev, show: false }));
+  }, []);
 
   // Deteksi lingkungan Native Android (Capacitor atau dev override)
   useEffect(() => {
@@ -64,7 +80,6 @@ export function useAppUpdate() {
   // Fetch pengecekan versi server terbaru dan akumulasi changelog
   // HANYA aktif pada aplikasi Native Android; versi Web selalu mutakhir otomatis dari cloud
   const checkForUpdates = useCallback(async (isManual = false) => {
-    // Jika bukan native app dan bukan pengecekan manual yang diminta sengaja, lewati
     const isNative = typeof window !== 'undefined' && (
       new URLSearchParams(window.location.search).get('app_mode') === 'android' ||
       window.localStorage?.getItem('kuro_simulate_native') === 'true' ||
@@ -84,8 +99,11 @@ export function useAppUpdate() {
       let data = null;
 
       const fetchSources = [
-        `https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/frontend/public/version.json${cacheBuster}`,
+        `https://alltoolskuro.vercel.app/api/app/version${cacheBuster}`,
         `https://alltoolskuro.vercel.app/api/version${cacheBuster}`,
+        `https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/frontend/public/version.json${cacheBuster}`,
+        `/api/app/version${cacheBuster}`,
+        `/api/version${cacheBuster}`,
         `https://alltoolskuro.vercel.app/version.json${cacheBuster}`,
         `/version.json${cacheBuster}`
       ];
@@ -121,20 +139,32 @@ export function useAppUpdate() {
       if (!data) {
         // Fallback data default dengan riwayat changelog jika server offline
         data = {
-          latestVersion: '1.5.1',
-          versionCode: 6,
-          releaseNotes: 'Rilis Pembaruan v1.5.1: Sistem In-App OTA Update Internal (Tanpa Keluar APK), Akumulasi Changelog, dan Docking KuroBot 4-Kuadran.',
+          latestVersion: '1.5.2',
+          versionCode: 7,
+          releaseNotes: 'Rilis v1.5.2: Penyempurnaan Sinkronisasi State In-App OTA Update, Pencegahan Loop Pop-Up, Notifikasi Toast Non-Intrusif, dan Endpoint Dinamis /api/app/version.',
           features: [
             'Sistem In-App OTA Update: Pembaruan internal langsung di dalam aplikasi Android tanpa download file APK lewat browser.',
-            'Akumulasi Changelog & Badge Angka: Badge menampilkan jumlah pembaruan yang tertinggal dan riwayat perubahannya.',
-            'Widget KuroBot 4-Kuadran: Widget AI bebas digeser ke Kiri-Atas, Kanan-Atas, Kiri-Bawah, atau Kanan-Bawah dengan penyimpanan posisi persisten.',
-            'Sinopsis Rekomendasi Bilingual: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih ID, dan English jika memilih EN.',
-            'Pembersihan Antarmuka & Optimasi: Menghapus modul CapCut yang tidak berfungsi agar navigasi lebih gesit dan bebas error.'
+            'Pencegahan Loop Pop-Up: Changelog hanya terbuka jika ada versi baru yang belum terpasang.',
+            'State Persisten Multi-Layer: Nomor versi terpasang terkunci aman di LocalStorage dan Cookie.',
+            'Notifikasi Toast Non-Intrusif: Saat versi sudah mutakhir, sistem menampilkan keterangan tanpa membuka pop-up.',
+            'Widget KuroBot 4-Kuadran: AI widget bebas digeser ke 4 sudut layar.'
           ],
           apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
           fileSize: '12.8 MB',
           publishedAt: '2026-11-08',
           changelog: [
+            {
+              version: '1.5.2',
+              versionCode: 7,
+              date: '2026-11-08',
+              title: 'v1.5.2 - Sinkronisasi State OTA & Pencegahan Loop Pembaruan',
+              features: [
+                'Penyimpanan state versi persisten multi-layer (LocalStorage & fallback memory/cookie).',
+                'Pencegahan loop pop-up: Changelog hanya terbuka jika terdeteksi versi baru yang belum terpasang.',
+                'Notifikasi toast real-time "Tidak ada update tersedia" saat aplikasi sudah mutakhir tanpa memicu pop-up changelog.',
+                'Dukungan endpoint versi dinamis /api/app/version dan sinkronisasi otomatis saat aplikasi dibuka kembali (resume).'
+              ]
+            },
             {
               version: '1.5.1',
               versionCode: 6,
@@ -143,7 +173,7 @@ export function useAppUpdate() {
               features: [
                 'Sistem In-App OTA Update langsung di dalam aplikasi Android tanpa keluar APK.',
                 'Akumulasi notifikasi badge angka dinamis sesuai jumlah pembaruan yang tertinggal.',
-                'KuroBot 4-Kuadran: Widget AI bebas dipindahkan ke 4 sudut layar dengan penyimpanan posisi persisten di LocalStorage.'
+                'KuroBot 4-Kuadran: Widget AI bebas dipindahkan ke 4 sudut layar.'
               ]
             },
             {
@@ -153,8 +183,7 @@ export function useAppUpdate() {
               title: 'v1.5.0 - Sinopsis Anime & Manhwa Bilingual dan Pembersihan Antarmuka',
               features: [
                 'Sinopsis bilingual otomatis (ID / EN) pada modal detail Anime & Manhwa.',
-                'Pembersihan modul CapCut yang tidak berfungsi dari navigasi dan sistem.',
-                'Konsolidasi serverless endpoint Vercel agar selalu stabil dan cepat.'
+                'Pembersihan modul CapCut yang tidak berfungsi dari navigasi dan sistem.'
               ]
             },
             {
@@ -164,8 +193,7 @@ export function useAppUpdate() {
               title: 'v1.4.0 - Rekomendasi Anime & Manhwa Real-Time',
               features: [
                 'Rekomendasi Anime cerdas modal kombinasi multi-genre dan LiveChart.me API.',
-                'Rekomendasi Manhwa kurasi komik webtoon Korea populer dengan Kitsu API.',
-                'Modal detail in-app lengkap dengan cover HD, rating, dan status rilis.'
+                'Rekomendasi Manhwa kurasi komik webtoon Korea populer dengan Kitsu API.'
               ]
             },
             {
@@ -175,7 +203,7 @@ export function useAppUpdate() {
               title: 'v1.3.0 - AI KuroBot Asisten & Safelink Bypasser',
               features: [
                 'KuroBot asisten AI interaktif dengan panduan tour web mandiri.',
-                'Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.'
+                'Safelink Bypasser: Lewati link iklan bertingkat ke direct link.'
               ]
             },
             {
@@ -184,8 +212,7 @@ export function useAppUpdate() {
               date: '2026-11-07',
               title: 'v1.2.0 - Media Downloader 16 Platform',
               features: [
-                'Pengunduh video dan audio tanpa watermark dari 16 platform medsos.',
-                'Preset 1080p Status WA Anti-Burik agar video tidak pecah saat di-upload.'
+                'Pengunduh video dan audio tanpa watermark dari 16 platform medsos.'
               ]
             },
             {
@@ -194,7 +221,7 @@ export function useAppUpdate() {
               date: '2026-11-06',
               title: 'v1.0.0 - Rilis Perdana Kuro Studio',
               features: [
-                'Peluncuran perdana suite utilitas digital AllToolsKuro dengan arsitektur hybrid modern.'
+                'Peluncuran perdana suite utilitas digital AllToolsKuro.'
               ]
             }
           ]
@@ -203,8 +230,8 @@ export function useAppUpdate() {
 
       setLatestInfo(data);
 
-      const serverVersion = data.latestVersion || '1.5.1';
-      const serverCode = data.versionCode || 6;
+      const serverVersion = data.latestVersion || '1.5.2';
+      const serverCode = data.versionCode || 7;
       const installedVer = getInstalledAppVersion();
       const installedCode = getInstalledVersionCode();
 
@@ -238,8 +265,8 @@ export function useAppUpdate() {
     }
   }, []);
 
+  // Pengecekan otomatis saat komponen mount
   useEffect(() => {
-    // Jalankan pengecekan otomatis hanya jika berjalan pada native app Android
     const isNative = typeof window !== 'undefined' && (
       new URLSearchParams(window.location.search).get('app_mode') === 'android' ||
       window.localStorage?.getItem('kuro_simulate_native') === 'true' ||
@@ -251,14 +278,30 @@ export function useAppUpdate() {
     }
   }, [checkForUpdates]);
 
-  // Bersihkan interval jika unmount
+  // Deteksi Real-Time saat aplikasi dibuka kembali dari background (Auto-Resume)
   useEffect(() => {
-    return () => {
-      if (downloadIntervalRef.current) {
-        clearInterval(downloadIntervalRef.current);
+    const handleResume = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        checkForUpdates();
       }
     };
-  }, []);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleResume);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleResume);
+    }
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleResume);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleResume);
+      }
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      if (downloadIntervalRef.current) clearInterval(downloadIntervalRef.current);
+    };
+  }, [checkForUpdates]);
 
   // Eksekusi pembaruan In-App OTA Update murni di dalam aplikasi (Tanpa Keluar APK & Tanpa Browser)
   const startDownloadUpdate = useCallback(() => {
@@ -273,10 +316,9 @@ export function useAppUpdate() {
       clearInterval(downloadIntervalRef.current);
     }
 
-    const serverVer = latestInfo?.latestVersion || '1.5.1';
-    const serverCode = latestInfo?.versionCode || 6;
+    const serverVer = latestInfo?.latestVersion || '1.5.2';
+    const serverCode = latestInfo?.versionCode || 7;
 
-    // Hitung kecepatan interval progress bar adaptif (0% s.d. 100%)
     let tickDelay = 70;
     let stepMin = 3;
     let stepMax = 6;
@@ -312,29 +354,29 @@ export function useAppUpdate() {
           clearInterval(downloadIntervalRef.current);
           downloadIntervalRef.current = null;
 
-          // Set 100% dan terapkan patch secara live di memori aplikasi
           setDownloadProgress(100);
           setDownloadPhase('Pembaruan Berhasil Diterapkan!');
           setDownloadStatus('completed');
 
-          // Simpan versi terpasang dan kode versi baru secara permanen di LocalStorage
+          // Kunci nomor versi terbaru di Multi-Layer Storage
           setInstalledAppVersion(serverVer);
           setInstalledVersionCode(serverCode);
           setCurrentInstalledVersion(serverVer);
           setCurrentInstalledCode(serverCode);
 
-          // Reset badge notifikasi update menjadi 0
+          // Bersihkan badge notifikasi
           setMissedCount(0);
           setMissedUpdates([]);
           setHasUpdate(false);
 
-          // Menutup pop-up otomatis setelah jeda singkat penerapan (650ms)
+          // Tutup pop-up otomatis setelah jeda penerapan 650ms
           setTimeout(() => {
             setShowModal(false);
             setIsDownloading(false);
             setDownloadProgress(0);
             setDownloadPhase('');
             setDownloadStatus('idle');
+            showToast(`Pembaruan v${serverVer} Berhasil Diterapkan!`, 'success');
           }, 650);
 
           return 100;
@@ -343,15 +385,14 @@ export function useAppUpdate() {
         return Math.min(next, 99);
       });
     }, tickDelay);
-  }, [isDownloading, latestInfo]);
+  }, [isDownloading, latestInfo, showToast]);
 
   const openModal = useCallback(() => {
-    // Jika tidak sedang mengunduh, sinkronkan data versi lokal
     if (downloadStatus !== 'downloading') {
       const installedVer = getInstalledAppVersion();
       const installedCode = getInstalledVersionCode();
-      const serverVersion = latestInfo?.latestVersion || '1.5.1';
-      const serverCode = latestInfo?.versionCode || 6;
+      const serverVersion = latestInfo?.latestVersion || '1.5.2';
+      const serverCode = latestInfo?.versionCode || 7;
       const isNewer = serverCode > installedCode || isVersionHigher(serverVersion, installedVer);
       
       let unapplied = [];
@@ -372,6 +413,24 @@ export function useAppUpdate() {
     }
     setShowModal(true);
   }, [downloadStatus, latestInfo]);
+
+  // Logika Klik Tombol Update Utama:
+  // Jika hasUpdate === true -> Buka modal changelog
+  // Jika hasUpdate === false (installedVersion === latestVersion) -> DILARANG BUKA MODAL, langsung tampilkan toast
+  const handleUpdateClick = useCallback(() => {
+    const installedVer = getInstalledAppVersion();
+    const installedCode = getInstalledVersionCode();
+    const serverVersion = latestInfo?.latestVersion || '1.5.2';
+    const serverCode = latestInfo?.versionCode || 7;
+    const isNewer = serverCode > installedCode || isVersionHigher(serverVersion, installedVer);
+
+    if (isNewer) {
+      openModal();
+    } else {
+      setShowModal(false);
+      showToast(`Tidak ada update tersedia (Versi Anda sudah v${installedVer})`, 'info');
+    }
+  }, [latestInfo, openModal, showToast]);
 
   const closeModal = useCallback(() => {
     setShowModal(false);
@@ -404,8 +463,12 @@ export function useAppUpdate() {
     downloadPhase,
     downloadStatus,
     networkSpeedLabel,
+    toastNotification,
+    showToast,
+    hideToast,
     openModal,
     closeModal,
+    handleUpdateClick,
     startDownloadUpdate,
     checkForUpdates
   };

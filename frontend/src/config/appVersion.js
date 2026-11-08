@@ -1,53 +1,117 @@
-// frontend/src/config/appVersion.js - Konfigurasi versi lokal aplikasi AllToolsKuro
+// frontend/src/config/appVersion.js - Konfigurasi versi lokal & multi-layer persistence AllToolsKuro
 
 export const LOCAL_APP_VERSION = '1.0.0';
 export const LOCAL_VERSION_CODE = 1;
-export const LATEST_TARGET_VERSION = '1.5.1';
-export const LATEST_TARGET_CODE = 6;
+export const LATEST_TARGET_VERSION = '1.5.2';
+export const LATEST_TARGET_CODE = 7;
 export const APP_PACKAGE_ID = 'com.kuro.alltools';
 export const APP_DISPLAY_NAME = 'AllToolsKuro';
 
 const INSTALLED_VERSION_KEY = 'kuro_installed_app_version';
 const INSTALLED_CODE_KEY = 'kuro_installed_version_code';
 
-export function getInstalledAppVersion() {
-  if (typeof window === 'undefined') return LOCAL_APP_VERSION;
+// Memory fallback untuk menjamin ketersediaan state jika webview mengisolasi storage
+let memoryVersion = null;
+let memoryCode = null;
+
+function getCookie(name) {
+  if (typeof document === 'undefined') return null;
   try {
-    return localStorage.getItem(INSTALLED_VERSION_KEY) || LOCAL_APP_VERSION;
+    const match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
+    return match ? decodeURIComponent(match[3]) : null;
   } catch {
-    return LOCAL_APP_VERSION;
+    return null;
   }
 }
 
-export function setInstalledAppVersion(version) {
-  if (typeof window === 'undefined' || !version) return;
+function setCookie(name, value, days = 365) {
+  if (typeof document === 'undefined') return;
   try {
-    localStorage.setItem(INSTALLED_VERSION_KEY, String(version).trim());
-  } catch (err) {
-    console.warn('[AppVersion] Gagal menyimpan versi aplikasi:', err);
+    const maxAge = days * 24 * 60 * 60;
+    document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAge};SameSite=Lax`;
+  } catch (_) {}
+}
+
+// Ambil versi terpasang dari LocalStorage -> Cookie -> Memory -> Fallback Default
+export function getInstalledAppVersion() {
+  if (memoryVersion) return memoryVersion;
+  if (typeof window === 'undefined') return LOCAL_APP_VERSION;
+
+  try {
+    const local = localStorage.getItem(INSTALLED_VERSION_KEY);
+    if (local && local.trim()) {
+      memoryVersion = local.trim();
+      return memoryVersion;
+    }
+  } catch (_) {}
+
+  const cookieVal = getCookie(INSTALLED_VERSION_KEY);
+  if (cookieVal && cookieVal.trim()) {
+    memoryVersion = cookieVal.trim();
+    return memoryVersion;
+  }
+
+  return LOCAL_APP_VERSION;
+}
+
+// Simpan versi terpasang ke LocalStorage, Cookie, dan Memory secara persisten
+export function setInstalledAppVersion(version) {
+  if (!version) return;
+  const clean = String(version).trim();
+  memoryVersion = clean;
+
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(INSTALLED_VERSION_KEY, clean);
+    } catch (err) {
+      console.warn('[AppVersion] Gagal simpan ke localStorage:', err);
+    }
+    setCookie(INSTALLED_VERSION_KEY, clean);
   }
 }
 
+// Ambil kode versi terpasang
 export function getInstalledVersionCode() {
+  if (typeof memoryCode === 'number') return memoryCode;
   if (typeof window === 'undefined') return LOCAL_VERSION_CODE;
+
   try {
     const saved = localStorage.getItem(INSTALLED_CODE_KEY);
     if (saved) {
       const parsed = parseInt(saved, 10);
-      if (!isNaN(parsed)) return parsed;
+      if (!isNaN(parsed)) {
+        memoryCode = parsed;
+        return memoryCode;
+      }
     }
-    return LOCAL_VERSION_CODE;
-  } catch {
-    return LOCAL_VERSION_CODE;
+  } catch (_) {}
+
+  const cookieVal = getCookie(INSTALLED_CODE_KEY);
+  if (cookieVal) {
+    const parsed = parseInt(cookieVal, 10);
+    if (!isNaN(parsed)) {
+      memoryCode = parsed;
+      return memoryCode;
+    }
   }
+
+  return LOCAL_VERSION_CODE;
 }
 
+// Simpan kode versi terpasang
 export function setInstalledVersionCode(code) {
-  if (typeof window === 'undefined' || code === undefined || code === null) return;
-  try {
-    localStorage.setItem(INSTALLED_CODE_KEY, String(code));
-  } catch (err) {
-    console.warn('[AppVersion] Gagal menyimpan kode versi aplikasi:', err);
+  if (code === undefined || code === null) return;
+  const num = parseInt(code, 10);
+  if (isNaN(num)) return;
+  memoryCode = num;
+
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(INSTALLED_CODE_KEY, String(num));
+    } catch (err) {
+      console.warn('[AppVersion] Gagal simpan kode ke localStorage:', err);
+    }
+    setCookie(INSTALLED_CODE_KEY, String(num));
   }
 }
 

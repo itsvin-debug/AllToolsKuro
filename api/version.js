@@ -11,20 +11,32 @@ export default function handler(req, res) {
   }
 
   const versionPayload = {
-    latestVersion: '1.5.1',
-    versionCode: 6,
-    releaseNotes: 'Rilis Pembaruan v1.5.1: Sistem In-App OTA Update Internal (Tanpa Keluar APK), Akumulasi Changelog, dan Docking KuroBot 4-Kuadran.',
+    latestVersion: '1.5.2',
+    versionCode: 7,
+    releaseNotes: 'Rilis v1.5.2: Penyempurnaan Sinkronisasi State In-App OTA Update, Pencegahan Loop Pop-Up, Notifikasi Toast Non-Intrusif, dan Endpoint Dinamis /api/app/version.',
     features: [
       'Sistem In-App OTA Update: Pembaruan internal langsung di dalam aplikasi Android tanpa download file APK lewat browser.',
-      'Akumulasi Changelog & Badge Angka: Badge menampilkan jumlah pembaruan yang tertinggal dan riwayat perubahannya.',
-      'Widget KuroBot 4-Kuadran: Widget AI bebas digeser ke Kiri-Atas, Kanan-Atas, Kiri-Bawah, atau Kanan-Bawah dengan penyimpanan posisi persisten.',
-      'Sinopsis Rekomendasi Bilingual: Sinopsis anime & manhwa otomatis berbahasa Indonesia jika memilih ID, dan English jika memilih EN.',
-      'Pembersihan Antarmuka & Optimasi: Menghapus modul CapCut yang tidak berfungsi agar navigasi lebih gesit dan bebas error.'
+      'Pencegahan Loop Pop-Up: Changelog hanya terbuka jika ada versi baru yang belum terpasang.',
+      'State Persisten Multi-Layer: Nomor versi terpasang terkunci aman di LocalStorage dan Cookie.',
+      'Notifikasi Toast Non-Intrusif: Saat versi sudah mutakhir, sistem menampilkan keterangan tanpa membuka pop-up.',
+      'Widget KuroBot 4-Kuadran: AI widget bebas digeser ke 4 sudut layar.'
     ],
     apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
     fileSize: '12.8 MB',
     publishedAt: '2026-11-08',
     changelog: [
+      {
+        version: '1.5.2',
+        versionCode: 7,
+        date: '2026-11-08',
+        title: 'v1.5.2 - Sinkronisasi State OTA & Pencegahan Loop Pembaruan',
+        features: [
+          'Penyimpanan state versi persisten multi-layer (LocalStorage & fallback memory/cookie).',
+          'Pencegahan loop pop-up: Changelog hanya terbuka jika terdeteksi versi baru yang belum terpasang.',
+          'Notifikasi toast real-time "Tidak ada update tersedia" saat aplikasi sudah mutakhir tanpa memicu pop-up changelog.',
+          'Dukungan endpoint versi dinamis /api/app/version dan sinkronisasi otomatis saat aplikasi dibuka kembali (resume).'
+        ]
+      },
       {
         version: '1.5.1',
         versionCode: 6,

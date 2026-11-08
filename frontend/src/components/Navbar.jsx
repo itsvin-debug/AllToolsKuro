@@ -20,7 +20,8 @@ import {
   Settings,
   RefreshCw,
   Tv,
-  BookOpen
+  BookOpen,
+  X
 } from 'lucide-react';
 import { translations } from '../utils/translations';
 import { useAppUpdate } from '../hooks/useAppUpdate';
@@ -169,7 +170,7 @@ export default function Navbar({
                 /* ─── VERSI APLIKASI ANDROID (APK): TOMBOL IN-APP OTA UPDATE DENGAN BADGE ANGKA ─── */
                 <button
                   type="button"
-                  onClick={appUpdate.openModal}
+                  onClick={appUpdate.handleUpdateClick}
                   className={`px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer relative select-none ${
                     appUpdate.hasUpdate 
                       ? 'bg-rose-500 text-white hover:bg-rose-600 animate-pulse ring-2 ring-rose-400' 
@@ -186,8 +187,8 @@ export default function Navbar({
                       : 'Update'}
                   </span>
 
-                  {/* Badge Notifikasi Angka Dinamis (Menghitung Akumulasi Update Tertunda) */}
-                  {appUpdate.pendingCount > 0 && (
+                  {/* Badge Notifikasi Angka Dinamis (HANYA jika ada pembaruan tertunda) */}
+                  {appUpdate.hasUpdate && appUpdate.pendingCount > 0 && (
                     <span className="absolute -top-2 -right-2 flex items-center justify-center">
                       <span className="animate-ping absolute inline-flex h-4 w-4 rounded-full bg-yellow-400 opacity-80"></span>
                       <span className="relative inline-flex min-w-4.5 h-4.5 px-1 rounded-full bg-yellow-400 text-black border-2 border-black font-black text-[9px] items-center justify-center shadow-[1px_1px_0px_#000000]">
@@ -317,6 +318,36 @@ export default function Navbar({
           isChecking={appUpdate.isChecking}
           lang={lang}
         />
+      )}
+
+      {/* ─── TOAST NOTIFICATION NEOBRUTALISM (REAL-TIME STATE & NO UPDATE MESSAGE) ─── */}
+      {appUpdate.toastNotification?.show && (
+        <div className="fixed top-16 sm:top-20 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-top-4 duration-200 max-w-sm sm:max-w-md w-[92%] px-2">
+          <div className={`p-3 rounded-xl border-2 border-black flex items-center justify-between gap-2.5 shadow-[4px_4px_0px_#000000] text-black ${
+            appUpdate.toastNotification.type === 'success' 
+              ? 'bg-emerald-400' 
+              : 'bg-amber-300'
+          }`}>
+            <div className="flex items-center gap-2 truncate">
+              {appUpdate.toastNotification.type === 'success' ? (
+                <Check className="w-4 h-4 stroke-[3] shrink-0 text-black" />
+              ) : (
+                <RefreshCw className="w-4 h-4 stroke-[2.5] shrink-0 text-black" />
+              )}
+              <span className="text-xs font-black truncate font-sans">
+                {appUpdate.toastNotification.message}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={appUpdate.hideToast}
+              className="p-1 rounded border border-black bg-white hover:bg-neutral-100 shrink-0 shadow-[1px_1px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 cursor-pointer"
+              aria-label="Tutup notifikasi"
+            >
+              <X className="w-3.5 h-3.5 stroke-[2.5]" />
+            </button>
+          </div>
+        </div>
       )}
     </header>
   );
