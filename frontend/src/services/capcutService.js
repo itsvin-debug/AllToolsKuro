@@ -158,17 +158,34 @@ export const CURATED_TEMPLATES = [
 ];
 
 export async function searchCapCutRealtime(query = '') {
-  const cleanQ = (query || '').trim().toLowerCase();
+  const cleanQ = (query || '').trim();
+  const lowerQ = cleanQ.toLowerCase();
 
-  // 1. Eksekusi filter instan dari basis data lokal (0ms response)
+  // 1. Jika query berupa link/URL CapCut, utamakan pemanggilan backend RapidAPI
+  const isUrl = /https?:\/\/(www\.)?(capcut\.com|mobile\.capcutshare\.com)/i.test(cleanQ);
+  if (isUrl) {
+    try {
+      const res = await fetch(`/api/capcut/search?query=${encodeURIComponent(cleanQ)}`);
+      if (res.ok) {
+        const serverData = await res.json();
+        if (serverData && Array.isArray(serverData.data) && serverData.data.length > 0) {
+          return serverData.data;
+        }
+      }
+    } catch (err) {
+      console.warn('[CapCutService] URL resolve fallback:', err.message);
+    }
+  }
+
+  // 2. Eksekusi filter instan dari basis data lokal (0ms response)
   let localResults = [...CURATED_TEMPLATES];
-  if (cleanQ) {
+  if (lowerQ) {
     localResults = CURATED_TEMPLATES.filter(item => {
       return (
-        item.title.toLowerCase().includes(cleanQ) ||
-        item.creator.toLowerCase().includes(cleanQ) ||
-        item.lyrics.toLowerCase().includes(cleanQ) ||
-        item.tags.some(t => t.toLowerCase().includes(cleanQ))
+        item.title.toLowerCase().includes(lowerQ) ||
+        item.creator.toLowerCase().includes(lowerQ) ||
+        item.lyrics.toLowerCase().includes(lowerQ) ||
+        item.tags.some(t => t.toLowerCase().includes(lowerQ))
       );
     });
 
@@ -177,17 +194,17 @@ export async function searchCapCutRealtime(query = '') {
       localResults = [
         {
           id: `cc-live-${Date.now()}`,
-          title: `JJ ${query.slice(0, 32)} Mengkane Full Beat`,
+          title: `JJ ${cleanQ.slice(0, 32)} Mengkane Full Beat`,
           creator: 'CapCut Verified Creator',
           creatorHandle: '@capcut_preset',
-          lyrics: `Lirik & sinkron audio: "${query}"`,
-          tags: [cleanQ, 'capcut', 'jedag jedug', 'viral'],
+          lyrics: `Lirik & sinkron audio: "${cleanQ}"`,
+          tags: [lowerQ, 'capcut', 'jedag jedug', 'viral'],
           uses: '870K Digunakan',
           duration: '0:16',
           thumbnail: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
           videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-          capcutUrl: `https://www.capcut.com/id-id/templates?q=${encodeURIComponent(query)}`,
-          deepLink: `capcut://template/search?keyword=${encodeURIComponent(query)}`,
+          capcutUrl: `https://www.capcut.com/id-id/templates?q=${encodeURIComponent(cleanQ)}`,
+          deepLink: `capcut://template/search?keyword=${encodeURIComponent(cleanQ)}`,
           badge: 'LIVE MATCH'
         },
         ...CURATED_TEMPLATES.slice(0, 3)
@@ -195,9 +212,9 @@ export async function searchCapCutRealtime(query = '') {
     }
   }
 
-  // 2. Cobakan sinkronisasi ke API serverless jika online
+  // 3. Sinkronisasi ke backend API jika online
   try {
-    const url = cleanQ ? `/api/capcut/search?q=${encodeURIComponent(cleanQ)}` : '/api/capcut/search';
+    const url = lowerQ ? `/api/capcut/search?query=${encodeURIComponent(cleanQ)}` : '/api/capcut/search';
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2000);
     const res = await fetch(url, { signal: controller.signal });
@@ -215,3 +232,4 @@ export async function searchCapCutRealtime(query = '') {
 
   return localResults;
 }
+

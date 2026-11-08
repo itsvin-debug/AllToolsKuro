@@ -35,6 +35,7 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
   const [searchQuery, setSearchQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
   const [templates, setTemplates] = useState(() => CURATED_TEMPLATES);
   const [copiedId, setCopiedId] = useState(null);
   const inputRef = useRef(null);
@@ -44,12 +45,15 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
     let isCancelled = false;
     const timer = setTimeout(async () => {
       setLoading(true);
+      setErrorMessage(null);
       try {
         const results = await searchCapCutRealtime(searchQuery);
         if (!isCancelled) {
           setTemplates(results);
           setActiveQuery(searchQuery.trim());
         }
+      } catch (err) {
+        if (!isCancelled) setErrorMessage('Gagal memuat template CapCut. Silakan coba lagi.');
       } finally {
         if (!isCancelled) setLoading(false);
       }
@@ -64,10 +68,13 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
   const handleSearchSubmit = async (e) => {
     if (e) e.preventDefault();
     setLoading(true);
+    setErrorMessage(null);
     try {
       const results = await searchCapCutRealtime(searchQuery);
       setTemplates(results);
       setActiveQuery(searchQuery.trim());
+    } catch {
+      setErrorMessage('Gagal memuat template CapCut. Silakan coba lagi.');
     } finally {
       setLoading(false);
     }
@@ -214,8 +221,35 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
         </span>
       </div>
 
+      {/* Error State Banner */}
+      {errorMessage && (
+        <div className="p-4 rounded-xl border-2 border-black bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 flex items-center justify-between gap-3 shadow-[2px_2px_0px_#000000]">
+          <span className="text-xs sm:text-sm font-bold">{errorMessage}</span>
+          <button
+            type="button"
+            onClick={handleSearchSubmit}
+            className="px-3 py-1 bg-rose-600 text-white rounded-lg border border-black font-extrabold text-xs shadow-[1.5px_1.5px_0px_#000000] cursor-pointer hover:bg-rose-700 shrink-0"
+          >
+            Coba Lagi
+          </button>
+        </div>
+      )}
+
+      {/* Loading Skeleton */}
+      {loading && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[1, 2, 3].map((n) => (
+            <div key={n} className="bg-white dark:bg-[#18181b] border-2 border-black rounded-2xl p-4 shadow-[4px_4px_0px_0px_#000000] animate-pulse flex flex-col gap-3">
+              <div className="w-full aspect-[9/12] bg-zinc-200 dark:bg-zinc-800 rounded-xl border-2 border-black" />
+              <div className="h-5 bg-zinc-200 dark:bg-zinc-800 rounded w-3/4" />
+              <div className="h-4 bg-zinc-200 dark:bg-zinc-800 rounded w-1/2" />
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Template Cards Grid */}
-      {templates.length > 0 && (
+      {!loading && templates.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {templates.map((tpl) => (
             <div

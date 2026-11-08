@@ -55,6 +55,7 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
   const [selectedGenres, setSelectedGenres] = useState([]);
   const [sortOrder, setSortOrder] = useState('POPULARITY_DESC');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
   const [animeList, setAnimeList] = useState(() => CURATED_ANIME_DATA);
   const [expandedIds, setExpandedIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
@@ -65,6 +66,7 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
     let isCancelled = false;
     const timer = setTimeout(async () => {
       setLoading(true);
+      setErrorMessage(null);
       try {
         const results = await searchAnimeRealtime({
           query: searchQuery,
@@ -75,7 +77,7 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
           setAnimeList(results);
         }
       } catch (err) {
-        console.warn('Realtime anime error:', err);
+        if (!isCancelled) setErrorMessage('Gagal memuat rekomendasi anime. Silakan coba lagi.');
       } finally {
         if (!isCancelled) setLoading(false);
       }
@@ -90,6 +92,7 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
   const handleSearchSubmit = async (e) => {
     if (e) e.preventDefault();
     setLoading(true);
+    setErrorMessage(null);
     try {
       const results = await searchAnimeRealtime({
         query: searchQuery,
@@ -99,6 +102,8 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
       if (results && results.length > 0) {
         setAnimeList(results);
       }
+    } catch {
+      setErrorMessage('Gagal memuat rekomendasi anime. Silakan coba lagi.');
     } finally {
       setLoading(false);
     }
@@ -342,8 +347,37 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
         )}
       </div>
 
+      {/* Error State Banner */}
+      {errorMessage && (
+        <div className="p-4 rounded-xl border-2 border-black bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 flex items-center justify-between gap-3 shadow-[2px_2px_0px_#000000]">
+          <span className="text-xs sm:text-sm font-bold">{errorMessage}</span>
+          <button
+            type="button"
+            onClick={handleSearchSubmit}
+            className="px-3 py-1 bg-rose-600 text-white rounded-lg border border-black font-extrabold text-xs shadow-[1.5px_1.5px_0px_#000000] cursor-pointer hover:bg-rose-700 shrink-0"
+          >
+            Coba Lagi
+          </button>
+        </div>
+      )}
+
+      {/* Loading Skeleton */}
+      {loading && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {[1, 2, 3, 4, 5, 6].map((n) => (
+            <div key={n} className="bg-white dark:bg-[#18181b] border-2 border-black rounded-2xl p-4 shadow-[4px_4px_0px_0px_#000000] animate-pulse flex flex-col gap-3">
+              <div className="w-full aspect-[3/4] bg-zinc-200 dark:bg-zinc-800 rounded-xl border-2 border-black" />
+              <div className="h-5 bg-zinc-200 dark:bg-zinc-800 rounded w-3/4" />
+              <div className="h-4 bg-zinc-200 dark:bg-zinc-800 rounded w-1/2" />
+              <div className="h-16 bg-zinc-200 dark:bg-zinc-800 rounded mt-2" />
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Anime Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+      {!loading && animeList.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {animeList.map((anime) => {
           const isExpanded = expandedIds.has(anime.id);
           const titlePrimary = anime.title?.english || anime.title?.romaji || 'Anime';
@@ -467,6 +501,32 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
           );
         })}
       </div>
+      )}
+
+      {/* Empty State */}
+      {!loading && animeList.length === 0 && (
+        <div className="bg-white dark:bg-[#18181b] border-2 border-black rounded-2xl p-10 text-center shadow-[4px_4px_0px_0px_#000000] flex flex-col items-center gap-3">
+          <div className="w-14 h-14 rounded-full bg-cyan-100 border-2 border-black flex items-center justify-center text-cyan-600">
+            <Tv className="w-7 h-7" />
+          </div>
+          <h3 className="text-lg font-black text-black dark:text-white uppercase">
+            {at.noResultsTitle}
+          </h3>
+          <p className="text-sm text-zinc-600 dark:text-zinc-300 max-w-md">
+            {at.noResultsDesc}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setSelectedGenres([]);
+            }}
+            className="mt-2 px-5 py-2 rounded-xl bg-black text-white dark:bg-white dark:text-black border-2 border-black font-extrabold text-xs shadow-[2px_2px_0px_#000000] cursor-pointer"
+          >
+            Reset Semua Filter
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,84 +1,112 @@
 import axios from 'axios';
 
-// Dataset cadangan anime jika koneksi AniList GraphQL offline atau timeout
-const FALLBACK_ANIME_DATA = [
+/**
+ * api/anime/search.js - Vercel Serverless & Express Endpoint
+ * Integrasi resmi ke Jikan API v4 Publik:
+ * https://api.jikan.moe/v4/anime?genres={genreId}&order_by=score&sort=desc
+ */
+
+// Pemetaan Genre Name ke Jikan v4 ID resmi
+const JIKAN_ANIME_GENRE_MAP = {
+  'action': 1,
+  'adventure': 2,
+  'comedy': 4,
+  'drama': 8,
+  'fantasy': 10,
+  'horror': 14,
+  'mystery': 7,
+  'romance': 22,
+  'sci-fi': 24,
+  'slice of life': 36,
+  'sports': 30,
+  'supernatural': 37,
+  'psychological': 40
+};
+
+// Dataset kurasi anime cadangan jika Jikan API publik terkena rate-limiting (429)
+const CURATED_ANIME_BACKUP = [
   {
-    id: 154587,
+    id: 52991,
     title: {
       english: "Frieren: Beyond Journey's End",
       romaji: "Sousou no Frieren",
       native: "葬送のフリーレン"
     },
-    score: 9.1,
-    description: "Setelah perjalanan panjang mengalahkan Raja Iblis, penyihir elf Frieren harus menghadapi realitas waktu dan kefanaan rekan-rekannya, memulai pengembaraan baru untuk memahami arti kehidupan manusia.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx154587-qQTzQnEJJ3oB.jpg",
+    score: 9.3,
+    description: "Setelah perjalanan sepuluh tahun mengalahkan Raja Iblis, penyihir elf Frieren harus menghadapi realitas waktu dan kefanaan rekan-rekannya, memulai pengembaraan baru untuk memahami arti waktu dan hubungan manusia.",
+    coverImage: "https://cdn.myanimelist.net/images/anime/1015/138006l.jpg",
     genres: ["Adventure", "Drama", "Fantasy"],
     episodes: 28,
+    format: "TV",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/anime/154587"
+    siteUrl: "https://myanimelist.net/anime/52991"
   },
   {
-    id: 142838,
+    id: 51009,
     title: {
       english: "Jujutsu Kaisen Season 2",
       romaji: "Jujutsu Kaisen 2nd Season",
       native: "呪術廻戦 懐玉・玉折 / 渋谷事変"
     },
     score: 8.8,
-    description: "Kilas balik masa lalu Gojo Satoru dan Geto Suguru di SMA Jujutsu Tokyo, dilanjutkan dengan insiden Shibuya yang mengubah peta pertempuran penyihir jujutsu selamanya.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx142838-kJbeiz4291yX.jpg",
+    description: "Kilas balik masa remaja Gojo Satoru dan Geto Suguru di SMA Jujutsu Tokyo, dilanjutkan dengan insiden Shibuya yang mengubah tatanan dunia penyihir selamanya.",
+    coverImage: "https://cdn.myanimelist.net/images/anime/1792/138022l.jpg",
     genres: ["Action", "Fantasy", "Supernatural"],
     episodes: 23,
+    format: "TV",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/anime/142838"
+    siteUrl: "https://myanimelist.net/anime/51009"
   },
   {
-    id: 140960,
+    id: 50265,
     title: {
       english: "SPY x FAMILY",
       romaji: "SPY x FAMILY",
       native: "SPY×FAMILY"
     },
     score: 8.5,
-    description: "Mata-mata ulung berkode Twilight harus membangun keluarga samaran demi misi perdamaian dunia, tanpa mengetahui bahwa sang istri adalah pembunuh bayaran dan anak angkatnya adalah cenayang pembaca pikiran.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx140960-YrkFGyLQ962H.jpg",
+    description: "Mata-mata ulung Twilight harus membangun keluarga samaran demi misi perdamaian dunia, tanpa mengetahui bahwa sang istri adalah pembunuh bayaran dan anak angkatnya adalah cenayang telepati.",
+    coverImage: "https://cdn.myanimelist.net/images/anime/1441/122795l.jpg",
     genres: ["Action", "Comedy", "Slice of Life", "Supernatural"],
     episodes: 25,
+    format: "TV",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/anime/140960"
+    siteUrl: "https://myanimelist.net/anime/50265"
   },
   {
-    id: 145064,
+    id: 52034,
     title: {
       english: "Oshi No Ko",
       romaji: "【OSHI NO KO】",
       native: "【推しの子】"
     },
-    score: 8.6,
+    score: 8.7,
     description: "Dokter kandungan Goro bereinkarnasi sebagai anak dari idola legendaris Ai Hoshino, memasuki industri hiburan Jepang yang gemerlap namun penuh intrik dan misteri kematian sang ibu.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx145064-iQ0XN3q3eZ78.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/anime/1813/134444l.jpg",
     genres: ["Drama", "Mystery", "Supernatural"],
     episodes: 11,
+    format: "TV",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/anime/145064"
+    siteUrl: "https://myanimelist.net/anime/52034"
   },
   {
-    id: 130003,
+    id: 47917,
     title: {
       english: "Bocchi the Rock!",
       romaji: "Bocchi the Rock!",
       native: "ぼっち・ざ・ろっく！"
     },
     score: 8.8,
-    description: "Hitori Gotoh, gadis pemalu dengan kecemasan sosial ekstrem yang jago bermain gitar di kamar, tiba-tiba diajak bergabung ke grup band Kessoku Band dan memulai perjalanan musiknya di panggung nyata.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx130003-5A54848h43b.jpg",
-    genres: ["Comedy", "Music", "Slice of Life"],
+    description: "Hitori Gotoh, gadis pemalu dengan kecemasan sosial yang jago bermain gitar di kamar, tiba-tiba diajak bergabung ke grup band Kessoku Band dan memulai perjalanan musiknya di panggung nyata.",
+    coverImage: "https://cdn.myanimelist.net/images/anime/1448/127956l.jpg",
+    genres: ["Comedy", "Slice of Life"],
     episodes: 12,
+    format: "TV",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/anime/130003"
+    siteUrl: "https://myanimelist.net/anime/47917"
   },
   {
-    id: 113415,
+    id: 40748,
     title: {
       english: "Jujutsu Kaisen",
       romaji: "Jujutsu Kaisen",
@@ -86,11 +114,12 @@ const FALLBACK_ANIME_DATA = [
     },
     score: 8.6,
     description: "Yuuji Itadori menelan jari kutukan Sukuna demi menyelamatkan temannya, menyeret dirinya masuk ke dunia pertempuran kutukan bersama para penyihir SMA Jujutsu.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx113415-bbBWj4pUbAw8.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/anime/1171/109222l.jpg",
     genres: ["Action", "Fantasy", "Supernatural"],
     episodes: 24,
+    format: "TV",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/anime/113415"
+    siteUrl: "https://myanimelist.net/anime/40748"
   }
 ];
 
@@ -115,106 +144,85 @@ export default async function handler(req, res) {
 
   const query = (req.query?.q || req.body?.q || req.query?.query || req.body?.query || '').trim();
   const rawGenres = req.query?.genres || req.body?.genres || '';
-  const sort = req.query?.sort || req.body?.sort || 'POPULARITY_DESC';
   const page = parseInt(req.query?.page || req.body?.page || '1', 10) || 1;
 
-  // Parsing array genre jika ada
-  let genreList = [];
+  // Parsing genre yang masuk (bisa nama string atau angka)
+  let genreNames = [];
   if (Array.isArray(rawGenres)) {
-    genreList = rawGenres.filter(Boolean);
+    genreNames = rawGenres.filter(Boolean);
   } else if (typeof rawGenres === 'string' && rawGenres.trim()) {
-    genreList = rawGenres.split(',').map(s => s.trim()).filter(Boolean);
+    genreNames = rawGenres.split(',').map(s => s.trim()).filter(Boolean);
   }
 
-  // GraphQL Query ke AniList
-  const gqlQuery = `
-    query ($page: Int, $perPage: Int, $search: String, $genres: [String], $sort: [MediaSort]) {
-      Page(page: $page, perPage: $perPage) {
-        media(search: $search, genre_in: $genres, type: ANIME, sort: $sort) {
-          id
-          title {
-            romaji
-            english
-            native
-          }
-          averageScore
-          description
-          coverImage {
-            large
-            extraLarge
-          }
-          genres
-          episodes
-          format
-          status
-          siteUrl
-        }
-      }
+  // Petakan ke ID Jikan v4
+  const genreIds = [];
+  genreNames.forEach(g => {
+    const lower = String(g).toLowerCase();
+    if (JIKAN_ANIME_GENRE_MAP[lower]) {
+      genreIds.push(JIKAN_ANIME_GENRE_MAP[lower]);
+    } else if (!isNaN(parseInt(g, 10))) {
+      genreIds.push(parseInt(g, 10));
     }
-  `;
+  });
 
-  const variables = {
-    page,
-    perPage: 15,
-    sort: [sort]
-  };
-
-  if (query) variables.search = query;
-  if (genreList.length > 0) variables.genres = genreList;
-
+  // 1. Panggil Jikan API v4 Publik secara langsung
   try {
-    const response = await axios.post(
-      'https://graphql.anilist.co',
-      { query: gqlQuery, variables },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        timeout: 9000
+    const params = {
+      order_by: 'score',
+      sort: 'desc',
+      limit: 24,
+      page
+    };
+
+    if (genreIds.length > 0) {
+      params.genres = genreIds.join(',');
+    }
+    if (query) {
+      params.q = query;
+    }
+
+    const jikanRes = await axios.get('https://api.jikan.moe/v4/anime', {
+      params,
+      timeout: 6500,
+      headers: {
+        'User-Agent': 'AllToolsKuro/1.3.0 (KuroStudio Multi-Tool Platform)'
       }
-    );
+    });
 
-    const mediaList = response.data?.data?.Page?.media;
-    if (Array.isArray(mediaList) && mediaList.length > 0) {
-      const formatted = mediaList.map(item => {
-        const scoreVal = typeof item.averageScore === 'number' 
-          ? (item.averageScore / 10).toFixed(1) 
-          : '8.4';
-
-        return {
-          id: item.id,
-          title: {
-            english: item.title?.english || item.title?.romaji || 'Anime Title',
-            romaji: item.title?.romaji || item.title?.english || 'Romaji',
-            native: item.title?.native || ''
-          },
-          score: parseFloat(scoreVal),
-          description: cleanHtmlTags(item.description) || 'Sinopsis belum tersedia.',
-          coverImage: item.coverImage?.extraLarge || item.coverImage?.large || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
-          genres: Array.isArray(item.genres) ? item.genres : [],
-          episodes: item.episodes || null,
-          format: item.format || 'TV',
-          status: item.status || 'UNKNOWN',
-          siteUrl: item.siteUrl || `https://anilist.co/anime/${item.id}`
-        };
-      });
+    const items = jikanRes.data?.data;
+    if (Array.isArray(items) && items.length > 0) {
+      const formatted = items.map(item => ({
+        id: item.mal_id,
+        title: {
+          english: item.title_english || item.title || 'Anime Title',
+          romaji: item.title || item.title_japanese || 'Romaji',
+          native: item.title_japanese || ''
+        },
+        score: typeof item.score === 'number' ? parseFloat(item.score.toFixed(1)) : 8.5,
+        description: cleanHtmlTags(item.synopsis) || 'Sinopsis belum tersedia.',
+        coverImage: item.images?.jpg?.large_image_url || item.images?.jpg?.image_url || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
+        genres: (item.genres || []).map(g => g.name),
+        episodes: item.episodes || null,
+        format: item.type || 'TV',
+        status: item.status === 'Finished Airing' ? 'FINISHED' : 'RELEASING',
+        siteUrl: item.url || `https://myanimelist.net/anime/${item.mal_id}`
+      }));
 
       return res.status(200).json({
         success: true,
-        source: 'anilist',
+        source: 'jikan_v4',
         query,
-        genres: genreList,
+        genres: genreNames,
         count: formatted.length,
         data: formatted
       });
     }
   } catch (err) {
-    console.warn('AniList query warning, using fallback dataset:', err.message);
+    console.warn('[Jikan v4 Anime] Fetch warning, activating resilient fallback:', err.message);
   }
 
-  // Fallback lokal jika AniList offline atau tidak ada koneksi internet
-  let filtered = [...FALLBACK_ANIME_DATA];
+  // 2. Fallback cerdas: Saring dataset kurasi lokal agar pengguna tidak mengalami layar kosong
+  let filtered = [...CURATED_ANIME_BACKUP];
   if (query) {
     const qLower = query.toLowerCase();
     filtered = filtered.filter(item => {
@@ -226,19 +234,18 @@ export default async function handler(req, res) {
     });
   }
 
-  if (genreList.length > 0) {
+  if (genreNames.length > 0) {
     filtered = filtered.filter(item => {
-      return genreList.some(g => item.genres.includes(g));
+      return genreNames.some(g => item.genres.some(ig => ig.toLowerCase() === g.toLowerCase()));
     });
   }
 
   return res.status(200).json({
     success: true,
-    source: 'fallback',
+    source: 'fallback_curated',
     query,
-    genres: genreList,
-    count: filtered.length,
-    data: filtered.length > 0 ? filtered : FALLBACK_ANIME_DATA
+    genres: genreNames,
+    count: filtered.length > 0 ? filtered.length : CURATED_ANIME_BACKUP.length,
+    data: filtered.length > 0 ? filtered : CURATED_ANIME_BACKUP
   });
 }
-

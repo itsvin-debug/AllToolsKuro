@@ -171,7 +171,29 @@ export async function searchManhwaRealtime({ query = '', genres = [], sort = 'PO
   const cleanQ = (query || '').trim();
   const selectedGenres = Array.isArray(genres) ? genres.filter(Boolean) : [];
 
-  // 1. Coba langsung fetch ke AniList GraphQL API dari client (dukung CORS publik)
+  // 1. Coba panggil Backend Jikan API v4 Manga Manhwa Route
+  try {
+    const params = new URLSearchParams();
+    if (cleanQ) params.append('q', cleanQ);
+    if (selectedGenres.length > 0) params.append('genres', selectedGenres.join(','));
+    if (sort) params.append('sort', sort);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`/api/manhwa/search?${params.toString()}`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const serverData = await res.json();
+      if (serverData && Array.isArray(serverData.data) && serverData.data.length > 0) {
+        return serverData.data;
+      }
+    }
+  } catch (err) {
+    // Lanjut ke fallback client-side
+  }
+
+  // 2. Fallback: Coba langsung fetch ke AniList GraphQL API dari client (dukung CORS publik)
   try {
     const gqlQuery = `
       query ($search: String, $genres: [String], $type: MediaType, $sort: [MediaSort]) {

@@ -1,9 +1,32 @@
 import axios from 'axios';
 
-// Dataset cadangan Manhwa Korea populer jika koneksi AniList offline
-const FALLBACK_MANHWA_DATA = [
+/**
+ * api/manhwa/search.js - Vercel Serverless & Express Endpoint
+ * Integrasi resmi ke Jikan API v4 Publik (Manga Endpoint untuk Manhwa):
+ * https://api.jikan.moe/v4/manga?type=manhwa&order_by=score&sort=desc
+ */
+
+// Pemetaan Genre Name ke Jikan v4 ID resmi
+const JIKAN_MANGA_GENRE_MAP = {
+  'action': 1,
+  'adventure': 2,
+  'comedy': 4,
+  'drama': 8,
+  'fantasy': 10,
+  'horror': 14,
+  'mystery': 7,
+  'romance': 22,
+  'sci-fi': 24,
+  'slice of life': 36,
+  'sports': 30,
+  'supernatural': 37,
+  'psychological': 40
+};
+
+// Dataset kurasi komik Korea (Manhwa) cadangan jika Jikan API publik rate-limited
+const CURATED_MANHWA_BACKUP = [
   {
-    id: 105398,
+    id: 121496,
     title: {
       english: "Solo Leveling",
       romaji: "Na Honjaman Level Up",
@@ -11,14 +34,15 @@ const FALLBACK_MANHWA_DATA = [
     },
     score: 8.7,
     description: "Sung Jin-Woo, pemburu terlemah berperingkat E yang dijuluki 'Senjata Terlemah Umat Manusia', terjebak dalam Double Dungeon maut. Saat di ambang kematian, ia terpilih oleh sistem misterius menjadi satu-satunya pemain yang bisa menaikkan level kekuatannya tanpa batas.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx105398-b673Vt5ZSuz3.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/manga/3/222295l.jpg",
     genres: ["Action", "Adventure", "Fantasy"],
     chapters: 201,
+    format: "MANHWA",
     status: "FINISHED",
-    siteUrl: "https://anilist.co/manga/105398"
+    siteUrl: "https://myanimelist.net/manga/121496"
   },
   {
-    id: 119257,
+    id: 132214,
     title: {
       english: "Omniscient Reader's Viewpoint",
       romaji: "Jeonjijeok Dokja Sijeom",
@@ -26,14 +50,15 @@ const FALLBACK_MANHWA_DATA = [
     },
     score: 8.9,
     description: "Kim Dokja adalah satu-satunya pembaca setia yang menuntaskan novel web 'Tiga Cara Bertahan Hidup di Dunia yang Hancur'. Ketika dunia novel tersebut mendadak menjadi kenyataan kiamat nyata, Dokja menggunakan pengetahuannya untuk bertahan hidup.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx119257-W1U8y996Fq1S.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/manga/1/242220l.jpg",
     genres: ["Action", "Adventure", "Fantasy", "Psychological"],
     chapters: null,
+    format: "MANHWA",
     status: "RELEASING",
-    siteUrl: "https://anilist.co/manga/119257"
+    siteUrl: "https://myanimelist.net/manga/132214"
   },
   {
-    id: 85143,
+    id: 122663,
     title: {
       english: "Tower of God",
       romaji: "Sin-ui Tap",
@@ -41,14 +66,15 @@ const FALLBACK_MANHWA_DATA = [
     },
     score: 8.5,
     description: "Demi mengejar gadis satu-satunya yang ia kenal, Rachel, Bam nekat membuka pintu Menara misterius. Di dalam Menara, setiap lantai menyajikan ujian maut demi menggapai impian, kekuasaan, atau rahasia dunia.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx85143-pC4x7tL38L9z.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/manga/2/231908l.jpg",
     genres: ["Action", "Adventure", "Drama", "Fantasy", "Mystery"],
     chapters: null,
+    format: "MANHWA",
     status: "RELEASING",
-    siteUrl: "https://anilist.co/manga/85143"
+    siteUrl: "https://myanimelist.net/manga/122663"
   },
   {
-    id: 125642,
+    id: 141351,
     title: {
       english: "Return of the Blossoming Blade",
       romaji: "Hwasan Gwi-hwan",
@@ -56,14 +82,15 @@ const FALLBACK_MANHWA_DATA = [
     },
     score: 8.8,
     description: "Chung Myung, Pendekar Pedang Suci Bunga Plum dari Sekte Mount Hua, gugur setelah membunuh Raja Iblis Cheon Ma. 100 tahun kemudian, ia terlahir kembali sebagai anak pengemis dan mendapati sektenya yang agung telah hancur dan dilupakan.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx125642-z7yQv6Vf1l1Q.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/manga/3/256885l.jpg",
     genres: ["Action", "Adventure", "Comedy", "Fantasy"],
     chapters: null,
+    format: "MANHWA",
     status: "RELEASING",
-    siteUrl: "https://anilist.co/manga/125642"
+    siteUrl: "https://myanimelist.net/manga/141351"
   },
   {
-    id: 120853,
+    id: 129759,
     title: {
       english: "Nano Machine",
       romaji: "Nano Machine",
@@ -71,14 +98,15 @@ const FALLBACK_MANHWA_DATA = [
     },
     score: 8.4,
     description: "Cheon Yeo-Woon, pangeran terbuang dari Sekte Iblis Agung yang selalu diracuni dan diancam dibunuh, tiba-tiba didatangi keturunannya dari masa depan yang menyuntikkan mesin nano berteknologi tinggi ke dalam aliran darahnya.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx120853-aA4qI3jJ88rY.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/manga/2/236746l.jpg",
     genres: ["Action", "Fantasy", "Sci-Fi"],
     chapters: null,
+    format: "MANHWA",
     status: "RELEASING",
-    siteUrl: "https://anilist.co/manga/120853"
+    siteUrl: "https://myanimelist.net/manga/129759"
   },
   {
-    id: 85482,
+    id: 111233,
     title: {
       english: "Wind Breaker",
       romaji: "Wind Breaker",
@@ -86,11 +114,12 @@ const FALLBACK_MANHWA_DATA = [
     },
     score: 8.6,
     description: "Jay adalah ketua OSIS teladan yang berprestasi namun dingin. Kehidupannya berubah total ketika bakat bersepeda jalanan ekstrimnya terungkap dan membawanya bergabung ke kru balap jalanan 'Hummingbird'.",
-    coverImage: "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/bx85482-3tL63JqH99cZ.jpg",
+    coverImage: "https://cdn.myanimelist.net/images/manga/1/206927l.jpg",
     genres: ["Action", "Comedy", "Drama", "Sports"],
     chapters: null,
+    format: "MANHWA",
     status: "RELEASING",
-    siteUrl: "https://anilist.co/manga/85482"
+    siteUrl: "https://myanimelist.net/manga/111233"
   }
 ];
 
@@ -115,105 +144,85 @@ export default async function handler(req, res) {
 
   const query = (req.query?.q || req.body?.q || req.query?.query || req.body?.query || '').trim();
   const rawGenres = req.query?.genres || req.body?.genres || '';
-  const sort = req.query?.sort || req.body?.sort || 'POPULARITY_DESC';
   const page = parseInt(req.query?.page || req.body?.page || '1', 10) || 1;
 
-  let genreList = [];
+  let genreNames = [];
   if (Array.isArray(rawGenres)) {
-    genreList = rawGenres.filter(Boolean);
+    genreNames = rawGenres.filter(Boolean);
   } else if (typeof rawGenres === 'string' && rawGenres.trim()) {
-    genreList = rawGenres.split(',').map(s => s.trim()).filter(Boolean);
+    genreNames = rawGenres.split(',').map(s => s.trim()).filter(Boolean);
   }
 
-  // Query AniList khusus untuk Manhwa Korea (countryOfOrigin: KR, type: MANGA)
-  const gqlQuery = `
-    query ($page: Int, $perPage: Int, $search: String, $genres: [String], $sort: [MediaSort]) {
-      Page(page: $page, perPage: $perPage) {
-        media(search: $search, genre_in: $genres, type: MANGA, countryOfOrigin: "KR", sort: $sort) {
-          id
-          title {
-            romaji
-            english
-            native
-          }
-          averageScore
-          description
-          coverImage {
-            large
-            extraLarge
-          }
-          genres
-          chapters
-          format
-          status
-          siteUrl
-        }
-      }
+  // Petakan ke ID Jikan v4
+  const genreIds = [];
+  genreNames.forEach(g => {
+    const lower = String(g).toLowerCase();
+    if (JIKAN_MANGA_GENRE_MAP[lower]) {
+      genreIds.push(JIKAN_MANGA_GENRE_MAP[lower]);
+    } else if (!isNaN(parseInt(g, 10))) {
+      genreIds.push(parseInt(g, 10));
     }
-  `;
+  });
 
-  const variables = {
-    page,
-    perPage: 15,
-    sort: [sort]
-  };
-
-  if (query) variables.search = query;
-  if (genreList.length > 0) variables.genres = genreList;
-
+  // 1. Panggil Jikan API v4 Publik (Endpoint Manga dengan type=manhwa)
   try {
-    const response = await axios.post(
-      'https://graphql.anilist.co',
-      { query: gqlQuery, variables },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        timeout: 9000
+    const params = {
+      type: 'manhwa',
+      order_by: 'score',
+      sort: 'desc',
+      limit: 24,
+      page
+    };
+
+    if (genreIds.length > 0) {
+      params.genres = genreIds.join(',');
+    }
+    if (query) {
+      params.q = query;
+    }
+
+    const jikanRes = await axios.get('https://api.jikan.moe/v4/manga', {
+      params,
+      timeout: 6500,
+      headers: {
+        'User-Agent': 'AllToolsKuro/1.3.0 (KuroStudio Multi-Tool Platform)'
       }
-    );
+    });
 
-    const mediaList = response.data?.data?.Page?.media;
-    if (Array.isArray(mediaList) && mediaList.length > 0) {
-      const formatted = mediaList.map(item => {
-        const scoreVal = typeof item.averageScore === 'number' 
-          ? (item.averageScore / 10).toFixed(1) 
-          : '8.5';
-
-        return {
-          id: item.id,
-          title: {
-            english: item.title?.english || item.title?.romaji || 'Manhwa Title',
-            romaji: item.title?.romaji || item.title?.english || 'Romaji',
-            native: item.title?.native || ''
-          },
-          score: parseFloat(scoreVal),
-          description: cleanHtmlTags(item.description) || 'Sinopsis manhwa belum tersedia.',
-          coverImage: item.coverImage?.extraLarge || item.coverImage?.large || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
-          genres: Array.isArray(item.genres) ? item.genres : [],
-          chapters: item.chapters || null,
-          format: item.format || 'MANGA',
-          status: item.status || 'RELEASING',
-          siteUrl: item.siteUrl || `https://anilist.co/manga/${item.id}`
-        };
-      });
+    const items = jikanRes.data?.data;
+    if (Array.isArray(items) && items.length > 0) {
+      const formatted = items.map(item => ({
+        id: item.mal_id,
+        title: {
+          english: item.title_english || item.title || 'Manhwa Title',
+          romaji: item.title || item.title_japanese || 'Romaji',
+          native: item.title_japanese || ''
+        },
+        score: typeof item.score === 'number' ? parseFloat(item.score.toFixed(1)) : 8.6,
+        description: cleanHtmlTags(item.synopsis) || 'Sinopsis manhwa belum tersedia.',
+        coverImage: item.images?.jpg?.large_image_url || item.images?.jpg?.image_url || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
+        genres: (item.genres || []).map(g => g.name),
+        chapters: item.chapters || null,
+        format: 'MANHWA',
+        status: item.publishing ? 'RELEASING' : 'FINISHED',
+        siteUrl: item.url || `https://myanimelist.net/manga/${item.mal_id}`
+      }));
 
       return res.status(200).json({
         success: true,
-        source: 'anilist',
+        source: 'jikan_v4_manhwa',
         query,
-        genres: genreList,
+        genres: genreNames,
         count: formatted.length,
         data: formatted
       });
     }
   } catch (err) {
-    console.warn('AniList Manhwa query warning, using fallback dataset:', err.message);
+    console.warn('[Jikan v4 Manhwa] Fetch warning, activating resilient fallback:', err.message);
   }
 
-  // Fallback lokal jika AniList offline
-  let filtered = [...FALLBACK_MANHWA_DATA];
+  // 2. Fallback cerdas: Saring dataset kurasi lokal agar pengguna tidak mengalami layar kosong
+  let filtered = [...CURATED_MANHWA_BACKUP];
   if (query) {
     const qLower = query.toLowerCase();
     filtered = filtered.filter(item => {
@@ -225,19 +234,18 @@ export default async function handler(req, res) {
     });
   }
 
-  if (genreList.length > 0) {
+  if (genreNames.length > 0) {
     filtered = filtered.filter(item => {
-      return genreList.some(g => item.genres.includes(g));
+      return genreNames.some(g => item.genres.some(ig => ig.toLowerCase() === g.toLowerCase()));
     });
   }
 
   return res.status(200).json({
     success: true,
-    source: 'fallback',
+    source: 'fallback_curated',
     query,
-    genres: genreList,
-    count: filtered.length,
-    data: filtered.length > 0 ? filtered : FALLBACK_MANHWA_DATA
+    genres: genreNames,
+    count: filtered.length > 0 ? filtered.length : CURATED_MANHWA_BACKUP.length,
+    data: filtered.length > 0 ? filtered : CURATED_MANHWA_BACKUP
   });
 }
-
