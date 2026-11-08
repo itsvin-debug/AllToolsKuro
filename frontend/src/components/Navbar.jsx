@@ -289,12 +289,15 @@ export default function Navbar({
         latestInfo={appUpdate.latestInfo}
         localVersion={appUpdate.localVersion}
         hasUpdate={appUpdate.hasUpdate}
+        missedCount={appUpdate.missedCount}
         pendingCount={appUpdate.pendingCount}
+        missedUpdates={appUpdate.missedUpdates}
         pendingUpdates={appUpdate.pendingUpdates}
         isDownloading={appUpdate.isDownloading}
         downloadProgress={appUpdate.downloadProgress}
         downloadPhase={appUpdate.downloadPhase}
         downloadStatus={appUpdate.downloadStatus}
+        networkSpeedLabel={appUpdate.networkSpeedLabel}
         onStartDownload={appUpdate.startDownloadUpdate}
         onCheckAgain={appUpdate.checkForUpdates}
         isChecking={appUpdate.isChecking}

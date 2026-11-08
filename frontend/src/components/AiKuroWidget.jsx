@@ -8,7 +8,8 @@ import {
   RotateCcw,
   AlertTriangle,
   Flame,
-  GripHorizontal
+  GripHorizontal,
+  Move
 } from 'lucide-react';
 import KuroCharacter from './KuroCharacter';
 import { 
@@ -192,6 +193,18 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
           return 'bottom-20 sm:bottom-6 right-4 sm:right-6';
       }
     }
+  };
+
+  // Fungsi rotasi cepat posisi widget melayang ke 4 kuadran (Kanan-Bawah -> Kiri-Bawah -> Kiri-Atas -> Kanan-Atas)
+  const cycleDockQuadrant = () => {
+    const quadrants = ['bottom-right', 'bottom-left', 'top-left', 'top-right'];
+    const currentIndex = quadrants.indexOf(dockQuadrant);
+    const nextQuadrant = quadrants[(currentIndex + 1) % quadrants.length];
+    setDockQuadrant(nextQuadrant);
+    try {
+      localStorage.setItem('kuro_bot_dock_quadrant', nextQuadrant);
+      localStorage.setItem('kuro_chat_dock_side', nextQuadrant.includes('left') ? 'left' : 'right');
+    } catch (_) {}
   };
 
   // Modal alert syarat isi nama panggilan
@@ -839,6 +852,32 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         </div>
       )}
 
+      {/* ─── PANDUAN VISUAL SNAP 4-KUADRAN SAAT DRAGGING ─── */}
+      {(isButtonDragging || isPopupDragging) && (
+        <div className="fixed inset-0 z-40 pointer-events-none p-4 grid grid-cols-2 grid-rows-2 gap-4 animate-in fade-in duration-150">
+          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-start justify-start p-3">
+            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
+              Kiri-Atas
+            </span>
+          </div>
+          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-start justify-end p-3">
+            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
+              Kanan-Atas
+            </span>
+          </div>
+          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-end justify-start p-3">
+            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
+              Kiri-Bawah
+            </span>
+          </div>
+          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-end justify-end p-3">
+            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
+              Kanan-Bawah
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* ─── 2. TOMBOL WIDGET MELAYANG (COLLAPSED) DENGAN DOCKING 4-KUADRAN ─── */}
       {mode === 'collapsed' && (
         <div 
@@ -935,10 +974,21 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
             {/* Indikator Drag Handle & Tombol Aksi */}
             <div className="flex items-center gap-1.5">
+              {/* Tombol Rotasi Cepat Posisi 4-Kuadran */}
+              <button
+                type="button"
+                onClick={cycleDockQuadrant}
+                className="w-7 h-7 rounded-lg bg-white hover:bg-neutral-100 text-neutral-800 border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                title={`Pindah Posisi Layar (Saat ini: ${dockQuadrant})`}
+                aria-label="Pindah sudut kuadran posisi widget"
+              >
+                <Move className="w-3.5 h-3.5 stroke-[2.5]" />
+              </button>
+
               {/* Petunjuk Visual Drag Geser */}
               <div 
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-neutral-300 bg-white text-neutral-500 text-[9px] font-mono select-none"
-                title="Tarik ke kiri atau kanan untuk geser posisi"
+                title="Tarik ke 4 sudut (atas/bawah/kiri/kanan) untuk atur posisi"
               >
                 <GripHorizontal className="w-3.5 h-3.5" />
                 <span className="hidden xs:inline font-bold">Geser</span>
