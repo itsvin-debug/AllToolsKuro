@@ -241,3 +241,4 @@ export default async function handler(req, res) {
     data: filtered.length > 0 ? filtered : FALLBACK_ANIME_DATA
   });
 }
+

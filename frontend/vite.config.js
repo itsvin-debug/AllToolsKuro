@@ -224,7 +224,7 @@ function systemBatteryDevMiddleware() {
   };
 }
 
-// Middleware Vite untuk melayani endpoint utilitas baru (CapCut, Anime, Manhwa) di dev mode
+// Middleware Vite untuk melayani endpoint utilitas baru (CapCut, Anime, Manhwa, Version) di dev mode
 function apiServicesDevMiddleware() {
   return {
     name: 'api-services-dev-middleware',
@@ -240,12 +240,43 @@ function apiServicesDevMiddleware() {
           targetModulePath = '../api/anime/search.js';
         } else if (pathname === '/api/manhwa/search') {
           targetModulePath = '../api/manhwa/search.js';
+        } else if (pathname === '/api/version') {
+          targetModulePath = '../api/version.js';
         }
 
         if (targetModulePath) {
           try {
             const apiMod = await import(targetModulePath);
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+
+            const mockRes = {
+              setHeader: (k, v) => res.setHeader(k, v),
+              status: (code) => {
+                res.statusCode = code;
+                return {
+                  json: (data) => {
+                    if (!res.headersSent) {
+                      res.setHeader('Content-Type', 'application/json');
+                      res.setHeader('Access-Control-Allow-Origin', '*');
+                    }
+                    res.end(JSON.stringify(data));
+                  },
+                  send: (data) => {
+                    if (!res.headersSent) res.setHeader('Access-Control-Allow-Origin', '*');
+                    res.end(data);
+                  },
+                  end: () => res.end()
+                };
+              }
+            };
+
+            // Untuk request GET atau HEAD, jangan tunggu stream body karena tidak ada data
+            if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+              req.body = {};
+              await apiMod.default(req, mockRes);
+              return;
+            }
+
             let body = '';
             req.on('data', chunk => { body += chunk; });
             req.on('end', async () => {
@@ -254,20 +285,6 @@ function apiServicesDevMiddleware() {
               } catch {
                 req.body = {};
               }
-              const mockRes = {
-                setHeader: (k, v) => res.setHeader(k, v),
-                status: (code) => {
-                  res.statusCode = code;
-                  return {
-                    json: (data) => {
-                      if (!res.headersSent) res.setHeader('Content-Type', 'application/json');
-                      res.end(JSON.stringify(data));
-                    },
-                    send: (data) => res.end(data),
-                    end: () => res.end()
-                  };
-                }
-              };
               await apiMod.default(req, mockRes);
             });
             return;

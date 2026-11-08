@@ -4,26 +4,27 @@ export default function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
   const versionPayload = {
-    latestVersion: '1.2.0',
-    versionCode: 2,
-    releaseNotes: 'Penambahan fitur Safelink Bypasser dan ekstrak deep link CapCut.',
+    latestVersion: '1.3.0',
+    versionCode: 3,
+    releaseNotes: 'Rilis Pembaruan v1.3.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dan Optimalisasi Real-Time.',
     features: [
-      'Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.',
-      'Ekstrak Deep Link CapCut & Preset Alight Motion pada Cari Link JJ.',
-      'Performa unduhan media lebih stabil dengan auto-reconnect.'
+      'Pencari Template CapCut: Cari preset JJ viral via lirik & pratinjau loop video dengan direct link resmi CapCut.',
+      'Pencari Rekomendasi Anime: Rekomendasi cerdas modal pilihan genre & kombinasi genre favorit, rating skor MAL, dan sinopsis.',
+      'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover seni HD, dan sinopsis cerita.',
+      'Real-Time Live Search: Seluruh pencarian dan saringan genre kini berjalan seketika (real-time).',
+      'Penyempurnaan Stabilitas: Pembaruan telemetri sistem bebas proxy error.'
     ],
     apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
-    fileSize: '11.9 MB',
-    publishedAt: '2026-11-07'
+    fileSize: '12.4 MB',
+    publishedAt: '2026-11-08'
   };
 
   return res.status(200).json(versionPayload);
 }
-

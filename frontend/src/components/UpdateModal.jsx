@@ -22,14 +22,16 @@ export default function UpdateModal({
 }) {
   if (!isOpen) return null;
 
-  const newVersion = latestInfo?.latestVersion || '1.2.0';
-  const releaseNotes = latestInfo?.releaseNotes || 'Pembaruan stabilitas dan penambahan fitur terbaru AllToolsKuro.';
+  const newVersion = latestInfo?.latestVersion || '1.3.0';
+  const releaseNotes = latestInfo?.releaseNotes || 'Rilis Pembaruan v1.3.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dan Optimalisasi Real-Time.';
   const features = latestInfo?.features || [
-    'Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.',
-    'Ekstrak Deep Link CapCut & Preset Alight Motion pada Cari Link JJ.',
-    'Performa unduhan media lebih stabil dengan auto-reconnect.'
+    'Pencari Template CapCut: Cari preset JJ viral via lirik & pratinjau loop video dengan direct link resmi CapCut.',
+    'Pencari Rekomendasi Anime: Rekomendasi cerdas modal pilihan genre & kombinasi genre favorit, rating skor MAL, dan sinopsis.',
+    'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover seni HD, dan sinopsis cerita.',
+    'Real-Time Live Search: Seluruh pencarian dan saringan genre kini berjalan seketika (real-time).',
+    'Penyempurnaan Stabilitas: Pembaruan telemetri sistem bebas proxy error.'
   ];
-  const fileSize = latestInfo?.fileSize || '11.9 MB';
+  const fileSize = latestInfo?.fileSize || '12.4 MB';
   const apkDownloadUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
 
   return (

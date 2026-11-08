@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import CosmicBackButton from './CosmicBackButton';
 import { translations } from '../utils/translations';
+import { searchCapCutRealtime, CURATED_TEMPLATES } from '../services/capcutService';
 import { 
   Flame, 
   Search, 
@@ -13,18 +14,18 @@ import {
   Film, 
   Play, 
   Music, 
-  Share2,
   TrendingUp,
-  Tag
+  Radio
 } from 'lucide-react';
 
+// Daftar tag pencarian populer (tanpa "wong ai ni" sesuai revisi pengguna)
 const QUICK_TAGS = [
-  'Wong Ai Ni',
   'DJ Jedag Jedug',
   'JJ Tipis',
   'Bercanda',
   'Anime Edit',
-  'Sound Seram'
+  'Sound Seram',
+  'JJ Mengkane'
 ];
 
 export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' }) {
@@ -34,47 +35,52 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
   const [searchQuery, setSearchQuery] = useState('');
   const [activeQuery, setActiveQuery] = useState('');
   const [loading, setLoading] = useState(false);
-  const [templates, setTemplates] = useState([]);
+  const [templates, setTemplates] = useState(() => CURATED_TEMPLATES);
   const [copiedId, setCopiedId] = useState(null);
   const inputRef = useRef(null);
 
-  // Ambil template awal saat layar dimuat
+  // Pencarian real-time saat teks pencarian berubah (debounce 250ms)
   useEffect(() => {
-    fetchTemplates('');
-  }, []);
+    let isCancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const results = await searchCapCutRealtime(searchQuery);
+        if (!isCancelled) {
+          setTemplates(results);
+          setActiveQuery(searchQuery.trim());
+        }
+      } finally {
+        if (!isCancelled) setLoading(false);
+      }
+    }, 250);
 
-  const fetchTemplates = async (q) => {
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
+
+  const handleSearchSubmit = async (e) => {
+    if (e) e.preventDefault();
     setLoading(true);
     try {
-      const url = q ? `/api/capcut/search?q=${encodeURIComponent(q)}` : '/api/capcut/search';
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && Array.isArray(data.data)) {
-          setTemplates(data.data);
-          setActiveQuery(q);
-        }
-      }
-    } catch (err) {
-      console.warn('Gagal memuat template CapCut:', err.message);
+      const results = await searchCapCutRealtime(searchQuery);
+      setTemplates(results);
+      setActiveQuery(searchQuery.trim());
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSearchSubmit = (e) => {
-    if (e) e.preventDefault();
-    fetchTemplates(searchQuery.trim());
-  };
-
   const handleSelectQuickTag = (tag) => {
     setSearchQuery(tag);
-    fetchTemplates(tag);
   };
 
   const handleClearSearch = () => {
     setSearchQuery('');
-    fetchTemplates('');
+    setTemplates(CURATED_TEMPLATES);
+    setActiveQuery('');
     if (inputRef.current) inputRef.current.focus();
   };
 
@@ -105,9 +111,9 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
             <Flame className="w-3.5 h-3.5 fill-black" />
             CAPCUT PRESET JJ
           </span>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-300 border-2 border-black font-extrabold text-xs shadow-[2px_2px_0px_#000000]">
-            <Sparkles className="w-3.5 h-3.5 text-black" />
-            AUTOPLAY LOOP
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-300 border-2 border-black font-extrabold text-xs shadow-[2px_2px_0px_#000000]">
+            <Radio className="w-3.5 h-3.5 text-black animate-pulse" />
+            REAL-TIME LIVE
           </span>
         </div>
       </div>
@@ -144,7 +150,7 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
               <button
                 type="button"
                 onClick={handleClearSearch}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md text-zinc-500 hover:text-black dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-md text-zinc-500 hover:text-black dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors cursor-pointer"
                 title="Hapus pencarian"
               >
                 <X className="w-4 h-4" />
@@ -170,7 +176,7 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
           </button>
         </form>
 
-        {/* Popular Quick Keyword Chips */}
+        {/* Popular Quick Keyword Chips (Wong Ai Ni telah dihapus sesuai permintaan pengguna) */}
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
             <TrendingUp className="w-3.5 h-3.5" />
@@ -208,22 +214,8 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
         </span>
       </div>
 
-      {/* Loading Skeleton */}
-      {loading && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map((n) => (
-            <div key={n} className="bg-white dark:bg-[#18181b] border-2 border-black rounded-2xl p-4 shadow-[4px_4px_0px_0px_#000000] animate-pulse flex flex-col gap-4">
-              <div className="w-full aspect-[9/13] bg-zinc-200 dark:bg-zinc-800 rounded-xl border-2 border-black" />
-              <div className="h-5 bg-zinc-200 dark:bg-zinc-800 rounded w-3/4" />
-              <div className="h-4 bg-zinc-200 dark:bg-zinc-800 rounded w-1/2" />
-              <div className="h-10 bg-zinc-200 dark:bg-zinc-800 rounded-xl mt-auto" />
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* Template Cards Grid */}
-      {!loading && templates.length > 0 && (
+      {templates.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {templates.map((tpl) => (
             <div
