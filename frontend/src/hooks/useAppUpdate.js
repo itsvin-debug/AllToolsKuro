@@ -1,4 +1,4 @@
-// frontend/src/hooks/useAppUpdate.js - In-App OTA Update Engine Khusus Aplikasi Android & Web
+// frontend/src/hooks/useAppUpdate.js - In-App OTA Update Engine Khusus Aplikasi Android (Capacitor)
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { 
@@ -14,7 +14,15 @@ import {
 } from '../config/appVersion';
 
 export function useAppUpdate() {
-  const [isNativeApp, setIsNativeApp] = useState(false);
+  const [isNativeApp, setIsNativeApp] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.());
+    } catch {
+      return false;
+    }
+  });
+
   const [hasUpdate, setHasUpdate] = useState(false);
   const [missedCount, setMissedCount] = useState(0);
   const [missedUpdates, setMissedUpdates] = useState([]);
@@ -48,14 +56,22 @@ export function useAppUpdate() {
   }, []);
 
   // Fetch pengecekan versi server terbaru dan akumulasi changelog
+  // HANYA aktif pada aplikasi Native Android; versi Web selalu mutakhir otomatis dari cloud
   const checkForUpdates = useCallback(async (isManual = false) => {
+    // Jika bukan native app dan bukan pengecekan manual yang diminta sengaja, lewati
+    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.()));
+    if (!isNative && !isManual) {
+      setHasUpdate(false);
+      setMissedCount(0);
+      return { success: true, isWeb: true };
+    }
+
     setIsChecking(true);
     const startTime = Date.now();
     try {
       const cacheBuster = `?t=${Date.now()}`;
       let data = null;
 
-      // Ambil data versi dari beberapa sumber terpercaya dan pilih yang paling mutakhir
       const fetchSources = [
         `https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/frontend/public/version.json${cacheBuster}`,
         `https://alltoolskuro.vercel.app/api/version${cacheBuster}`,
@@ -83,9 +99,9 @@ export function useAppUpdate() {
       if (typeof navigator !== 'undefined' && navigator.connection?.effectiveType) {
         speedText = navigator.connection.effectiveType.toUpperCase();
       } else if (latencyMs < 300) {
-        speedText = 'Cepat (High-Speed)';
+        speedText = 'High-Speed (WiFi/4G)';
       } else if (latencyMs < 1000) {
-        speedText = 'Sedang';
+        speedText = 'Normal';
       } else {
         speedText = 'Hemat Kuota';
       }
@@ -212,7 +228,11 @@ export function useAppUpdate() {
   }, []);
 
   useEffect(() => {
-    checkForUpdates();
+    // Jalankan pengecekan otomatis hanya jika berjalan pada native app Android
+    const isNative = typeof window !== 'undefined' && (Capacitor.isNativePlatform() || Boolean(window.Capacitor?.isNativePlatform?.()));
+    if (isNative) {
+      checkForUpdates();
+    }
   }, [checkForUpdates]);
 
   // Bersihkan interval jika unmount
@@ -229,7 +249,7 @@ export function useAppUpdate() {
     if (isDownloading) return;
 
     setIsDownloading(true);
-    setDownloadProgress(1);
+    setDownloadProgress(0);
     setDownloadPhase('Mengecek integritas koneksi & server rilis...');
     setDownloadStatus('downloading');
 
@@ -240,22 +260,21 @@ export function useAppUpdate() {
     const serverVer = latestInfo?.latestVersion || '1.5.1';
     const serverCode = latestInfo?.versionCode || 6;
 
-    // Hitung kecepatan interval progress bar adaptif (1% s.d. 100%)
-    // Menyesuaikan perkiraan kecepatan jaringan agar pengalaman terasa realistis dan mulus
-    let tickDelay = 75;
+    // Hitung kecepatan interval progress bar adaptif (0% s.d. 100%)
+    let tickDelay = 70;
     let stepMin = 3;
-    let stepMax = 7;
+    let stepMax = 6;
 
     if (typeof navigator !== 'undefined' && navigator.connection) {
       const conn = navigator.connection;
       if (conn.effectiveType === '4g' || (conn.downlink && conn.downlink > 5)) {
-        tickDelay = 60;
+        tickDelay = 50;
         stepMin = 4;
         stepMax = 8;
       } else if (conn.effectiveType === '3g' || (conn.downlink && conn.downlink <= 2)) {
         tickDelay = 110;
         stepMin = 2;
-        stepMax = 5;
+        stepMax = 4;
       }
     }
 
@@ -264,9 +283,9 @@ export function useAppUpdate() {
         const increment = Math.floor(Math.random() * (stepMax - stepMin + 1)) + stepMin;
         const next = prev + increment;
 
-        if (next < 20) {
+        if (next < 25) {
           setDownloadPhase('Mengecek integritas koneksi & server rilis AllToolsKuro...');
-        } else if (next < 50) {
+        } else if (next < 55) {
           setDownloadPhase('Mengunduh bundel patch komponen & skrip pembaruan OTA...');
         } else if (next < 80) {
           setDownloadPhase('Menerapkan pembaruan modul & optimasi penyimpanan lokal...');
@@ -277,23 +296,30 @@ export function useAppUpdate() {
           clearInterval(downloadIntervalRef.current);
           downloadIntervalRef.current = null;
 
+          // Set 100% dan terapkan patch secara live di memori aplikasi
+          setDownloadProgress(100);
+          setDownloadPhase('Pembaruan Berhasil Diterapkan!');
+          setDownloadStatus('completed');
+
+          // Simpan versi terpasang dan kode versi baru secara permanen di LocalStorage
+          setInstalledAppVersion(serverVer);
+          setInstalledVersionCode(serverCode);
+          setCurrentInstalledVersion(serverVer);
+          setCurrentInstalledCode(serverCode);
+
+          // Reset badge notifikasi update menjadi 0
+          setMissedCount(0);
+          setMissedUpdates([]);
+          setHasUpdate(false);
+
+          // Menutup pop-up otomatis setelah jeda singkat penerapan (650ms)
           setTimeout(() => {
-            setDownloadProgress(100);
-            setDownloadPhase('Pembaruan Berhasil Diterapkan!');
-            setDownloadStatus('completed');
+            setShowModal(false);
             setIsDownloading(false);
-
-            // Simpan versi terpasang dan kode versi baru secara permanen di LocalStorage
-            setInstalledAppVersion(serverVer);
-            setInstalledVersionCode(serverCode);
-            setCurrentInstalledVersion(serverVer);
-            setCurrentInstalledCode(serverCode);
-
-            // Bersihkan notifikasi tumpukan update
-            setMissedCount(0);
-            setMissedUpdates([]);
-            setHasUpdate(false);
-          }, 350);
+            setDownloadProgress(0);
+            setDownloadPhase('');
+            setDownloadStatus('idle');
+          }, 650);
 
           return 100;
         }

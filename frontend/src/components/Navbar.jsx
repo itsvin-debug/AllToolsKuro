@@ -151,39 +151,52 @@ export default function Navbar({
             })}
           </nav>
 
-          {/* Tombol Unduh APK / Update & Cari atau Tool Switcher */}
+          {/* Tombol Unduh APK (Web) atau Tombol Update In-App (Khusus Aplikasi Android) */}
           {isMainTab ? (
             <div className="flex items-center gap-1.5 sm:gap-2">
-              {/* Tombol In-App Update dengan Pulse & Badge jika ada pembaruan baru */}
-              <button
-                type="button"
-                onClick={appUpdate.openModal}
-                className={`px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer relative select-none ${
-                  appUpdate.hasUpdate 
-                    ? 'bg-rose-500 text-white hover:bg-rose-600 animate-pulse ring-2 ring-rose-400' 
-                    : 'bg-white text-black hover:bg-neutral-100'
-                }`}
-                title={appUpdate.hasUpdate 
-                  ? (lang === 'en' ? 'App update available! Click to update' : 'Pembaruan aplikasi tersedia! Klik untuk update') 
-                  : (lang === 'en' ? 'App is up to date' : 'Versi aplikasi sudah terbaru')}
-              >
-                <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${appUpdate.hasUpdate ? 'text-white' : 'text-blue-600'} ${appUpdate.isChecking ? 'animate-spin' : ''}`} />
-                <span className="whitespace-nowrap">
-                  {appUpdate.hasUpdate 
-                    ? (lang === 'en' ? `Update (${appUpdate.pendingCount})` : `Update (${appUpdate.pendingCount})`) 
-                    : 'Update'}
-                </span>
-
-                {/* Badge Notifikasi Angka Dinamis (Menghitung Akumulasi Update Tertunda) */}
-                {appUpdate.pendingCount > 0 && (
-                  <span className="absolute -top-2 -right-2 flex items-center justify-center">
-                    <span className="animate-ping absolute inline-flex h-4 w-4 rounded-full bg-yellow-400 opacity-80"></span>
-                    <span className="relative inline-flex min-w-4.5 h-4.5 px-1 rounded-full bg-yellow-400 text-black border-2 border-black font-black text-[9px] items-center justify-center shadow-[1px_1px_0px_#000000]">
-                      {appUpdate.pendingCount}
-                    </span>
+              {!appUpdate.isNativeApp ? (
+                /* ─── VERSI WEB: TOMBOL UNDUH APK ALLTOOLSKURO ─── */
+                <a
+                  href="/AllToolsKuro.apk"
+                  download="AllToolsKuro.apk"
+                  className="px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black bg-white text-black font-bold text-xs sm:text-sm hover:bg-neutral-100 transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer no-underline select-none"
+                  title="Unduh Berkas Aplikasi Android AllToolsKuro (.apk)"
+                >
+                  <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span className="whitespace-nowrap">{t.nav?.downloadApk || 'Unduh APK'}</span>
+                </a>
+              ) : (
+                /* ─── VERSI APLIKASI ANDROID (APK): TOMBOL IN-APP OTA UPDATE DENGAN BADGE ANGKA ─── */
+                <button
+                  type="button"
+                  onClick={appUpdate.openModal}
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-lg border-2 border-black font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none cursor-pointer relative select-none ${
+                    appUpdate.hasUpdate 
+                      ? 'bg-rose-500 text-white hover:bg-rose-600 animate-pulse ring-2 ring-rose-400' 
+                      : 'bg-white text-black hover:bg-neutral-100'
+                  }`}
+                  title={appUpdate.hasUpdate 
+                    ? (lang === 'en' ? 'App update available! Click to update' : 'Pembaruan aplikasi tersedia! Klik untuk update') 
+                    : (lang === 'en' ? 'App is up to date' : 'Versi aplikasi sudah terbaru')}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 stroke-[2.5] ${appUpdate.hasUpdate ? 'text-white' : 'text-blue-600'} ${appUpdate.isChecking ? 'animate-spin' : ''}`} />
+                  <span className="whitespace-nowrap">
+                    {appUpdate.hasUpdate 
+                      ? (lang === 'en' ? `Update (${appUpdate.pendingCount})` : `Update (${appUpdate.pendingCount})`) 
+                      : 'Update'}
                   </span>
-                )}
-              </button>
+
+                  {/* Badge Notifikasi Angka Dinamis (Menghitung Akumulasi Update Tertunda) */}
+                  {appUpdate.pendingCount > 0 && (
+                    <span className="absolute -top-2 -right-2 flex items-center justify-center">
+                      <span className="animate-ping absolute inline-flex h-4 w-4 rounded-full bg-yellow-400 opacity-80"></span>
+                      <span className="relative inline-flex min-w-4.5 h-4.5 px-1 rounded-full bg-yellow-400 text-black border-2 border-black font-black text-[9px] items-center justify-center shadow-[1px_1px_0px_#000000]">
+                        {appUpdate.pendingCount}
+                      </span>
+                    </span>
+                  )}
+                </button>
+              )}
 
               <button
                 onClick={handleSearchClick}
@@ -256,8 +269,8 @@ export default function Navbar({
 
       </div>
 
-      {/* ─── NOTIFIKASI BANNER SAAT ADA PEMBARUAN VERSI BARU ─── */}
-      {appUpdate.hasUpdate && (
+      {/* ─── NOTIFIKASI BANNER KHUSUS APLIKASI NATIVE ANDROID SAAT ADA PEMBARUAN ─── */}
+      {appUpdate.isNativeApp && appUpdate.hasUpdate && (
         <div className="w-full bg-gradient-to-r from-amber-300 via-rose-300 to-amber-300 border-t-2 border-b-2 border-black px-4 py-2 flex items-center justify-between gap-3 text-xs font-bold shadow-[0_2px_4px_rgba(0,0,0,0.1)]">
           <div className="flex items-center gap-2 truncate">
             <span className="bg-black text-white text-[10px] font-mono px-2 py-0.5 rounded border border-black uppercase tracking-wider shrink-0 animate-pulse">
@@ -282,27 +295,29 @@ export default function Navbar({
         </div>
       )}
 
-      {/* Modal Pembaruan Aplikasi In-App */}
-      <UpdateModal
-        isOpen={appUpdate.showModal}
-        onClose={appUpdate.closeModal}
-        latestInfo={appUpdate.latestInfo}
-        localVersion={appUpdate.localVersion}
-        hasUpdate={appUpdate.hasUpdate}
-        missedCount={appUpdate.missedCount}
-        pendingCount={appUpdate.pendingCount}
-        missedUpdates={appUpdate.missedUpdates}
-        pendingUpdates={appUpdate.pendingUpdates}
-        isDownloading={appUpdate.isDownloading}
-        downloadProgress={appUpdate.downloadProgress}
-        downloadPhase={appUpdate.downloadPhase}
-        downloadStatus={appUpdate.downloadStatus}
-        networkSpeedLabel={appUpdate.networkSpeedLabel}
-        onStartDownload={appUpdate.startDownloadUpdate}
-        onCheckAgain={appUpdate.checkForUpdates}
-        isChecking={appUpdate.isChecking}
-        lang={lang}
-      />
+      {/* Modal Pembaruan Aplikasi In-App Khusus Android */}
+      {appUpdate.isNativeApp && (
+        <UpdateModal
+          isOpen={appUpdate.showModal}
+          onClose={appUpdate.closeModal}
+          latestInfo={appUpdate.latestInfo}
+          localVersion={appUpdate.localVersion}
+          hasUpdate={appUpdate.hasUpdate}
+          missedCount={appUpdate.missedCount}
+          pendingCount={appUpdate.pendingCount}
+          missedUpdates={appUpdate.missedUpdates}
+          pendingUpdates={appUpdate.pendingUpdates}
+          isDownloading={appUpdate.isDownloading}
+          downloadProgress={appUpdate.downloadProgress}
+          downloadPhase={appUpdate.downloadPhase}
+          downloadStatus={appUpdate.downloadStatus}
+          networkSpeedLabel={appUpdate.networkSpeedLabel}
+          onStartDownload={appUpdate.startDownloadUpdate}
+          onCheckAgain={appUpdate.checkForUpdates}
+          isChecking={appUpdate.isChecking}
+          lang={lang}
+        />
+      )}
     </header>
   );
 }
