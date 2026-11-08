@@ -256,19 +256,36 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
               key={tpl.id}
               className="bg-white dark:bg-[#18181b] border-2 border-black rounded-2xl p-4 shadow-[4px_4px_0px_0px_#000000] hover:shadow-[6px_6px_0px_0px_#000000] hover:-translate-y-0.5 transition-all flex flex-col"
             >
-              {/* Video Player Container */}
-              <div className="relative w-full aspect-[9/12] sm:aspect-[9/13] bg-black rounded-xl overflow-hidden border-2 border-black mb-3.5 group">
-                <video
-                  src={tpl.videoUrl}
-                  poster={tpl.thumbnail}
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
+              {/* Media Container (Video jika ada CDN resmi, atau Cover Preset Neobrutalist Aesthetic) */}
+              <div className="relative w-full aspect-[9/12] sm:aspect-[9/13] bg-zinc-900 rounded-xl overflow-hidden border-2 border-black mb-3.5 group">
+                {tpl.videoUrl ? (
+                  <video
+                    src={tpl.videoUrl}
+                    poster={tpl.thumbnail}
+                    autoPlay
+                    muted
+                    loop
+                    playsInline
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="relative w-full h-full">
+                    <img
+                      src={tpl.thumbnail}
+                      alt={tpl.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      loading="lazy"
+                    />
+                    {/* Center Aesthetic Play Button Badge */}
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/25 group-hover:bg-black/15 transition-colors">
+                      <div className="w-12 h-12 rounded-full bg-yellow-300 border-2 border-black flex items-center justify-center shadow-[3px_3px_0px_#000000] group-hover:scale-110 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all">
+                        <Play className="w-5 h-5 fill-black text-black ml-0.5" />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-                {/* Badges on Top of Video */}
+                {/* Badges on Top of Media */}
                 <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 z-10">
                   {tpl.badge && (
                     <span className="px-2 py-0.5 rounded-md bg-yellow-300 border border-black font-black text-[10px] text-black shadow-[1px_1px_0px_#000000]">
@@ -282,10 +299,10 @@ export default function CapCutFinderScreen({ onBack, onShowToast, lang = 'id' })
                   )}
                 </div>
 
-                {/* Looping indicator bottom right */}
+                {/* Status indicator bottom right */}
                 <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded bg-black/75 border border-white/20 text-[10px] font-bold text-white flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <span>LOOP</span>
+                  <span className={`w-1.5 h-1.5 rounded-full ${tpl.videoUrl ? 'bg-emerald-400 animate-ping' : 'bg-yellow-400'}`} />
+                  <span>{tpl.videoUrl ? 'LOOP' : 'PRESET JJ'}</span>
                 </div>
               </div>
 

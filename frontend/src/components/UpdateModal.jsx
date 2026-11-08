@@ -22,16 +22,16 @@ export default function UpdateModal({
 }) {
   if (!isOpen) return null;
 
-  const newVersion = latestInfo?.latestVersion || '1.3.0';
-  const releaseNotes = latestInfo?.releaseNotes || 'Rilis Pembaruan v1.3.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dan Optimalisasi Real-Time.';
+  const newVersion = latestInfo?.latestVersion || '1.4.0';
+  const releaseNotes = latestInfo?.releaseNotes || 'Rilis Pembaruan v1.4.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dengan Real-Time Search dan In-App Modal Detail.';
   const features = latestInfo?.features || [
-    'Pencari Template CapCut: Cari preset JJ viral via lirik & pratinjau loop video dengan direct link resmi CapCut.',
-    'Pencari Rekomendasi Anime: Rekomendasi cerdas modal pilihan genre & kombinasi genre favorit, rating skor MAL, dan sinopsis.',
-    'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover seni HD, dan sinopsis cerita.',
-    'Real-Time Live Search: Seluruh pencarian dan saringan genre kini berjalan seketika (real-time).',
-    'Penyempurnaan Stabilitas: Pembaruan telemetri sistem bebas proxy error.'
+    'Pencari Template CapCut JJ: Cari preset JJ viral via lirik/lagu dengan direct link resmi CapCut dan cover aesthetic (bebas video dummy).',
+    'Pencari Rekomendasi Anime: Rekomendasi cerdas modal genre tunggal & kombinasi multi-genre, skor rating MAL, dan Modal Detail In-App tanpa redirect keluar.',
+    'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover HD, dan Modal Detail In-App sinopsis lengkap.',
+    'LiveChart.me & Kitsu Manga API: Integrasi data episode & webtoon Korea secara real-time.',
+    'Sistem Update Otomatis: Deteksi perubahan web secara real-time langsung melalui tombol update aplikasi.'
   ];
-  const fileSize = latestInfo?.fileSize || '12.4 MB';
+  const fileSize = latestInfo?.fileSize || '12.8 MB';
   const apkDownloadUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
 
   return (

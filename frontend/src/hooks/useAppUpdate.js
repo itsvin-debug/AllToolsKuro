@@ -46,7 +46,7 @@ export function useAppUpdate() {
       const cacheBuster = `?t=${Date.now()}`;
       let data = null;
 
-      // 1. Prioritas utama: Ambil dari remote Vercel live server agar APK selalu sinkron dengan rilis web terbaru
+      // 1. Ambil dari remote Vercel live server agar APK selalu sinkron dengan rilis web terbaru
       try {
         const remoteRes = await fetch(`https://alltoolskuro.vercel.app/version.json${cacheBuster}`, {
           cache: 'no-store'
@@ -58,7 +58,7 @@ export function useAppUpdate() {
         // Abaikan jika network offline
       }
 
-      // 2. Fallback ke endpoint API remote
+      // 2. Cek endpoint API remote jika version.json belum terupdate
       if (!data) {
         try {
           const apiRes = await fetch(`https://alltoolskuro.vercel.app/api/version${cacheBuster}`);
@@ -70,40 +70,41 @@ export function useAppUpdate() {
         }
       }
 
-      // 3. Fallback ke file version.json lokal
-      if (!data) {
-        try {
-          const localRes = await fetch(`/version.json${cacheBuster}`);
-          if (localRes.ok) {
-            data = await localRes.json();
+      // 3. Bandingkan dengan file version.json lokal (gunakan versi tertinggi jika lokal lebih baru)
+      try {
+        const localRes = await fetch(`/version.json${cacheBuster}`);
+        if (localRes.ok) {
+          const localData = await localRes.json();
+          if (localData && (!data || isVersionHigher(localData.latestVersion, data.latestVersion))) {
+            data = localData;
           }
-        } catch {
-          // Abaikan
         }
+      } catch {
+        // Abaikan
       }
 
       if (!data) {
-        // Fallback data rilis terbaru jika server tidak merespon
+        // Fallback data rilis terbaru jika server offline
         data = {
-          latestVersion: '1.3.0',
-          versionCode: 3,
-          releaseNotes: 'Rilis Pembaruan v1.3.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dan Optimalisasi Real-Time.',
+          latestVersion: '1.4.0',
+          versionCode: 4,
+          releaseNotes: 'Rilis Pembaruan v1.4.0: 3 Fitur Baru (CapCut JJ, Rekomendasi Anime & Manhwa) dengan Real-Time Search dan In-App Modal Detail.',
           features: [
-            'Pencari Template CapCut: Cari preset JJ viral via lirik & pratinjau loop video dengan direct link resmi CapCut.',
-            'Pencari Rekomendasi Anime: Rekomendasi cerdas modal pilihan genre & kombinasi genre favorit, rating skor MAL, dan sinopsis.',
-            'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover seni HD, dan sinopsis cerita.',
-            'Real-Time Live Search: Seluruh pencarian dan saringan genre kini berjalan seketika (real-time).',
-            'Penyempurnaan Stabilitas: Pembaruan telemetri sistem bebas proxy error.'
+            'Pencari Template CapCut JJ: Cari preset JJ viral via lirik/lagu dengan direct link resmi CapCut dan cover aesthetic (bebas video dummy).',
+            'Pencari Rekomendasi Anime: Rekomendasi cerdas modal genre tunggal & kombinasi multi-genre, skor rating MAL, dan Modal Detail In-App tanpa redirect keluar.',
+            'Pencari Rekomendasi Manhwa: Kurasi webtoon Korea modal kombinasi genre, rating pembaca, cover HD, dan Modal Detail In-App sinopsis lengkap.',
+            'LiveChart.me & Kitsu Manga API: Integrasi data episode & webtoon Korea secara real-time.',
+            'Sistem Update Otomatis: Deteksi perubahan web secara real-time langsung melalui tombol update aplikasi.'
           ],
           apkUrl: 'https://alltoolskuro.vercel.app/AllToolsKuro.apk',
-          fileSize: '12.4 MB',
+          fileSize: '12.8 MB',
           publishedAt: '2026-11-08'
         };
       }
 
       setLatestInfo(data);
 
-      const serverVersion = data.latestVersion || '1.3.0';
+      const serverVersion = data.latestVersion || '1.4.0';
       const installedVer = getInstalledAppVersion();
       setCurrentInstalledVersion(installedVer);
 
@@ -156,7 +157,7 @@ export function useAppUpdate() {
             setDownloadStatus('completed');
             setIsDownloading(false);
 
-            const serverVer = latestInfo?.latestVersion || '1.2.0';
+            const serverVer = latestInfo?.latestVersion || '1.4.0';
             const apkUrl = latestInfo?.apkUrl || 'https://alltoolskuro.vercel.app/AllToolsKuro.apk';
             
             // Catat versi terbaru sebagai terpasang sehingga kedip & notif merah hilang

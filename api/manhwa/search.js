@@ -221,7 +221,65 @@ export default async function handler(req, res) {
     console.warn('[Jikan v4 Manhwa] Fetch warning, activating resilient fallback:', err.message);
   }
 
-  // 2. Fallback cerdas: Saring dataset kurasi lokal agar pengguna tidak mengalami layar kosong
+  // 2. Provider Sekunder: Kitsu Manga API Publik untuk Komik Korea (Manhwa)
+  try {
+    const kitsuParams = {
+      'filter[subtype]': 'manhwa',
+      'page[limit]': 20
+    };
+    if (query) {
+      kitsuParams['filter[text]'] = query;
+    } else {
+      kitsuParams['sort'] = '-averageRating';
+    }
+
+    const kitsuBase = process.env.KITSU_API_BASE || 'https://kitsu.io/api/edge';
+    const kitsuRes = await axios.get(`${kitsuBase}/manga`, {
+      params: kitsuParams,
+      timeout: 5000,
+      headers: {
+        'Accept': 'application/vnd.api+json',
+        'Content-Type': 'application/vnd.api+json'
+      }
+    });
+
+    const kItems = kitsuRes.data?.data;
+    if (Array.isArray(kItems) && kItems.length > 0) {
+      const formatted = kItems.map(item => {
+        const attr = item.attributes || {};
+        const avgRating = attr.averageRating ? parseFloat((parseFloat(attr.averageRating) / 10).toFixed(1)) : 8.5;
+        return {
+          id: `kitsu-${item.id}`,
+          title: {
+            english: attr.canonicalTitle || attr.titles?.en || 'Manhwa Title',
+            romaji: attr.titles?.en_jp || attr.canonicalTitle || 'Romaji',
+            native: attr.titles?.ja_jp || ''
+          },
+          score: avgRating,
+          description: cleanHtmlTags(attr.synopsis || attr.description) || 'Sinopsis manhwa belum tersedia.',
+          coverImage: attr.posterImage?.large || attr.posterImage?.original || 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
+          genres: genreNames.length > 0 ? genreNames : ['Manhwa', 'Webtoon'],
+          chapters: attr.chapterCount || null,
+          format: 'MANHWA',
+          status: attr.status === 'finished' ? 'FINISHED' : 'RELEASING',
+          siteUrl: `https://kitsu.io/manga/${attr.slug || item.id}`
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        source: 'kitsu_manga',
+        query,
+        genres: genreNames,
+        count: formatted.length,
+        data: formatted
+      });
+    }
+  } catch (err) {
+    console.warn('[Kitsu Manga API] Fetch warning, proceeding to curated dataset:', err.message);
+  }
+
+  // 3. Fallback cerdas: Saring dataset kurasi lokal agar pengguna tidak mengalami layar kosong
   let filtered = [...CURATED_MANHWA_BACKUP];
   if (query) {
     const qLower = query.toLowerCase();

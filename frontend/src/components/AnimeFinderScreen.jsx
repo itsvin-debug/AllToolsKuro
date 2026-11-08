@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import CosmicBackButton from './CosmicBackButton';
+import MediaDetailModal from './MediaDetailModal';
 import { translations } from '../utils/translations';
 import { searchAnimeRealtime, CURATED_ANIME_DATA } from '../services/animeService';
 import { 
@@ -59,6 +60,7 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
   const [animeList, setAnimeList] = useState(() => CURATED_ANIME_DATA);
   const [expandedIds, setExpandedIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
+  const [selectedAnime, setSelectedAnime] = useState(null);
   const inputRef = useRef(null);
 
   // Pencarian & penyaringan real-time saat teks atau kombinasi genre berubah (debounce 200ms)
@@ -151,8 +153,7 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
   };
 
   const handleOpenDetail = (anime) => {
-    const url = anime.siteUrl || `https://myanimelist.net/anime.php?q=${encodeURIComponent(anime.title?.english || anime.title?.romaji)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    setSelectedAnime(anime);
   };
 
   return (
@@ -479,8 +480,8 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
                     onClick={() => handleOpenDetail(anime)}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-cyan-300 hover:bg-cyan-400 text-black font-black text-xs sm:text-sm border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
                   >
-                    <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>{at.openOfficial}</span>
+                    <BookOpen className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>{lang === 'en' ? 'View Details' : 'Lihat Detail'}</span>
                   </button>
 
                   <button
@@ -527,6 +528,16 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
           </button>
         </div>
       )}
+
+      {/* Modal Popup In-App Detail Neobrutalism (Tanpa Redirect Luar) */}
+      <MediaDetailModal
+        isOpen={Boolean(selectedAnime)}
+        onClose={() => setSelectedAnime(null)}
+        item={selectedAnime}
+        mediaType="anime"
+        lang={lang}
+        onShowToast={onShowToast}
+      />
     </div>
   );
 }

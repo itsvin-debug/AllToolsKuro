@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import CosmicBackButton from './CosmicBackButton';
+import MediaDetailModal from './MediaDetailModal';
 import { translations } from '../utils/translations';
 import { searchManhwaRealtime, CURATED_MANHWA_DATA } from '../services/manhwaService';
 import { 
@@ -57,6 +58,7 @@ export default function ManhwaFinderScreen({ onBack, onShowToast, lang = 'id' })
   const [manhwaList, setManhwaList] = useState(() => CURATED_MANHWA_DATA);
   const [expandedIds, setExpandedIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
+  const [selectedManhwa, setSelectedManhwa] = useState(null);
   const inputRef = useRef(null);
 
   // Pencarian & penyaringan real-time saat teks atau kombinasi genre berubah (debounce 200ms)
@@ -149,8 +151,7 @@ export default function ManhwaFinderScreen({ onBack, onShowToast, lang = 'id' })
   };
 
   const handleOpenDetail = (manhwa) => {
-    const url = manhwa.siteUrl || `https://myanimelist.net/manga.php?q=${encodeURIComponent(manhwa.title?.english || manhwa.title?.romaji)}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    setSelectedManhwa(manhwa);
   };
 
   return (
@@ -477,8 +478,8 @@ export default function ManhwaFinderScreen({ onBack, onShowToast, lang = 'id' })
                     onClick={() => handleOpenDetail(manhwa)}
                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-300 hover:bg-purple-400 text-black font-black text-xs sm:text-sm border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer"
                   >
-                    <ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>{mt.openOfficial}</span>
+                    <BookOpen className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>{lang === 'en' ? 'View Details' : 'Lihat Detail'}</span>
                   </button>
 
                   <button
@@ -525,6 +526,16 @@ export default function ManhwaFinderScreen({ onBack, onShowToast, lang = 'id' })
           </button>
         </div>
       )}
+
+      {/* Modal Popup In-App Detail Neobrutalism (Tanpa Redirect Luar) */}
+      <MediaDetailModal
+        isOpen={Boolean(selectedManhwa)}
+        onClose={() => setSelectedManhwa(null)}
+        item={selectedManhwa}
+        mediaType="manhwa"
+        lang={lang}
+        onShowToast={onShowToast}
+      />
     </div>
   );
 }

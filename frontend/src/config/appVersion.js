@@ -1,7 +1,9 @@
 // frontend/src/config/appVersion.js - Konfigurasi versi lokal aplikasi AllToolsKuro
 
-export const LOCAL_APP_VERSION = '1.3.0';
-export const LOCAL_VERSION_CODE = 3;
+export const LOCAL_APP_VERSION = '1.2.0';
+export const LOCAL_VERSION_CODE = 2;
+export const LATEST_TARGET_VERSION = '1.4.0';
+export const LATEST_TARGET_CODE = 4;
 export const APP_PACKAGE_ID = 'com.kuro.alltools';
 export const APP_DISPLAY_NAME = 'AllToolsKuro';
 

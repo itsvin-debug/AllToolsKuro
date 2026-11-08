@@ -221,7 +221,67 @@ export default async function handler(req, res) {
     console.warn('[Jikan v4 Anime] Fetch warning, activating resilient fallback:', err.message);
   }
 
-  // 2. Fallback cerdas: Saring dataset kurasi lokal agar pengguna tidak mengalami layar kosong
+  // 2. Provider Sekunder: LiveChart.me Airing Episodes Feed
+  try {
+    const liveChartUrl = process.env.LIVECHART_API_BASE || 'https://www.livechart.me/feeds/episodes';
+    const lcRes = await axios.get(liveChartUrl, {
+      timeout: 5000,
+      headers: {
+        'User-Agent': 'AllToolsKuro/1.4.0 (KuroStudio Platform)'
+      }
+    });
+
+    const xml = lcRes.data;
+    if (typeof xml === 'string' && xml.includes('<item>')) {
+      const items = [];
+      const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+      let match;
+      let count = 0;
+      while ((match = itemRegex.exec(xml)) !== null && count < 20) {
+        const itemBlock = match[1];
+        const titleMatch = itemBlock.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || itemBlock.match(/<title>(.*?)<\/title>/);
+        const linkMatch = itemBlock.match(/<link>(.*?)<\/link>/);
+        const descMatch = itemBlock.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) || itemBlock.match(/<description>(.*?)<\/description>/);
+        const imgMatch = itemBlock.match(/<media:thumbnail[^>]+url="([^"]+)"/) || itemBlock.match(/<enclosure[^>]+url="([^"]+)"/);
+
+        const rawTitle = titleMatch ? titleMatch[1].trim() : '';
+        if (rawTitle) {
+          items.push({
+            id: `livechart-${count + 1}`,
+            title: {
+              english: rawTitle,
+              romaji: rawTitle,
+              native: ''
+            },
+            score: 8.5,
+            description: cleanHtmlTags(descMatch ? descMatch[1] : '') || 'Episode terbaru tersinkronisasi via LiveChart.me.',
+            coverImage: imgMatch ? imgMatch[1] : 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
+            genres: genreNames.length > 0 ? genreNames : ['Anime', 'Airing'],
+            episodes: null,
+            format: 'TV',
+            status: 'RELEASING',
+            siteUrl: linkMatch ? linkMatch[1] : 'https://www.livechart.me'
+          });
+          count++;
+        }
+      }
+
+      if (items.length > 0) {
+        return res.status(200).json({
+          success: true,
+          source: 'livechart_episodes',
+          query,
+          genres: genreNames,
+          count: items.length,
+          data: items
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('[LiveChart Feed] Fetch warning, proceeding to curated dataset:', err.message);
+  }
+
+  // 3. Fallback cerdas: Saring dataset kurasi lokal agar pengguna tidak mengalami layar kosong
   let filtered = [...CURATED_ANIME_BACKUP];
   if (query) {
     const qLower = query.toLowerCase();

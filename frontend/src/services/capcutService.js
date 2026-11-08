@@ -6,51 +6,6 @@
 
 export const CURATED_TEMPLATES = [
   {
-    id: 'cc-wong-ai-ni-01',
-    title: 'JJ Wong Ai Ni Kane Slow Beat',
-    creator: 'FaJaruzumaki',
-    creatorHandle: '@fajar_preset',
-    lyrics: 'wong ai ni wo ai ni slow beat mengkane',
-    tags: ['wong ai ni', 'jedag jedug', 'slow beat', 'kane', 'viral'],
-    uses: '1.4M Digunakan',
-    duration: '0:15',
-    thumbnail: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-    capcutUrl: 'https://www.capcut.com/t/Zs82vXqNm/',
-    deepLink: 'capcut://template/detail?template_id=7391823901823&enter_from=kuro_studio',
-    badge: 'VIRAL'
-  },
-  {
-    id: 'cc-wong-ai-ni-02',
-    title: 'JJ Wong Ai Ni Mengkane Full Beat 9:16',
-    creator: 'Kuro Editor',
-    creatorHandle: '@kuro_jj',
-    lyrics: 'wong ai ni ni ai wo jedag jedug jedor',
-    tags: ['wong ai ni', 'full beat', 'mengkane', 'preset 9:16'],
-    uses: '920K Digunakan',
-    duration: '0:18',
-    thumbnail: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
-    capcutUrl: 'https://www.capcut.com/t/Zs8Qp0m1a/',
-    deepLink: 'capcut://template/detail?template_id=7381920391823&enter_from=kuro_studio',
-    badge: 'POPULAR'
-  },
-  {
-    id: 'cc-wong-ai-ni-03',
-    title: 'JJ Wong Ai Ni Tipis Ayun Kece',
-    creator: 'Alight Pro JJ',
-    creatorHandle: '@alight_pro',
-    lyrics: 'wong ai ni tipis ayun sound fajar',
-    tags: ['wong ai ni', 'jj tipis', 'ayun', 'kece'],
-    uses: '654K Digunakan',
-    duration: '0:14',
-    thumbnail: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://filesamples.com/samples/video/mp4/sample_640x360.mp4',
-    capcutUrl: 'https://www.capcut.com/t/Zs81bKl9o/',
-    deepLink: 'capcut://template/detail?template_id=7372910391820&enter_from=kuro_studio',
-    badge: 'TRENDING'
-  },
-  {
     id: 'cc-dj-kane-01',
     title: 'DJ Jedag Jedug Mengkane Sound Viral TikTok',
     creator: 'Yuan The Clipper',
@@ -60,7 +15,7 @@ export const CURATED_TEMPLATES = [
     uses: '2.1M Digunakan',
     duration: '0:21',
     thumbnail: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs89mN2Lk/',
     deepLink: 'capcut://template/detail?template_id=7361928301928&enter_from=kuro_studio',
     badge: 'HOT'
@@ -75,7 +30,7 @@ export const CURATED_TEMPLATES = [
     uses: '1.8M Digunakan',
     duration: '0:12',
     thumbnail: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs8KL81mn/',
     deepLink: 'capcut://template/detail?template_id=7351920391829&enter_from=kuro_studio',
     badge: '1 FOTO'
@@ -90,7 +45,7 @@ export const CURATED_TEMPLATES = [
     uses: '850K Digunakan',
     duration: '0:16',
     thumbnail: 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://filesamples.com/samples/video/mp4/sample_640x360.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs8PlM87q/',
     deepLink: 'capcut://template/detail?template_id=7341920391823&enter_from=kuro_studio',
     badge: 'VIRAL'
@@ -105,7 +60,7 @@ export const CURATED_TEMPLATES = [
     uses: '1.1M Digunakan',
     duration: '0:20',
     thumbnail: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs8Xz90Lm/',
     deepLink: 'capcut://template/detail?template_id=7331920391821&enter_from=kuro_studio',
     badge: 'HD'
@@ -120,7 +75,7 @@ export const CURATED_TEMPLATES = [
     uses: '740K Digunakan',
     duration: '0:17',
     thumbnail: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs8Wq12Kp/',
     deepLink: 'capcut://template/detail?template_id=7321920391820&enter_from=kuro_studio',
     badge: 'DARK'
@@ -135,7 +90,7 @@ export const CURATED_TEMPLATES = [
     uses: '1.6M Digunakan',
     duration: '0:19',
     thumbnail: 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://filesamples.com/samples/video/mp4/sample_640x360.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs8KL09Pm/',
     deepLink: 'capcut://template/detail?template_id=7311920391820&enter_from=kuro_studio',
     badge: 'REMIX'
@@ -150,10 +105,25 @@ export const CURATED_TEMPLATES = [
     uses: '1.3M Digunakan',
     duration: '0:16',
     thumbnail: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=600&auto=format&fit=crop&q=80',
-    videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+    videoUrl: null,
     capcutUrl: 'https://www.capcut.com/t/Zs8PL98Km/',
     deepLink: 'capcut://template/detail?template_id=7301920391820&enter_from=kuro_studio',
     badge: 'FYP'
+  },
+  {
+    id: 'cc-slowmo-ayun-01',
+    title: 'JJ Slowmo Ayun Kece Smooth 60FPS',
+    creator: 'Alight Pro JJ',
+    creatorHandle: '@alight_pro',
+    lyrics: 'slowmo ayun beat kane fajar',
+    tags: ['jj tipis', 'ayun', 'slowmo', 'kece'],
+    uses: '950K Digunakan',
+    duration: '0:15',
+    thumbnail: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
+    videoUrl: null,
+    capcutUrl: 'https://www.capcut.com/t/Zs81bKl9o/',
+    deepLink: 'capcut://template/detail?template_id=7372910391820&enter_from=kuro_studio',
+    badge: 'SMOOTH'
   }
 ];
 
@@ -202,7 +172,7 @@ export async function searchCapCutRealtime(query = '') {
           uses: '870K Digunakan',
           duration: '0:16',
           thumbnail: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
-          videoUrl: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
+          videoUrl: null,
           capcutUrl: `https://www.capcut.com/id-id/templates?q=${encodeURIComponent(cleanQ)}`,
           deepLink: `capcut://template/search?keyword=${encodeURIComponent(cleanQ)}`,
           badge: 'LIVE MATCH'
