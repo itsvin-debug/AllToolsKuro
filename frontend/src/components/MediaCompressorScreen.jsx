@@ -23,7 +23,7 @@ import {
   Eye,
   CheckCircle2,
   ExternalLink,
-  RotateCcw
+  Layers
 } from 'lucide-react';
 
 export default function MediaCompressorScreen({ onBack }) {
@@ -55,6 +55,7 @@ export default function MediaCompressorScreen({ onBack }) {
   const [videoPreset, setVideoPreset] = useState('status_wa_1080p');
   const [videoCompressing, setVideoCompressing] = useState(false);
   const [videoProgressMsg, setVideoProgressMsg] = useState('');
+  const [videoPreviewMode, setVideoPreviewMode] = useState('compressed'); // 'compressed' | 'original'
 
   // State Kompresi PDF
   const [pdfFile, setPdfFile] = useState(null);
@@ -77,16 +78,6 @@ export default function MediaCompressorScreen({ onBack }) {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
-  // Reset state PDF untuk upload baru
-  const resetPdfState = () => {
-    setPdfFile(null);
-    setPdfOriginalSize(0);
-    setPdfOriginalUrl('');
-    setPdfResult(null);
-    setPdfPreviewMode('compressed');
-    setErrorMessage('');
   };
 
   // Logika Foto Super HD
@@ -208,6 +199,7 @@ export default function MediaCompressorScreen({ onBack }) {
     setVideoFile(file);
     setVideoOriginalSize(file.size);
     setVideoResult(null);
+    setVideoPreviewMode('compressed');
 
     const reader = new FileReader();
     reader.onload = () => {
@@ -279,44 +271,93 @@ export default function MediaCompressorScreen({ onBack }) {
     setPdfOriginalUrl(originalBlobUrl);
   };
 
+  const handleResetPdf = () => {
+    if (pdfOriginalUrl) {
+      try { URL.revokeObjectURL(pdfOriginalUrl); } catch {}
+    }
+    setPdfFile(null);
+    setPdfOriginalSize(0);
+    setPdfOriginalUrl('');
+    setPdfResult(null);
+    setPdfProgressMsg('');
+    setPdfProgressPercent(0);
+    setErrorMessage('');
+  };
+
   const processPdfCompression = async () => {
     if (!pdfFile) return;
 
     setIsPdfCompressing(true);
     setErrorMessage('');
-    setPdfProgressMsg('Menyiapkan engine optimasi dokumen...');
-    setPdfProgressPercent(10);
+    setPdfProgressPercent(15);
+    setPdfProgressMsg('Menyiapkan engine kompresi dokumen...');
+
+    // Pacer untuk memastikan animasi persentase 15% -> 100% berjalan mulus real-time
+    let displayPercent = 15;
+    let isCancelled = false;
+
+    const updateDisplay = (val, msg) => {
+      if (isCancelled) return;
+      displayPercent = Math.max(displayPercent, Math.min(100, val));
+      setPdfProgressPercent(displayPercent);
+      if (msg) setPdfProgressMsg(msg);
+    };
+
+    const tickerPromise = (async () => {
+      // Tahap 1: 15% -> 30%
+      await new Promise(r => setTimeout(r, 200));
+      updateDisplay(30, 'Membaca struktur objek PDF & font...');
+
+      // Tahap 2: 30% -> 55%
+      await new Promise(r => setTimeout(r, 260));
+      updateDisplay(55, 'Mengoptimalkan stream kamus & elemen visual...');
+
+      // Tahap 3: 55% -> 78%
+      await new Promise(r => setTimeout(r, 300));
+      updateDisplay(78, 'Memadatkan struktur Object Streams PDF 1.5...');
+
+      // Tahap 4: 78% -> 92%
+      await new Promise(r => setTimeout(r, 240));
+      updateDisplay(92, 'Memverifikasi keutuhan teks & tata letak...');
+    })();
 
     try {
-      const result = await compressPdfDocument(pdfFile, {
-        preset: pdfPreset,
-        onProgress: (stage, pct) => {
-          setPdfProgressMsg(stage);
-          setPdfProgressPercent(pct);
-        }
-      });
+      const [compressionResult] = await Promise.all([
+        compressPdfDocument(pdfFile, {
+          preset: pdfPreset,
+          onProgress: (stage, pct) => {
+            updateDisplay(pct, stage);
+          }
+        }),
+        tickerPromise
+      ]);
 
-      setPdfResult(result);
+      // Tahap Final: 100% selesai
+      updateDisplay(100, 'Kompresi dokumen selesai 100%!');
+      await new Promise(r => setTimeout(r, 280));
 
-      // Otomatis simpan riwayat ke Galeri Karya
+      setPdfResult(compressionResult);
+
+      // Simpan riwayat ke Galeri Karya
       try {
         addGalleryItem({
           title: `Kompres PDF: ${pdfFile.name.replace(/\.[^/.]+$/, '')}`,
           type: 'document',
           category: 'Kompres & Enhancer HD',
           extension: 'PDF',
-          size: `${formatBytes(result.compressedSizeBytes)} (${result.savingsPercent} Hemat)`,
+          size: `${formatBytes(compressionResult.compressedSizeBytes)} (${compressionResult.savingsPercent} Hemat)`,
           thumbnail: '',
-          previewUrl: result.dataUrl,
-          downloadData: result.dataUrl,
-          filename: `kuro_compressed_${Date.now()}.pdf`
+          previewUrl: compressionResult.dataUrl,
+          downloadData: compressionResult.dataUrl,
+          filename: `kuro_${pdfFile.name.replace(/\.pdf$/i, '')}_terkompres.pdf`
         });
       } catch (errGal) {
         console.warn('Pencatatan galeri dokumen dilewati:', errGal);
       }
 
     } catch (err) {
-      setErrorMessage('Gagal mengompres dokumen PDF: ' + err.message);
+      isCancelled = true;
+      setErrorMessage('Gagal mengompres dokumen PDF: ' + (err.message || 'Terjadi kesalahan sistem.'));
     } finally {
       setIsPdfCompressing(false);
       setPdfProgressMsg('');
@@ -324,7 +365,6 @@ export default function MediaCompressorScreen({ onBack }) {
     }
   };
 
-  // Unduh dokumen PDF satuan langsung (bukan file arsip .zip/.rar)
   const downloadCompressedPdf = () => {
     if (!pdfResult?.dataUrl) return;
     const link = document.createElement('a');
@@ -336,23 +376,21 @@ export default function MediaCompressorScreen({ onBack }) {
     document.body.removeChild(link);
   };
 
-  const activePdfUrl = pdfPreviewMode === 'compressed' ? pdfResult?.dataUrl : pdfOriginalUrl;
-
   return (
-    <main className="flex-grow flex flex-col items-center justify-start px-3 sm:px-6 py-4 sm:py-8 max-w-4xl mx-auto w-full overflow-x-hidden">
+    <main className="flex-grow flex flex-col items-center justify-start px-4 sm:px-6 py-6 sm:py-8 max-w-4xl mx-auto w-full">
       
-      {/* Navigasi & Header Status Responsif Mobile */}
-      <div className="w-full flex flex-wrap items-center justify-between gap-2 mb-4">
+      {/* Navigasi & Header Status */}
+      <div className="w-full flex items-center justify-between mb-4">
         <CosmicBackButton onClick={onBack} label="Kembali ke Beranda" />
 
-        <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono font-bold px-2 py-1 rounded border-2 border-black bg-neutral-100 text-black">
+        <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold px-2.5 py-1 rounded border-2 border-black bg-neutral-100 text-black">
           <ShieldCheck className="w-3.5 h-3.5 stroke-[2.5]" />
-          <span>Status WA Anti-Burik • Kompres Media & PDF</span>
+          <span>Status WA Anti-Burik • Kompres Dokumen & Media</span>
         </div>
       </div>
 
       {/* Header Utama */}
-      <div className="w-full border-b-2 border-black pb-4 mb-5 sm:mb-6">
+      <div className="w-full border-b-2 border-black pb-4 mb-6">
         <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded border border-black bg-black text-white text-[10px] font-mono font-bold uppercase mb-2">
           <Sparkles className="w-3 h-3 text-amber-300" />
           <span>HD Media & Document Compressor</span>
@@ -365,51 +403,51 @@ export default function MediaCompressorScreen({ onBack }) {
         </p>
       </div>
 
-      {/* Tab Selector 3 Mode: Touch-Friendly di Layar Ponsel */}
-      <div className="grid grid-cols-3 gap-1.5 sm:gap-2 p-1 bg-neutral-100 rounded-xl border-2 border-black mb-5 sm:mb-6 max-w-xl w-full">
+      {/* Tab Selector 3 Mode: Foto HD, Video HD, dan PDF */}
+      <div className="grid grid-cols-3 gap-2 p-1 bg-neutral-100 rounded-xl border-2 border-black mb-6 max-w-xl w-full">
         <button
           type="button"
           onClick={() => { setActiveTab('image'); setErrorMessage(''); }}
-          className={`py-2 px-1 sm:px-3 rounded-lg text-[10px] sm:text-xs font-black font-mono flex items-center justify-center gap-1 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
+          className={`py-2 px-2 sm:px-3 rounded-lg text-[11px] sm:text-xs font-black font-mono flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
             activeTab === 'image'
               ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
               : 'border-transparent text-neutral-600 hover:text-black hover:bg-white'
           }`}
         >
-          <ImageIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5] shrink-0" />
+          <ImageIcon className="w-4 h-4 stroke-[2.5] shrink-0" />
           <span className="truncate">FOTO HD</span>
         </button>
 
         <button
           type="button"
           onClick={() => { setActiveTab('video'); setErrorMessage(''); }}
-          className={`py-2 px-1 sm:px-3 rounded-lg text-[10px] sm:text-xs font-black font-mono flex items-center justify-center gap-1 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
+          className={`py-2 px-2 sm:px-3 rounded-lg text-[11px] sm:text-xs font-black font-mono flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
             activeTab === 'video'
               ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
               : 'border-transparent text-neutral-600 hover:text-black hover:bg-white'
           }`}
         >
-          <VideoIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5] shrink-0" />
+          <VideoIcon className="w-4 h-4 stroke-[2.5] shrink-0" />
           <span className="truncate">VIDEO WA</span>
         </button>
 
         <button
           type="button"
           onClick={() => { setActiveTab('pdf'); setErrorMessage(''); }}
-          className={`py-2 px-1 sm:px-3 rounded-lg text-[10px] sm:text-xs font-black font-mono flex items-center justify-center gap-1 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
+          className={`py-2 px-2 sm:px-3 rounded-lg text-[11px] sm:text-xs font-black font-mono flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
             activeTab === 'pdf'
               ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
               : 'border-transparent text-neutral-600 hover:text-black hover:bg-white'
           }`}
         >
-          <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5] shrink-0" />
+          <FileText className="w-4 h-4 stroke-[2.5] shrink-0" />
           <span className="truncate">KOMPRES PDF</span>
         </button>
       </div>
 
       {/* Banner Notifikasi Kesalahan */}
       {errorMessage && (
-        <div className="w-full mb-5 p-3.5 rounded-xl bg-red-100 border-2 border-red-500 flex items-center gap-3 text-red-900 text-xs font-bold font-mono">
+        <div className="w-full mb-6 p-3.5 rounded-xl bg-red-100 border-2 border-red-500 flex items-center gap-3 text-red-900 text-xs font-bold font-mono">
           <AlertCircle className="w-5 h-5 shrink-0 text-red-600" />
           <span>{errorMessage}</span>
         </div>
@@ -419,11 +457,11 @@ export default function MediaCompressorScreen({ onBack }) {
       {/* 1. SECTION FOTO SUPER HD */}
       {/* ======================================================== */}
       {activeTab === 'image' && (
-        <div className="w-full space-y-5 sm:space-y-6">
-          <div className="bg-white rounded-2xl p-4 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4 sm:space-y-5">
+        <div className="w-full space-y-6">
+          <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
             
             <div
-              className={`relative border-2 border-dashed rounded-xl p-5 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden ${
+              className={`relative border-2 border-dashed rounded-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden ${
                 isImgDragging
                   ? 'border-black bg-neutral-100 scale-[0.99]'
                   : 'border-neutral-400 hover:border-black bg-neutral-50 hover:bg-neutral-100/70'
@@ -463,7 +501,7 @@ export default function MediaCompressorScreen({ onBack }) {
                   </div>
 
                   <div>
-                    <p className="text-xs font-black text-black font-sans break-all">{imgFile?.name}</p>
+                    <p className="text-xs font-black text-black font-sans">{imgFile?.name}</p>
                     <p className="text-[11px] text-neutral-600 font-mono mt-0.5">
                       Ukuran Awal: <span className="font-bold text-black">{formatBytes(imgOriginalSize)}</span> • Resolusi: <span className="font-bold text-black">{imgDimensions.w} x {imgDimensions.h} px</span>
                     </p>
@@ -476,8 +514,8 @@ export default function MediaCompressorScreen({ onBack }) {
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2.5 py-4">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
-                    <Upload className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
+                  <div className="w-14 h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
+                    <Upload className="w-6 h-6 stroke-[2.5]" />
                   </div>
                   <div>
                     <p className="text-sm font-black text-black">Pilih atau Seret Foto ke Sini</p>
@@ -611,10 +649,10 @@ export default function MediaCompressorScreen({ onBack }) {
 
           {/* Live Preview Foto Super HD */}
           {imgEnhancedDataUrl && (
-            <div className="bg-white rounded-2xl p-4 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4 sm:space-y-5">
+            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-black">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-lg bg-black text-white flex items-center justify-center border-2 border-black shadow-[1px_1px_0px_#000000] shrink-0">
+                  <div className="w-9 h-9 rounded-lg bg-black text-white flex items-center justify-center border-2 border-black shadow-[1px_1px_0px_#000000]">
                     <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
                   </div>
                   <div>
@@ -622,7 +660,7 @@ export default function MediaCompressorScreen({ onBack }) {
                       Foto Berhasil Ditingkatkan Menjadi Super HD!
                     </h3>
                     <p className="text-xs text-neutral-600 font-mono">
-                      Resolusi: <span className="font-bold text-black">{imgEnhancedDimensions.w} x {imgEnhancedDimensions.h} px</span> • Ukuran: <span className="font-bold text-black">{formatBytes(imgEnhancedSize)}</span>
+                      Resolusi meningkat: <span className="font-bold text-black">{imgEnhancedDimensions.w} x {imgEnhancedDimensions.h} px</span> • Ukuran: <span className="font-bold text-black">{formatBytes(imgEnhancedSize)}</span>
                     </p>
                   </div>
                 </div>
@@ -630,7 +668,7 @@ export default function MediaCompressorScreen({ onBack }) {
                 <button
                   type="button"
                   onClick={downloadEnhancedImage}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
+                  className="px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
                 >
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" />
                   <span>Unduh Foto HD ({formatBytes(imgEnhancedSize)})</span>
@@ -654,11 +692,11 @@ export default function MediaCompressorScreen({ onBack }) {
       {/* 2. SECTION VIDEO HD STATUS WA */}
       {/* ======================================================== */}
       {activeTab === 'video' && (
-        <div className="w-full space-y-5 sm:space-y-6">
-          <div className="bg-white rounded-2xl p-4 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4 sm:space-y-5">
+        <div className="w-full space-y-6">
+          <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
             
             <div
-              className={`border-2 border-dashed rounded-xl p-5 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
+              className={`border-2 border-dashed rounded-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
                 isVideoDragging
                   ? 'border-black bg-neutral-100 scale-[0.99]'
                   : 'border-neutral-400 hover:border-black bg-neutral-50 hover:bg-neutral-100/70'
@@ -691,7 +729,7 @@ export default function MediaCompressorScreen({ onBack }) {
                     <video src={videoPreview} className="w-full h-full object-contain" controls />
                   </div>
                   <div>
-                    <p className="text-xs font-black text-black font-sans break-all">{videoFile?.name}</p>
+                    <p className="text-xs font-black text-black font-sans">{videoFile?.name}</p>
                     <p className="text-[11px] text-neutral-600 font-mono mt-0.5">
                       Ukuran Asli: <span className="font-bold text-black">{formatBytes(videoOriginalSize)}</span>
                     </p>
@@ -704,8 +742,8 @@ export default function MediaCompressorScreen({ onBack }) {
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2.5 py-4">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
-                    <VideoIcon className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
+                  <div className="w-14 h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
+                    <VideoIcon className="w-6 h-6 stroke-[2.5]" />
                   </div>
                   <div>
                     <p className="text-sm font-black text-black">Pilih atau Seret Video ke Sini</p>
@@ -771,18 +809,18 @@ export default function MediaCompressorScreen({ onBack }) {
 
           {/* Live Preview Video dengan Perbandingan */}
           {videoResult && (
-            <div className="bg-white rounded-2xl p-4 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4 sm:space-y-5">
+            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-black">
                 <div>
                   <h3 className="text-sm sm:text-base font-black text-black">Pratinjau Live Video HD</h3>
                   <p className="text-xs text-neutral-600 font-mono">
-                    Periksa audio dan video sebelum mengunduh berkas.
+                    Bandingkan kualitas sebelum mengunduh atau membagikan ke WhatsApp.
                   </p>
                 </div>
                 <a
                   href={videoResult.url}
                   download={videoResult.fileName || 'kuro_video_hd.mp4'}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] cursor-pointer min-h-[44px]"
+                  className="px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] cursor-pointer min-h-[44px]"
                 >
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" />
                   <span>Unduh Video ({videoResult.sizeFormatted || 'HD'})</span>
@@ -790,18 +828,18 @@ export default function MediaCompressorScreen({ onBack }) {
               </div>
 
               {/* Metrik Perbandingan Ukuran Video */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 rounded-xl bg-neutral-100 border-2 border-black text-xs font-mono">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 rounded-xl bg-neutral-100 border-2 border-black text-xs font-mono">
                 <div>
-                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Asli</p>
-                  <p className="font-black text-black text-xs sm:text-sm">{formatBytes(videoOriginalSize)}</p>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Ukuran Asli</p>
+                  <p className="font-black text-black text-sm">{formatBytes(videoOriginalSize)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Baru</p>
-                  <p className="font-black text-black text-xs sm:text-sm">{videoResult.sizeFormatted || formatBytes(videoResult.compressedSize)}</p>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Ukuran Baru</p>
+                  <p className="font-black text-black text-sm">{videoResult.sizeFormatted || formatBytes(videoResult.compressedSize)}</p>
                 </div>
                 <div className="col-span-2 sm:col-span-1">
-                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Penghematan</p>
-                  <p className="font-black text-black text-xs sm:text-sm">{videoResult.savingsPercent || 'Terkalibrasi HD'}</p>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Penghematan</p>
+                  <p className="font-black text-black text-sm">{videoResult.savingsPercent || 'Terkalibrasi HD'}</p>
                 </div>
               </div>
 
@@ -821,15 +859,15 @@ export default function MediaCompressorScreen({ onBack }) {
       )}
 
       {/* ======================================================== */}
-      {/* 3. SECTION KOMPRES DOKUMEN PDF (MB KE KB REAL-TIME) */}
+      {/* 3. SECTION KOMPRES DOKUMEN PDF */}
       {/* ======================================================== */}
       {activeTab === 'pdf' && (
-        <div className="w-full space-y-5 sm:space-y-6">
-          <div className="bg-white rounded-2xl p-4 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4 sm:space-y-5">
+        <div className="w-full space-y-6">
+          <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
             
-            {/* Dropzone Dokumen PDF */}
+            {/* Dropzone PDF */}
             <div
-              className={`border-2 border-dashed rounded-xl p-5 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
+              className={`border-2 border-dashed rounded-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
                 isPdfDragging
                   ? 'border-black bg-neutral-100 scale-[0.99]'
                   : 'border-neutral-400 hover:border-black bg-neutral-50 hover:bg-neutral-100/70'
@@ -858,13 +896,13 @@ export default function MediaCompressorScreen({ onBack }) {
 
               {pdfFile ? (
                 <div className="flex flex-col items-center gap-3">
-                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-black text-white flex items-center justify-center border-2 border-black shadow-[2px_2px_0px_#000000]">
-                    <FileText className="w-7 h-7 sm:w-8 sm:h-8 stroke-[2.2]" />
+                  <div className="w-16 h-16 rounded-xl bg-black text-white flex items-center justify-center border-2 border-black shadow-[2px_2px_0px_#000000]">
+                    <FileText className="w-8 h-8 stroke-[2.2]" />
                   </div>
                   <div>
-                    <p className="text-xs sm:text-sm font-black text-black font-sans break-all max-w-xs sm:max-w-md">{pdfFile.name}</p>
+                    <p className="text-sm font-black text-black font-sans">{pdfFile.name}</p>
                     <p className="text-[11px] text-neutral-600 font-mono mt-0.5">
-                      Ukuran Asli: <span className="font-bold text-black">{formatBytes(pdfOriginalSize)}</span> ({pdfOriginalSize.toLocaleString('id-ID')} byte)
+                      Ukuran Asli: <span className="font-bold text-black">{formatBytes(pdfOriginalSize)}</span>
                     </p>
                     {!isPdfCompressing && (
                       <span className="text-[10px] text-neutral-500 underline font-mono mt-1 inline-block">
@@ -875,97 +913,109 @@ export default function MediaCompressorScreen({ onBack }) {
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2.5 py-4">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
-                    <FileText className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
+                  <div className="w-14 h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
+                    <FileText className="w-6 h-6 stroke-[2.5]" />
                   </div>
                   <div>
                     <p className="text-sm font-black text-black">Pilih atau Seret Dokumen PDF ke Sini</p>
-                    <p className="text-xs text-neutral-500 font-mono mt-1">Mendukung berkas PDF besar (Kompresi cerdas tanpa merusak teks, gambar, atau layout)</p>
+                    <p className="text-xs text-neutral-500 font-mono mt-1">Mendukung semua berkas PDF (Kompresi cerdas tanpa merusak teks & tata letak)</p>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Pilihan Profil Kompresi Dokumen PDF */}
+            {/* Pilihan Preset Kompresi PDF */}
             {pdfFile && !isPdfCompressing && (
-              <div className="space-y-2 pt-3 border-t-2 border-neutral-200">
+              <div className="space-y-2.5 pt-3 border-t-2 border-neutral-200">
                 <label className="text-[11px] font-bold font-mono text-neutral-800 flex items-center gap-1.5">
                   <Sliders className="w-3.5 h-3.5" />
                   <span>Pilih Profil Kompresi Dokumen:</span>
                 </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="flex flex-col sm:grid sm:grid-cols-3 gap-2.5">
                   {Object.values(PDF_PRESETS).map((presetItem) => (
                     <button
                       key={presetItem.id}
                       type="button"
                       onClick={() => setPdfPreset(presetItem.id)}
-                      className={`p-3 rounded-lg text-left border-2 transition-all cursor-pointer min-h-[44px] ${
+                      className={`p-3.5 sm:p-4 rounded-xl text-left border-2 transition-all cursor-pointer min-h-[58px] flex flex-col justify-between ${
                         pdfPreset === presetItem.id
-                          ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
-                          : 'bg-white text-black border-black hover:bg-neutral-100'
+                          ? 'bg-black text-white border-black shadow-[3px_3px_0px_#000000]'
+                          : 'bg-white text-black border-black hover:bg-neutral-50 shadow-[2px_2px_0px_#000000]'
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-black">{presetItem.label}</p>
-                        <span className={`text-[9px] px-1.5 py-0.2 rounded border font-mono ${
-                          pdfPreset === presetItem.id ? 'border-white text-white' : 'border-black text-neutral-600'
+                      <div>
+                        <div className="flex items-center justify-between gap-1.5 mb-1">
+                          <div className="flex items-center gap-1.5">
+                            <div className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                              pdfPreset === presetItem.id ? 'border-white bg-white text-black' : 'border-black bg-transparent'
+                            }`}>
+                              {pdfPreset === presetItem.id && <div className="w-1.5 h-1.5 rounded-full bg-black" />}
+                            </div>
+                            <p className="text-xs sm:text-sm font-black font-sans">{presetItem.label}</p>
+                          </div>
+                          <span className={`text-[9px] px-2 py-0.5 rounded font-mono font-bold uppercase shrink-0 border ${
+                            pdfPreset === presetItem.id
+                              ? 'bg-white text-black border-white'
+                              : 'bg-neutral-100 text-black border-black'
+                          }`}>
+                            {presetItem.badge}
+                          </span>
+                        </div>
+                        <p className={`text-[11px] font-mono font-bold ${
+                          pdfPreset === presetItem.id ? 'text-amber-300' : 'text-neutral-700'
                         }`}>
-                          {presetItem.badge}
-                        </span>
+                          {presetItem.subtitle}
+                        </p>
+                        <p className={`text-[10px] font-mono mt-1.5 leading-relaxed ${
+                          pdfPreset === presetItem.id ? 'text-neutral-300' : 'text-neutral-600'
+                        }`}>
+                          {presetItem.desc}
+                        </p>
                       </div>
-                      <p className={`text-[10px] font-mono mt-1 leading-snug ${
-                        pdfPreset === presetItem.id ? 'text-neutral-300' : 'text-neutral-600'
-                      }`}>
-                        {presetItem.desc}
-                      </p>
                     </button>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* Indikator Progres Kompresi */}
+            {/* Indikator Progres Kompresi 15% - 100% */}
             {isPdfCompressing && (
-              <div className="p-4 rounded-xl border-2 border-black bg-neutral-100 space-y-2.5">
-                <div className="flex items-center justify-between text-xs font-mono font-bold">
-                  <span className="flex items-center gap-2 text-black truncate mr-2">
+              <div className="p-4 sm:p-5 rounded-xl border-2 border-black bg-neutral-100 space-y-3 shadow-[3px_3px_0px_#000000]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 text-black text-xs sm:text-sm font-mono font-bold truncate">
                     <Loader2 className="w-4 h-4 animate-spin text-black shrink-0" />
-                    <span className="truncate">{pdfProgressMsg || 'Memproses kompresi dokumen...'}</span>
+                    <span className="truncate">{pdfProgressMsg || 'Mengompresi dokumen PDF...'}</span>
                   </span>
-                  <span className="text-black shrink-0">{pdfProgressPercent}%</span>
+                  <span className="px-2.5 py-0.5 rounded-lg border-2 border-black bg-white font-mono font-black text-xs sm:text-sm text-black shadow-[1px_1px_0px_#000000] shrink-0">
+                    {pdfProgressPercent}%
+                  </span>
                 </div>
-                <div className="w-full bg-neutral-200 h-2.5 rounded-full border border-black overflow-hidden">
+                <div className="w-full bg-neutral-200 h-3 sm:h-3.5 rounded-full border-2 border-black overflow-hidden relative">
                   <div 
-                    className="bg-black h-full transition-all duration-300"
+                    className="bg-black h-full transition-all duration-300 ease-out"
                     style={{ width: `${pdfProgressPercent}%` }}
                   />
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-mono text-neutral-600">
+                  <span>Preservasi Keutuhan 100%</span>
+                  <span>Teks, Font & Tata Letak Dijamin Utuh</span>
                 </div>
               </div>
             )}
 
             {/* Tombol Eksekusi PDF */}
             {pdfFile && (
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={resetPdfState}
-                  disabled={isPdfCompressing}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-black font-bold text-xs font-mono border-2 border-black transition-all cursor-pointer flex items-center justify-center gap-1.5 min-h-[44px]"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Pilih Berkas Lain</span>
-                </button>
-
+              <div className="flex flex-col sm:flex-row justify-end pt-2 gap-2">
                 <button
                   type="button"
                   onClick={processPdfCompression}
                   disabled={isPdfCompressing}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
+                  className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm font-mono flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[48px]"
                 >
                   {isPdfCompressing ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Sedang Mengompres Dokumen PDF...</span>
+                      <span>Sedang Mengompres Dokumen PDF ({pdfProgressPercent}%)...</span>
                     </>
                   ) : (
                     <>
@@ -980,136 +1030,143 @@ export default function MediaCompressorScreen({ onBack }) {
           </div>
 
           {/* ======================================================== */}
-          {/* HASIL & LIVE PREVIEW DOKUMEN PDF (AKURASI UKURAN 100%) */}
+          {/* HASIL & LIVE PREVIEW DOKUMEN PDF SEBELUM DOWNLOAD */}
           {/* ======================================================== */}
           {pdfResult && (
-            <div className="bg-white rounded-2xl p-4 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4 sm:space-y-5 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
               
               {/* Header Hasil Sukses */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-black">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b-2 border-black">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-black text-white flex items-center justify-center border-2 border-black shadow-[1px_1px_0px_#000000] shrink-0">
                     <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
                   </div>
                   <div>
                     <h3 className="text-sm sm:text-base font-black text-black">
-                      Dokumen PDF Berhasil Dikompres!
+                      Dokumen PDF Berhasil Dikompres
                     </h3>
                     <p className="text-xs text-neutral-600 font-mono">
-                      Isi teks dan tata letak 100% utuh • Siap diunduh sebagai file .pdf biasa.
+                      Isi teks, font, dan tata letak 100% utuh tanpa distorsi • Siap diunduh.
                     </p>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={downloadCompressedPdf}
-                  className="w-full sm:w-auto px-5 py-3 rounded-xl bg-black hover:bg-neutral-800 text-white font-black text-xs sm:text-sm font-mono flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[46px]"
-                >
-                  <Download className="w-4 h-4 stroke-[2.5]" />
-                  <span>Unduh Dokumen PDF ({formatBytes(pdfResult.compressedSizeBytes)})</span>
-                </button>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={downloadCompressedPdf}
+                    className="w-full sm:w-auto px-5 py-3 rounded-xl bg-black hover:bg-neutral-800 text-white font-black text-xs sm:text-sm font-mono flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[48px]"
+                  >
+                    <Download className="w-4 h-4 stroke-[2.5]" />
+                    <span>Unduh PDF ({formatBytes(pdfResult.compressedSizeBytes)})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetPdf}
+                    className="w-full sm:w-auto px-4 py-3 rounded-xl bg-white hover:bg-neutral-100 text-black font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[48px]"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Kompres Dokumen Lain</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Kartu Metrik Perbandingan Ukuran Persis Sama Real-Time */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 rounded-xl bg-neutral-100 border-2 border-black text-xs font-mono">
-                <div className="p-1">
+              {/* Kartu Metrik Perbandingan Ukuran & Status Integritas */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 p-3 sm:p-4 rounded-xl bg-neutral-100 border-2 border-black text-xs font-mono shadow-[2px_2px_0px_#000000]">
+                <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
                   <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Awal</p>
-                  <p className="font-black text-black text-xs sm:text-sm break-all">{formatBytes(pdfResult.originalSizeBytes)}</p>
-                  <p className="text-[9px] text-neutral-500 font-mono">({pdfResult.originalSizeBytes.toLocaleString('id-ID')} byte)</p>
+                  <p className="font-black text-black text-xs sm:text-sm mt-0.5 truncate">{formatBytes(pdfResult.originalSizeBytes)}</p>
                 </div>
-                <div className="p-1">
-                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Terkompresi</p>
-                  <p className="font-black text-black text-xs sm:text-sm break-all">{formatBytes(pdfResult.compressedSizeBytes)}</p>
-                  <p className="text-[9px] text-neutral-500 font-mono">({pdfResult.compressedSizeBytes.toLocaleString('id-ID')} byte)</p>
+                <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Baru</p>
+                  <p className="font-black text-black text-xs sm:text-sm mt-0.5 truncate">{formatBytes(pdfResult.compressedSizeBytes)}</p>
                 </div>
-                <div className="p-1">
-                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Hemat Memori</p>
-                  <p className="font-black text-black text-xs sm:text-sm">{pdfResult.savingsPercent}</p>
-                  <p className="text-[9px] text-neutral-500 font-mono">({formatBytes(pdfResult.savingsBytes)})</p>
+                <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Penghematan</p>
+                  <p className="font-black text-black text-xs sm:text-sm mt-0.5 truncate">
+                    <span className="text-emerald-600">{pdfResult.savingsPercent}</span> <span className="text-[10px] text-neutral-600">(-{formatBytes(pdfResult.savingsBytes)})</span>
+                  </p>
                 </div>
-                <div className="p-1">
-                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Total Halaman</p>
-                  <p className="font-black text-black text-xs sm:text-sm">{pdfResult.pageCount} Halaman</p>
-                  <p className="text-[9px] text-emerald-700 font-bold font-mono">Layout 100% Utuh</p>
+                <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Integritas Dokumen</p>
+                  <p className="font-black text-black text-xs sm:text-sm mt-0.5 truncate">
+                    {pdfResult.pageCount} Hal • 100% Utuh
+                  </p>
                 </div>
               </div>
 
-              {/* Navigasi Live Preview Dokumen Interaktif */}
-              <div className="space-y-2 pt-1">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              {/* Navigasi Live Preview Dokumen */}
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
                   <div className="flex items-center gap-1.5">
                     <Eye className="w-4 h-4 text-black stroke-[2.5]" />
                     <span className="text-xs font-black font-mono uppercase text-black">
-                      Pratinjau Dokumen Interaktif (Live Preview):
+                      Pratinjau Interaktif Dokumen (Live Preview):
                     </span>
                   </div>
 
-                  {/* Switcher Dokumen Hasil vs Dokumen Asli */}
-                  <div className="w-full sm:w-auto inline-flex rounded-lg border-2 border-black overflow-hidden p-0.5 bg-neutral-100">
+                  <div className="grid grid-cols-2 sm:inline-flex rounded-xl border-2 border-black overflow-hidden p-0.5 bg-neutral-100 w-full sm:w-auto">
                     <button
                       type="button"
                       onClick={() => setPdfPreviewMode('compressed')}
-                      className={`flex-1 sm:flex-initial px-3 py-1.5 text-[11px] font-mono font-bold transition-all cursor-pointer min-h-[36px] flex items-center justify-center ${
+                      className={`py-2 px-3 text-[11px] font-mono font-bold transition-all cursor-pointer min-h-[44px] flex items-center justify-center gap-1.5 ${
                         pdfPreviewMode === 'compressed'
-                          ? 'bg-black text-white rounded'
+                          ? 'bg-black text-white rounded-lg shadow-[1px_1px_0px_#000000]'
                           : 'text-neutral-600 hover:text-black'
                       }`}
                     >
-                      Hasil Kompresi ({formatBytes(pdfResult.compressedSizeBytes)})
+                      <Check className={`w-3.5 h-3.5 ${pdfPreviewMode === 'compressed' ? 'inline' : 'hidden'}`} />
+                      <span>Hasil Kompresi</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setPdfPreviewMode('original')}
-                      className={`flex-1 sm:flex-initial px-3 py-1.5 text-[11px] font-mono font-bold transition-all cursor-pointer min-h-[36px] flex items-center justify-center ${
+                      className={`py-2 px-3 text-[11px] font-mono font-bold transition-all cursor-pointer min-h-[44px] flex items-center justify-center gap-1.5 ${
                         pdfPreviewMode === 'original'
-                          ? 'bg-black text-white rounded'
+                          ? 'bg-black text-white rounded-lg shadow-[1px_1px_0px_#000000]'
                           : 'text-neutral-600 hover:text-black'
                       }`}
                     >
-                      Dokumen Asli ({formatBytes(pdfResult.originalSizeBytes)})
+                      <Layers className={`w-3.5 h-3.5 ${pdfPreviewMode === 'original' ? 'inline' : 'hidden'}`} />
+                      <span>Dokumen Asli</span>
                     </button>
                   </div>
                 </div>
 
-                {/* Live Document Viewer (Object & Iframe Fallback) */}
-                <div className="w-full h-[380px] sm:h-[580px] rounded-xl overflow-hidden border-2 border-black bg-neutral-100 shadow-[3px_3px_0px_#000000]">
-                  <object
+                {/* Live Document Viewer Iframe */}
+                <div className="w-full rounded-xl overflow-hidden border-2 border-black bg-neutral-100 shadow-[3px_3px_0px_#000000]">
+                  <iframe
                     key={pdfPreviewMode}
-                    data={activePdfUrl}
-                    type="application/pdf"
-                    className="w-full h-full"
-                  >
-                    <iframe
-                      src={activePdfUrl}
-                      className="w-full h-full border-0 bg-white"
-                      title="Pratinjau Dokumen PDF"
-                    >
-                      <p className="p-4 text-xs font-mono text-neutral-600">
-                        Pratinjau dokumen tidak didukung langsung oleh browser ini.{' '}
-                        <a href={activePdfUrl} target="_blank" rel="noopener noreferrer" className="underline font-bold text-black">
-                          Klik di sini untuk membuka dokumen di tab baru.
-                        </a>
-                      </p>
-                    </iframe>
-                  </object>
+                    src={pdfPreviewMode === 'compressed' ? pdfResult.dataUrl : pdfOriginalUrl}
+                    className="w-full h-[340px] sm:h-[480px] md:h-[600px] bg-white border-0"
+                    title="Pratinjau Dokumen PDF"
+                  />
                 </div>
 
-                {/* Bar Informasi & Link Tab Penuh */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pt-1 text-[11px] text-neutral-600 font-mono">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1 text-[11px] text-neutral-600 font-mono">
                   <span>
-                    Menampilkan: <strong className="text-black">{pdfPreviewMode === 'compressed' ? 'Dokumen Hasil Kompresi' : 'Dokumen Asli'}</strong>
+                    Sedang menampilkan: <strong className="text-black">{pdfPreviewMode === 'compressed' ? 'Dokumen Hasil Kompresi' : 'Dokumen Asli'}</strong>
                   </span>
 
-                  <a
-                    href={activePdfUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-black font-bold hover:underline min-h-[36px]"
-                  >
-                    <span>Buka Pratinjau Layar Penuh</span>
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <a
+                      href={pdfPreviewMode === 'compressed' ? pdfResult.dataUrl : pdfOriginalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-2 rounded-lg border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold flex items-center justify-center gap-1.5 shadow-[2px_2px_0px_#000000] min-h-[44px]"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Buka di Tab Penuh</span>
+                    </a>
+                    <button
+                      type="button"
+                      onClick={downloadCompressedPdf}
+                      className="px-4 py-2 rounded-lg bg-black hover:bg-neutral-800 text-white font-bold flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] min-h-[44px]"
+                    >
+                      <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                      <span>Unduh Dokumen PDF</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 

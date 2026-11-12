@@ -2,29 +2,32 @@ import { PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
 
 // Konfigurasi preset optimasi kompresi PDF
 export const PDF_PRESETS = {
+  standard: {
+    id: 'standard',
+    label: 'Mode Standar',
+    subtitle: 'Pengurangan Ringan',
+    badge: 'Kualitas Asli',
+    desc: 'Pengurangan ukuran berkas ringan (15% - 30%), ketajaman gambar sangat tinggi, menjaga keaslian dokumen resmi & arsip.',
+    jpegQuality: 0.82,
+    maxDimension: 2048
+  },
   optimal: {
     id: 'optimal',
-    label: 'Optimal & Seimbang',
+    label: 'Mode Seimbang',
+    subtitle: 'Rekomendasi',
     badge: 'Rekomendasi',
-    desc: 'Kompresi cerdas gambar & objek, teks & font tetap tajam, ukuran susut 40% - 70%.',
-    jpegQuality: 0.65,
+    desc: 'Keseimbangan terbaik antara ukuran berkas dan kejernihan dokumen (35% - 55%), teks tajam dan tata letak presisi.',
+    jpegQuality: 0.62,
     maxDimension: 1600
   },
   extreme: {
     id: 'extreme',
-    label: 'Ekstrem (Ukuran Minimal)',
-    badge: 'Maksimal',
-    desc: 'Ukuran paling ringan untuk upload portal tugas/CPNS dengan kuota berkas ketat.',
-    jpegQuality: 0.38,
+    label: 'Mode Maksimal',
+    subtitle: 'Pangkas 50%+ (Setengah Ukuran)',
+    badge: 'Ukuran Terkecil',
+    desc: 'Memangkas ukuran berkas hingga setengahnya atau lebih untuk batas upload portal, email, atau kuota ketat tanpa merusak layout.',
+    jpegQuality: 0.35,
     maxDimension: 1024
-  },
-  high_quality: {
-    id: 'high_quality',
-    label: 'Kualitas Tinggi (Portofolio)',
-    badge: 'Presisi HD',
-    desc: 'Mempertahankan resolusi tinggi untuk dokumen kontrak, sertifikat, atau cetak.',
-    jpegQuality: 0.85,
-    maxDimension: 2200
   }
 };
 
@@ -124,9 +127,11 @@ export async function compressPdfDocument(inputData, options = {}) {
     onProgress = () => {}
   } = options;
 
-  const config = PDF_PRESETS[preset] || PDF_PRESETS.optimal;
+  // Normalisasi preset untuk kompatibilitas ke belakang
+  const normalizedPreset = preset === 'high_quality' ? 'standard' : preset;
+  const config = PDF_PRESETS[normalizedPreset] || PDF_PRESETS.optimal;
 
-  onProgress('Membaca struktur internal dokumen PDF...', 10);
+  onProgress('Menyiapkan engine optimasi dokumen...', 15);
   const arrayBuffer = await toArrayBuffer(inputData);
   const originalSize = arrayBuffer.byteLength;
 
@@ -137,7 +142,7 @@ export async function compressPdfDocument(inputData, options = {}) {
   });
 
   const pageCount = pdfDoc.getPageCount();
-  onProgress(`Menganalisis ${pageCount} halaman dokumen...`, 25);
+  onProgress(`Menganalisis ${pageCount} halaman dokumen & font...`, 30);
 
   // 2. Pembersihan bloat metadata XML (XMP) dan private data editor
   try {
@@ -173,7 +178,7 @@ export async function compressPdfDocument(inputData, options = {}) {
   }
 
   if (imageCount > 0) {
-    onProgress(`Mengoptimalkan ${imageCount} elemen visual dokumen...`, 40);
+    onProgress(`Mengoptimalkan ${imageCount} elemen visual dokumen...`, 45);
     let currentIdx = 0;
 
     for (const [, obj] of indirectObjects) {
@@ -199,14 +204,16 @@ export async function compressPdfDocument(inputData, options = {}) {
             }
           }
 
-          const percent = 40 + Math.round((currentIdx / imageCount) * 40);
-          onProgress(`Memproses elemen visual (${currentIdx}/${imageCount})...`, Math.min(80, percent));
+          const percent = 45 + Math.round((currentIdx / imageCount) * 30);
+          onProgress(`Memproses elemen visual (${currentIdx}/${imageCount})...`, Math.min(75, percent));
         }
       }
     }
+  } else {
+    onProgress('Memadatkan kamus stream & struktur font...', 55);
   }
 
-  onProgress('Mengemas objek dalam Object Stream PDF 1.5...', 85);
+  onProgress('Mengemas objek dalam Object Stream PDF 1.5...', 80);
 
   try {
     pdfDoc.setProducer('Kuro Studio PDF Optimizer');
@@ -220,7 +227,7 @@ export async function compressPdfDocument(inputData, options = {}) {
     updateFieldAppearances: false
   });
 
-  onProgress('Menyusun pratinjau dokumen...', 95);
+  onProgress('Memverifikasi integritas & pratinjau dokumen...', 92);
 
   // 5. Jaminan akurasi ukuran fisik persis sama
   let finalBytes = compressedBytes;
@@ -241,7 +248,7 @@ export async function compressPdfDocument(inputData, options = {}) {
     ? Math.round((savingsBytes / originalSize) * 100)
     : 0;
 
-  onProgress('Kompresi selesai!', 100);
+  onProgress('Kompresi dokumen selesai 100%!', 100);
 
   return {
     success: true,
