@@ -1,14 +1,16 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import axios from 'axios';
 import CosmicBackButton from './CosmicBackButton';
 import BeforeAfterSlider from './BeforeAfterSlider';
 import { enhanceImageToSuperHd } from '../utils/imageEnhancer';
+import { compressPdfDocument, PDF_PRESETS } from '../utils/pdfCompressor';
 import { addGalleryItem } from '../services/storageService';
 import { 
   Sparkles, 
   Upload, 
   Image as ImageIcon, 
   Video as VideoIcon, 
+  FileText,
   Download, 
   Sliders, 
   Check, 
@@ -20,15 +22,14 @@ import {
   RefreshCw,
   Eye,
   CheckCircle2,
-  Share2
+  ExternalLink,
+  Layers
 } from 'lucide-react';
 
 export default function MediaCompressorScreen({ onBack }) {
-  const [activeTab, setActiveTab] = useState('image'); // 'image' | 'video'
+  const [activeTab, setActiveTab] = useState('image'); // 'image' | 'video' | 'pdf'
 
-  // ==========================================
-  // STATE PENINGKAT FOTO SUPER HD
-  // ==========================================
+  // State Foto Super HD
   const [imgFile, setImgFile] = useState(null);
   const [imgPreview, setImgPreview] = useState('');
   const [imgOriginalSize, setImgOriginalSize] = useState(0);
@@ -38,29 +39,39 @@ export default function MediaCompressorScreen({ onBack }) {
   const [imgEnhancedSize, setImgEnhancedSize] = useState(0);
   const [imgEnhancedDimensions, setImgEnhancedDimensions] = useState({ w: 0, h: 0 });
 
-  const [upscaleFactor, setUpscaleFactor] = useState(2); // 2x | 4x
-  const [sharpenMode, setSharpenMode] = useState('ultra'); // 'natural' | 'ultra' | 'extreme'
+  const [upscaleFactor, setUpscaleFactor] = useState(2);
+  const [sharpenMode, setSharpenMode] = useState('ultra');
   const [targetFormat, setTargetFormat] = useState('image/jpeg');
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStage, setProcessingStage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
-  // ==========================================
-  // STATE VIDEO HD STATUS WA
-  // ==========================================
+  // State Video HD Status WA
   const [videoFile, setVideoFile] = useState(null);
   const [videoPreview, setVideoPreview] = useState('');
   const [videoOriginalSize, setVideoOriginalSize] = useState(0);
   const [videoResult, setVideoResult] = useState(null);
-  const [videoPreset, setVideoPreset] = useState('status_wa_1080p'); // 'status_wa_1080p' | '4k_remaster' | '720p_fast'
+  const [videoPreset, setVideoPreset] = useState('status_wa_1080p');
   const [videoCompressing, setVideoCompressing] = useState(false);
   const [videoProgressMsg, setVideoProgressMsg] = useState('');
+  const [videoPreviewMode, setVideoPreviewMode] = useState('compressed'); // 'compressed' | 'original'
+
+  // State Kompresi PDF
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfOriginalSize, setPdfOriginalSize] = useState(0);
+  const [pdfOriginalUrl, setPdfOriginalUrl] = useState('');
+  const [pdfPreset, setPdfPreset] = useState('optimal');
+  const [pdfResult, setPdfResult] = useState(null);
+  const [isPdfCompressing, setIsPdfCompressing] = useState(false);
+  const [pdfProgressMsg, setPdfProgressMsg] = useState('');
+  const [pdfProgressPercent, setPdfProgressPercent] = useState(0);
+  const [pdfPreviewMode, setPdfPreviewMode] = useState('compressed'); // 'compressed' | 'original'
 
   const [isImgDragging, setIsImgDragging] = useState(false);
   const [isVideoDragging, setIsVideoDragging] = useState(false);
+  const [isPdfDragging, setIsPdfDragging] = useState(false);
 
-  // Helper format ukuran berkas
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
@@ -69,14 +80,11 @@ export default function MediaCompressorScreen({ onBack }) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  // ==========================================
-  // LOGIKA PEMROSESAN FOTO SUPER HD (AI ENHANCER)
-  // ==========================================
+  // Logika Foto Super HD
   const handleImageFile = (file) => {
     if (!file) return;
-
     if (!file.type.startsWith('image/')) {
-      setErrorMessage('File harus berupa foto/gambar (JPG, PNG, WebP).');
+      setErrorMessage('File harus berupa foto atau gambar (JPG, PNG, WebP).');
       return;
     }
 
@@ -86,7 +94,6 @@ export default function MediaCompressorScreen({ onBack }) {
     setImgEnhancedDataUrl('');
     setImgEnhancedSize(0);
 
-    // Otomatis pilih format ekspor sesuai format sumber
     if (file.type === 'image/png') {
       setTargetFormat('image/png');
     } else if (file.type === 'image/webp') {
@@ -109,40 +116,28 @@ export default function MediaCompressorScreen({ onBack }) {
     reader.readAsDataURL(file);
   };
 
-  const handleImageSelect = (e) => {
-    const file = e.target.files?.[0];
-    handleImageFile(file);
-  };
-
   const runImageEnhancement = async () => {
     if (!imgPreview || !imgFile) return;
 
     setIsProcessing(true);
     setErrorMessage('');
-    setProcessingStage('Menganalisis piksel, noise & artefak burik...');
+    setProcessingStage('Menganalisis piksel, noise, dan artefak kompresi...');
 
     try {
-      // Stage 1: Analisis
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 400));
       setProcessingStage(`Menerapkan Super-Resolution Bicubic Upscale (${upscaleFactor}x)...`);
 
-      // Stage 2: Load Image Element
       const img = new Image();
       img.src = imgPreview;
       await new Promise(resolve => (img.onload = resolve));
 
-      // Stage 3: Sharpening
-      await new Promise(r => setTimeout(r, 700));
-      setProcessingStage('Menjalankan Unsharp Masking & Laplacian Edge Sharpening...');
+      await new Promise(r => setTimeout(r, 500));
+      setProcessingStage('Menjalankan Laplacian edge sharpening dan restorasi kontras...');
 
       let sharpenVal = 1.45;
       if (sharpenMode === 'natural') sharpenVal = 1.15;
       else if (sharpenMode === 'ultra') sharpenVal = 1.65;
       else if (sharpenMode === 'extreme') sharpenVal = 2.15;
-
-      // Stage 4: Finishing
-      await new Promise(r => setTimeout(r, 600));
-      setProcessingStage('Menghaluskan detail tekstur & kejernihan HD tanpa merubah warna...');
 
       const result = await enhanceImageToSuperHd(img, {
         upscaleFactor,
@@ -155,10 +150,9 @@ export default function MediaCompressorScreen({ onBack }) {
       setImgEnhancedDimensions({ w: result.width, h: result.height });
       setImgEnhancedSize(result.sizeBytes);
 
-      // Simpan otomatis ke Galeri Hasil Karya
       try {
         addGalleryItem({
-          title: `HD Enhancer: ${imgFile.name.replace(/\.[^/.]+$/, '')} (4K Anti-Burik)`,
+          title: `HD Enhancer: ${imgFile.name.replace(/\.[^/.]+$/, '')}`,
           type: 'image',
           category: 'Kompres & Enhancer HD',
           extension: targetFormat === 'image/webp' ? 'WEBP' : 'JPG',
@@ -193,12 +187,9 @@ export default function MediaCompressorScreen({ onBack }) {
     document.body.removeChild(link);
   };
 
-  // ==========================================
-  // LOGIKA PENINGKAT VIDEO HD STATUS WA
-  // ==========================================
+  // Logika Video Status WA
   const handleVideoFile = (file) => {
     if (!file) return;
-
     if (!file.type.startsWith('video/')) {
       setErrorMessage('File harus berupa video (MP4, WebM, MOV).');
       return;
@@ -208,17 +199,13 @@ export default function MediaCompressorScreen({ onBack }) {
     setVideoFile(file);
     setVideoOriginalSize(file.size);
     setVideoResult(null);
+    setVideoPreviewMode('compressed');
 
     const reader = new FileReader();
     reader.onload = () => {
       setVideoPreview(reader.result);
     };
     reader.readAsDataURL(file);
-  };
-
-  const handleVideoSelect = (e) => {
-    const file = e.target.files?.[0];
-    handleVideoFile(file);
   };
 
   const processVideoOptimization = async () => {
@@ -241,20 +228,22 @@ export default function MediaCompressorScreen({ onBack }) {
       if (res.data && res.data.success) {
         setVideoResult(res.data.data);
       } else {
-        // Fallback langsung jika backend FFmpeg offline
         setVideoResult({
           url: videoPreview,
           fileName: `kuro_optimized_${videoFile.name}`,
           sizeFormatted: formatBytes(videoOriginalSize),
+          compressedSize: videoOriginalSize,
+          savingsPercent: '0%',
           preset: videoPreset
         });
       }
     } catch {
-      // Fallback preview
       setVideoResult({
         url: videoPreview,
         fileName: `kuro_status_wa_${Date.now()}.mp4`,
         sizeFormatted: formatBytes(videoOriginalSize),
+        compressedSize: videoOriginalSize,
+        savingsPercent: '0%',
         preset: videoPreset
       });
     } finally {
@@ -263,60 +252,151 @@ export default function MediaCompressorScreen({ onBack }) {
     }
   };
 
+  // Logika Kompresi Dokumen PDF
+  const handlePdfFile = (file) => {
+    if (!file) return;
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!isPdf) {
+      setErrorMessage('Berkas harus berupa dokumen format PDF.');
+      return;
+    }
+
+    setErrorMessage('');
+    setPdfFile(file);
+    setPdfOriginalSize(file.size);
+    setPdfResult(null);
+    setPdfPreviewMode('compressed');
+
+    const originalBlobUrl = URL.createObjectURL(file);
+    setPdfOriginalUrl(originalBlobUrl);
+  };
+
+  const processPdfCompression = async () => {
+    if (!pdfFile) return;
+
+    setIsPdfCompressing(true);
+    setErrorMessage('');
+    setPdfProgressMsg('Menyiapkan engine optimasi dokumen...');
+    setPdfProgressPercent(10);
+
+    try {
+      const result = await compressPdfDocument(pdfFile, {
+        preset: pdfPreset,
+        onProgress: (stage, pct) => {
+          setPdfProgressMsg(stage);
+          setPdfProgressPercent(pct);
+        }
+      });
+
+      setPdfResult(result);
+
+      // Otomatis simpan riwayat ke Galeri Karya
+      try {
+        addGalleryItem({
+          title: `Kompres PDF: ${pdfFile.name.replace(/\.[^/.]+$/, '')}`,
+          type: 'document',
+          category: 'Kompres & Enhancer HD',
+          extension: 'PDF',
+          size: `${formatBytes(result.compressedSizeBytes)} (${result.savingsPercent} Hemat)`,
+          thumbnail: '',
+          previewUrl: result.dataUrl,
+          downloadData: result.dataUrl,
+          filename: `kuro_compressed_${Date.now()}.pdf`
+        });
+      } catch (errGal) {
+        console.warn('Pencatatan galeri dokumen dilewati:', errGal);
+      }
+
+    } catch (err) {
+      setErrorMessage('Gagal mengompres dokumen PDF: ' + err.message);
+    } finally {
+      setIsPdfCompressing(false);
+      setPdfProgressMsg('');
+      setPdfProgressPercent(0);
+    }
+  };
+
+  const downloadCompressedPdf = () => {
+    if (!pdfResult?.dataUrl) return;
+    const link = document.createElement('a');
+    const safeBaseName = pdfFile ? pdfFile.name.replace(/\.pdf$/i, '') : 'dokumen';
+    link.download = `kuro_${safeBaseName}_terkompres.pdf`;
+    link.href = pdfResult.dataUrl;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <main className="flex-grow flex flex-col items-center justify-start px-4 sm:px-6 py-6 sm:py-8 max-w-4xl mx-auto w-full">
       
-      {/* Tombol Navigasi Kembali & Badge Header */}
+      {/* Navigasi & Header Status */}
       <div className="w-full flex items-center justify-between mb-4">
         <CosmicBackButton onClick={onBack} label="Kembali ke Beranda" />
 
         <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold px-2.5 py-1 rounded border-2 border-black bg-neutral-100 text-black">
           <ShieldCheck className="w-3.5 h-3.5 stroke-[2.5]" />
-          <span>Status WA Anti-Burik • Super HD 4K</span>
+          <span>Status WA Anti-Burik • Kompres Dokumen & Media</span>
         </div>
       </div>
 
-      {/* Header Judul Fitur */}
+      {/* Header Utama */}
       <div className="w-full border-b-2 border-black pb-4 mb-6">
         <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded border border-black bg-black text-white text-[10px] font-mono font-bold uppercase mb-2">
           <Sparkles className="w-3 h-3 text-amber-300" />
-          <span>HD Media Enhancer Studio</span>
+          <span>HD Media & Document Compressor</span>
         </div>
         <h1 className="text-xl sm:text-3xl font-black text-black tracking-tight font-display uppercase">
-          Kompres & Tingkatkan Media Jadi Super HD
+          Kompres Media & Dokumen Kuro Studio
         </h1>
         <p className="text-xs sm:text-sm text-neutral-600 mt-1 leading-relaxed max-w-2xl">
-          Ubah foto & video lama yang burik atau burem menjadi ultra tajam dengan teknologi rekonstruksi detail HD. Pas diunggah ke Status WhatsApp tanpa pecah!
+          Kecilkan ukuran foto, video status WA, dan dokumen PDF secara signifikan tanpa merusak isi, tanpa teks hilang, dan menjaga layout tetap tajam rapi.
         </p>
       </div>
 
-      {/* Tab Selector: Foto HD vs Video HD */}
-      <div className="grid grid-cols-2 gap-2 p-1 bg-neutral-100 rounded-xl border-2 border-black mb-6 max-w-md w-full">
+      {/* Tab Selector 3 Mode: Foto HD, Video HD, dan PDF */}
+      <div className="grid grid-cols-3 gap-2 p-1 bg-neutral-100 rounded-xl border-2 border-black mb-6 max-w-xl w-full">
         <button
+          type="button"
           onClick={() => { setActiveTab('image'); setErrorMessage(''); }}
-          className={`py-2 px-3 rounded-lg text-xs font-black font-mono flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+          className={`py-2 px-2 sm:px-3 rounded-lg text-[11px] sm:text-xs font-black font-mono flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
             activeTab === 'image'
               ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
               : 'border-transparent text-neutral-600 hover:text-black hover:bg-white'
           }`}
         >
-          <ImageIcon className="w-4 h-4 stroke-[2.5]" />
-          <span>FOTO SUPER HD</span>
+          <ImageIcon className="w-4 h-4 stroke-[2.5] shrink-0" />
+          <span className="truncate">FOTO HD</span>
         </button>
+
         <button
+          type="button"
           onClick={() => { setActiveTab('video'); setErrorMessage(''); }}
-          className={`py-2 px-3 rounded-lg text-xs font-black font-mono flex items-center justify-center gap-2 transition-all cursor-pointer border-2 ${
+          className={`py-2 px-2 sm:px-3 rounded-lg text-[11px] sm:text-xs font-black font-mono flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
             activeTab === 'video'
               ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
               : 'border-transparent text-neutral-600 hover:text-black hover:bg-white'
           }`}
         >
-          <VideoIcon className="w-4 h-4 stroke-[2.5]" />
-          <span>VIDEO STATUS WA</span>
+          <VideoIcon className="w-4 h-4 stroke-[2.5] shrink-0" />
+          <span className="truncate">VIDEO WA</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('pdf'); setErrorMessage(''); }}
+          className={`py-2 px-2 sm:px-3 rounded-lg text-[11px] sm:text-xs font-black font-mono flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer border-2 min-h-[44px] ${
+            activeTab === 'pdf'
+              ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
+              : 'border-transparent text-neutral-600 hover:text-black hover:bg-white'
+          }`}
+        >
+          <FileText className="w-4 h-4 stroke-[2.5] shrink-0" />
+          <span className="truncate">KOMPRES PDF</span>
         </button>
       </div>
 
-      {/* Pesan Error */}
+      {/* Banner Notifikasi Kesalahan */}
       {errorMessage && (
         <div className="w-full mb-6 p-3.5 rounded-xl bg-red-100 border-2 border-red-500 flex items-center gap-3 text-red-900 text-xs font-bold font-mono">
           <AlertCircle className="w-5 h-5 shrink-0 text-red-600" />
@@ -329,11 +409,8 @@ export default function MediaCompressorScreen({ onBack }) {
       {/* ======================================================== */}
       {activeTab === 'image' && (
         <div className="w-full space-y-6">
-          
-          {/* Box Upload Foto */}
           <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
             
-            {/* Dropzone Foto dengan Efek Laser Scan saat Memproses */}
             <div
               className={`relative border-2 border-dashed rounded-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer overflow-hidden ${
                 isImgDragging
@@ -359,20 +436,15 @@ export default function MediaCompressorScreen({ onBack }) {
                 accept="image/*"
                 className="hidden"
                 disabled={isProcessing}
-                onChange={handleImageSelect}
+                onChange={(e) => handleImageFile(e.target.files?.[0])}
               />
 
               {imgPreview ? (
                 <div className="relative w-full flex flex-col items-center gap-3">
-                  
-                  {/* Preview Container dengan Garis Laser Scan */}
                   <div className="relative max-w-sm max-h-60 rounded-lg overflow-hidden border-2 border-black bg-black shadow-[2px_2px_0px_#000000]">
                     <img src={imgPreview} alt="Foto Asli" className="w-full h-full object-contain max-h-60" />
-
-                    {/* ANIMASI LASER SCAN KETIKA PROSES ENHANCE BERJALAN */}
                     {isProcessing && (
                       <div className="absolute inset-0 pointer-events-none">
-                        {/* Garis laser hijau/cyan pemindai yang bergerak naik-turun */}
                         <div className="absolute left-0 right-0 h-1 bg-cyan-400 shadow-[0_0_15px_#22d3ee,0_0_25px_#06b6d4] animate-[scan_1.6s_ease-in-out_infinite]" />
                         <div className="absolute inset-0 bg-cyan-500/10 backdrop-blur-[0.5px]" />
                       </div>
@@ -390,26 +462,22 @@ export default function MediaCompressorScreen({ onBack }) {
                       </span>
                     )}
                   </div>
-
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2.5 py-4">
-                  <div className="w-14 h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000] group-hover:scale-105 transition-transform">
+                  <div className="w-14 h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
                     <Upload className="w-6 h-6 stroke-[2.5]" />
                   </div>
                   <div>
-                    <p className="text-sm font-black text-black">Pilih atau Seret Foto yang Burik/Burem ke Sini</p>
+                    <p className="text-sm font-black text-black">Pilih atau Seret Foto ke Sini</p>
                     <p className="text-xs text-neutral-500 font-mono mt-1">Mendukung format JPG, PNG, WebP (Ditingkatkan otomatis ke HD 4K)</p>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Opsi Kontrol Kualitas Peningkatan */}
             {imgPreview && !isProcessing && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-3 border-t-2 border-neutral-200">
-                
-                {/* 1. Target Skala Perbesaran */}
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-bold font-mono text-neutral-800 flex items-center gap-1">
                     <Maximize2 className="w-3.5 h-3.5" />
@@ -424,7 +492,7 @@ export default function MediaCompressorScreen({ onBack }) {
                         key={opt.id}
                         type="button"
                         onClick={() => setUpscaleFactor(opt.id)}
-                        className={`p-2 rounded-lg text-left border-2 transition-all cursor-pointer ${
+                        className={`p-2 rounded-lg text-left border-2 transition-all cursor-pointer min-h-[44px] ${
                           upscaleFactor === opt.id
                             ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
                             : 'bg-white text-black border-black hover:bg-neutral-100'
@@ -437,7 +505,6 @@ export default function MediaCompressorScreen({ onBack }) {
                   </div>
                 </div>
 
-                {/* 2. Intensitas Penajaman Detail */}
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-bold font-mono text-neutral-800 flex items-center gap-1">
                     <Sliders className="w-3.5 h-3.5" />
@@ -446,14 +513,14 @@ export default function MediaCompressorScreen({ onBack }) {
                   <div className="grid grid-cols-3 gap-1">
                     {[
                       { id: 'natural', label: 'Natural' },
-                      { id: 'ultra', label: 'Ultra Tajam' },
+                      { id: 'ultra', label: 'Ultra' },
                       { id: 'extreme', label: 'Ekstrem' }
                     ].map(opt => (
                       <button
                         key={opt.id}
                         type="button"
                         onClick={() => setSharpenMode(opt.id)}
-                        className={`py-2 px-1 text-center rounded-lg border-2 transition-all cursor-pointer text-xs font-black ${
+                        className={`py-2 px-1 text-center rounded-lg border-2 transition-all cursor-pointer text-xs font-black min-h-[44px] flex items-center justify-center ${
                           sharpenMode === opt.id
                             ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
                             : 'bg-white text-black border-black hover:bg-neutral-100'
@@ -465,53 +532,34 @@ export default function MediaCompressorScreen({ onBack }) {
                   </div>
                 </div>
 
-                {/* 3. Format Simpan */}
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-bold font-mono text-neutral-800 flex items-center gap-1">
                     <Zap className="w-3.5 h-3.5" />
                     <span>Format Ekspor:</span>
                   </label>
                   <div className="grid grid-cols-3 gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setTargetFormat('image/jpeg')}
-                      className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer ${
-                        targetFormat === 'image/jpeg'
-                          ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
-                          : 'bg-white text-black border-black hover:bg-neutral-100'
-                      }`}
-                    >
-                      JPG
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTargetFormat('image/png')}
-                      className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer ${
-                        targetFormat === 'image/png'
-                          ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
-                          : 'bg-white text-black border-black hover:bg-neutral-100'
-                      }`}
-                    >
-                      PNG
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTargetFormat('image/webp')}
-                      className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer ${
-                        targetFormat === 'image/webp'
-                          ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
-                          : 'bg-white text-black border-black hover:bg-neutral-100'
-                      }`}
-                    >
-                      WebP
-                    </button>
+                    {['image/jpeg', 'image/png', 'image/webp'].map((fmt) => {
+                      const label = fmt === 'image/jpeg' ? 'JPG' : fmt === 'image/png' ? 'PNG' : 'WebP';
+                      return (
+                        <button
+                          key={fmt}
+                          type="button"
+                          onClick={() => setTargetFormat(fmt)}
+                          className={`py-2 px-1 text-center rounded-lg border-2 text-[11px] font-black cursor-pointer min-h-[44px] flex items-center justify-center ${
+                            targetFormat === fmt
+                              ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
+                              : 'bg-white text-black border-black hover:bg-neutral-100'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-
               </div>
             )}
 
-            {/* Kotak Status Progres Saat Proses Berjalan */}
             {isProcessing && (
               <div className="p-3.5 rounded-xl border-2 border-black bg-neutral-100 flex items-center gap-3">
                 <Loader2 className="w-5 h-5 animate-spin text-black shrink-0" />
@@ -526,14 +574,13 @@ export default function MediaCompressorScreen({ onBack }) {
               </div>
             )}
 
-            {/* Tombol Eksekusi Peningkatan */}
             {imgPreview && (
               <div className="flex justify-end pt-2">
                 <button
                   type="button"
                   onClick={runImageEnhancement}
                   disabled={isProcessing}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
                 >
                   {isProcessing ? (
                     <>
@@ -543,22 +590,17 @@ export default function MediaCompressorScreen({ onBack }) {
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 text-amber-300 fill-amber-300" />
-                      <span>Tingkatkan ke Super HD (Anti-Burik) Sekarang</span>
+                      <span>Tingkatkan ke Super HD Sekarang</span>
                     </>
                   )}
                 </button>
               </div>
             )}
-
           </div>
 
-          {/* ======================================================== */}
-          {/* HASIL SEBELUM VS SESUDAH DENGAN SLIDER DUA SISI INTERAKTIF */}
-          {/* ======================================================== */}
+          {/* Live Preview Foto Super HD */}
           {imgEnhancedDataUrl && (
-            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5 animate-in fade-in duration-300">
-              
-              {/* Header Status Sukses */}
+            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-black">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-lg bg-black text-white flex items-center justify-center border-2 border-black shadow-[1px_1px_0px_#000000]">
@@ -569,47 +611,31 @@ export default function MediaCompressorScreen({ onBack }) {
                       Foto Berhasil Ditingkatkan Menjadi Super HD!
                     </h3>
                     <p className="text-xs text-neutral-600 font-mono">
-                      Detail mikro dipertajam • Resolusi meningkat menjadi <span className="font-bold text-black">{imgEnhancedDimensions.w} x {imgEnhancedDimensions.h} px</span>
+                      Resolusi meningkat: <span className="font-bold text-black">{imgEnhancedDimensions.w} x {imgEnhancedDimensions.h} px</span> • Ukuran: <span className="font-bold text-black">{formatBytes(imgEnhancedSize)}</span>
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={downloadEnhancedImage}
-                    className="px-4 py-2 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
-                  >
-                    <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Unduh Hasil HD ({formatBytes(imgEnhancedSize)})</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={downloadEnhancedImage}
+                  className="px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
+                >
+                  <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Unduh Foto HD ({formatBytes(imgEnhancedSize)})</span>
+                </button>
               </div>
 
-              {/* SLIDER PERBANDINGAN SEBELUM VS SESUDAH */}
               <BeforeAfterSlider
                 beforeImage={imgPreview}
                 afterImage={imgEnhancedDataUrl}
-                beforeLabel="SEBELUM (BURIK / ASLI)"
-                afterLabel="SESUDAH (SUPER HD JERNIH)"
+                beforeLabel="SEBELUM (ASLI)"
+                afterLabel="SESUDAH (SUPER HD)"
                 beforeDetails={`${imgDimensions.w}x${imgDimensions.h}px • ${formatBytes(imgOriginalSize)}`}
-                afterDetails={`${imgEnhancedDimensions.w}x${imgEnhancedDimensions.h}px (4K Anti-Burik)`}
+                afterDetails={`${imgEnhancedDimensions.w}x${imgEnhancedDimensions.h}px • ${formatBytes(imgEnhancedSize)}`}
               />
-
-              {/* Panduan WhatsApp Anti-Burik */}
-              <div className="p-3.5 rounded-xl border-2 border-black bg-neutral-100 flex items-start gap-2.5 text-xs text-black">
-                <Sparkles className="w-4 h-4 text-black shrink-0 mt-0.5 stroke-[2.5]" />
-                <div className="space-y-0.5 font-sans">
-                  <p className="font-black font-mono uppercase text-[11px]">Siap Di-Upload ke WhatsApp Tanpa Takut Burik!</p>
-                  <p className="text-neutral-600 text-[11px] leading-relaxed">
-                    Foto hasil peningkatan ini sudah memiliki resolusi master di atas batas kompresi WhatsApp, sehingga saat dikirim atau dipasang di Status WhatsApp, fotonya tetap jernih, tajam maksimal, dan tidak akan pecah.
-                  </p>
-                </div>
-              </div>
-
             </div>
           )}
-
         </div>
       )}
 
@@ -620,7 +646,6 @@ export default function MediaCompressorScreen({ onBack }) {
         <div className="w-full space-y-6">
           <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
             
-            {/* Dropzone Video */}
             <div
               className={`border-2 border-dashed rounded-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
                 isVideoDragging
@@ -646,7 +671,7 @@ export default function MediaCompressorScreen({ onBack }) {
                 accept="video/*"
                 className="hidden"
                 disabled={videoCompressing}
-                onChange={handleVideoSelect}
+                onChange={(e) => handleVideoFile(e.target.files?.[0])}
               />
 
               {videoPreview ? (
@@ -672,14 +697,13 @@ export default function MediaCompressorScreen({ onBack }) {
                     <VideoIcon className="w-6 h-6 stroke-[2.5]" />
                   </div>
                   <div>
-                    <p className="text-sm font-black text-black">Pilih atau Seret Video yang Ingin Dioptimalkan</p>
+                    <p className="text-sm font-black text-black">Pilih atau Seret Video ke Sini</p>
                     <p className="text-xs text-neutral-500 font-mono mt-1">Mendukung MP4, WebM, MOV (Dioptimalkan pas rasio & bitrate Status WA)</p>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Pilihan Preset Video */}
             {videoPreview && !videoCompressing && (
               <div className="space-y-2 pt-3 border-t-2 border-neutral-200">
                 <label className="text-[11px] font-bold font-mono text-neutral-800 flex items-center gap-1.5">
@@ -688,15 +712,15 @@ export default function MediaCompressorScreen({ onBack }) {
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {[
-                    { id: 'status_wa_1080p', label: '1080p Status WA Anti-Burik', desc: 'Rasio & Bitrate Pas untuk Status WhatsApp' },
-                    { id: '4k_remaster', label: '4K Ultra HD Remaster', desc: 'Ketajaman tertinggi tanpa penurunan kualitas' },
-                    { id: '720p_fast', label: '720p Hemat Kuota', desc: 'Ukuran ringan, kompresi cepat' }
+                    { id: 'status_wa_1080p', label: '1080p Status WA', desc: 'Bitrate pas untuk Status WhatsApp' },
+                    { id: '4k_remaster', label: '4K Ultra HD', desc: 'Ketajaman tertinggi tanpa degradasi' },
+                    { id: '720p_fast', label: '720p Hemat Kuota', desc: 'Ukuran ringan dan kompresi cepat' }
                   ].map(opt => (
                     <button
                       key={opt.id}
                       type="button"
                       onClick={() => setVideoPreset(opt.id)}
-                      className={`p-2.5 rounded-lg text-left border-2 transition-all cursor-pointer ${
+                      className={`p-2.5 rounded-lg text-left border-2 transition-all cursor-pointer min-h-[44px] ${
                         videoPreset === opt.id
                           ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
                           : 'bg-white text-black border-black hover:bg-neutral-100'
@@ -710,14 +734,13 @@ export default function MediaCompressorScreen({ onBack }) {
               </div>
             )}
 
-            {/* Tombol Eksekusi Video */}
             {videoPreview && (
               <div className="flex justify-end pt-2">
                 <button
                   type="button"
                   onClick={processVideoOptimization}
                   disabled={videoCompressing}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
                 >
                   {videoCompressing ? (
                     <>
@@ -733,29 +756,327 @@ export default function MediaCompressorScreen({ onBack }) {
                 </button>
               </div>
             )}
-
           </div>
 
-          {/* HASIL VIDEO */}
+          {/* Live Preview Video dengan Perbandingan */}
           {videoResult && (
-            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b-2 border-black">
+            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-black">
                 <div>
-                  <h3 className="text-sm sm:text-base font-black text-black">Video HD Siap Diunduh!</h3>
-                  <p className="text-xs text-neutral-600 font-mono">Format telah disesuaikan agar tidak burik saat diunggah ke WhatsApp.</p>
+                  <h3 className="text-sm sm:text-base font-black text-black">Pratinjau Live Video HD</h3>
+                  <p className="text-xs text-neutral-600 font-mono">
+                    Bandingkan kualitas sebelum mengunduh atau membagikan ke WhatsApp.
+                  </p>
                 </div>
                 <a
                   href={videoResult.url}
                   download={videoResult.fileName || 'kuro_video_hd.mp4'}
-                  className="px-4 py-2 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] cursor-pointer"
+                  className="px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] cursor-pointer min-h-[44px]"
                 >
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" />
                   <span>Unduh Video ({videoResult.sizeFormatted || 'HD'})</span>
                 </a>
               </div>
-              <div className="max-w-md mx-auto aspect-video rounded-lg overflow-hidden border-2 border-black bg-black">
-                <video src={videoResult.url} controls className="w-full h-full object-contain" />
+
+              {/* Metrik Perbandingan Ukuran Video */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 p-3 rounded-xl bg-neutral-100 border-2 border-black text-xs font-mono">
+                <div>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Ukuran Asli</p>
+                  <p className="font-black text-black text-sm">{formatBytes(videoOriginalSize)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Ukuran Baru</p>
+                  <p className="font-black text-black text-sm">{videoResult.sizeFormatted || formatBytes(videoResult.compressedSize)}</p>
+                </div>
+                <div className="col-span-2 sm:col-span-1">
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Penghematan</p>
+                  <p className="font-black text-black text-sm">{videoResult.savingsPercent || 'Terkalibrasi HD'}</p>
+                </div>
               </div>
+
+              {/* Pemutar Video Interaktif */}
+              <div className="max-w-md mx-auto aspect-video rounded-xl overflow-hidden border-2 border-black bg-black shadow-[3px_3px_0px_#000000]">
+                <video 
+                  key={videoResult.url}
+                  src={videoResult.url} 
+                  controls 
+                  playsInline
+                  className="w-full h-full object-contain" 
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* 3. SECTION KOMPRES DOKUMEN PDF */}
+      {/* ======================================================== */}
+      {activeTab === 'pdf' && (
+        <div className="w-full space-y-6">
+          <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
+            
+            {/* Dropzone PDF */}
+            <div
+              className={`border-2 border-dashed rounded-xl p-6 sm:p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${
+                isPdfDragging
+                  ? 'border-black bg-neutral-100 scale-[0.99]'
+                  : 'border-neutral-400 hover:border-black bg-neutral-50 hover:bg-neutral-100/70'
+              }`}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsPdfDragging(true); }}
+              onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsPdfDragging(false); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsPdfDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handlePdfFile(file);
+              }}
+              onClick={() => {
+                if (!isPdfCompressing) document.getElementById('pdf-input').click();
+              }}
+            >
+              <input
+                id="pdf-input"
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                disabled={isPdfCompressing}
+                onChange={(e) => handlePdfFile(e.target.files?.[0])}
+              />
+
+              {pdfFile ? (
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-16 h-16 rounded-xl bg-black text-white flex items-center justify-center border-2 border-black shadow-[2px_2px_0px_#000000]">
+                    <FileText className="w-8 h-8 stroke-[2.2]" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-black text-black font-sans">{pdfFile.name}</p>
+                    <p className="text-[11px] text-neutral-600 font-mono mt-0.5">
+                      Ukuran Asli: <span className="font-bold text-black">{formatBytes(pdfOriginalSize)}</span>
+                    </p>
+                    {!isPdfCompressing && (
+                      <span className="text-[10px] text-neutral-500 underline font-mono mt-1 inline-block">
+                        Klik untuk mengganti dokumen PDF
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-2.5 py-4">
+                  <div className="w-14 h-14 rounded-xl bg-neutral-200 border-2 border-black flex items-center justify-center text-black shadow-[2px_2px_0px_#000000]">
+                    <FileText className="w-6 h-6 stroke-[2.5]" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-black text-black">Pilih atau Seret Dokumen PDF ke Sini</p>
+                    <p className="text-xs text-neutral-500 font-mono mt-1">Mendukung semua berkas PDF (Kompresi cerdas tanpa merusak teks & tata letak)</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Pilihan Preset Kompresi PDF */}
+            {pdfFile && !isPdfCompressing && (
+              <div className="space-y-2 pt-3 border-t-2 border-neutral-200">
+                <label className="text-[11px] font-bold font-mono text-neutral-800 flex items-center gap-1.5">
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>Pilih Profil Kompresi Dokumen:</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {Object.values(PDF_PRESETS).map((presetItem) => (
+                    <button
+                      key={presetItem.id}
+                      type="button"
+                      onClick={() => setPdfPreset(presetItem.id)}
+                      className={`p-3 rounded-lg text-left border-2 transition-all cursor-pointer min-h-[44px] ${
+                        pdfPreset === presetItem.id
+                          ? 'bg-black text-white border-black shadow-[2px_2px_0px_#000000]'
+                          : 'bg-white text-black border-black hover:bg-neutral-100'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-black">{presetItem.label}</p>
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded border font-mono ${
+                          pdfPreset === presetItem.id ? 'border-white text-white' : 'border-black text-neutral-600'
+                        }`}>
+                          {presetItem.badge}
+                        </span>
+                      </div>
+                      <p className={`text-[10px] font-mono mt-1 leading-snug ${
+                        pdfPreset === presetItem.id ? 'text-neutral-300' : 'text-neutral-600'
+                      }`}>
+                        {presetItem.desc}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Indikator Progres Kompresi */}
+            {isPdfCompressing && (
+              <div className="p-4 rounded-xl border-2 border-black bg-neutral-100 space-y-2.5">
+                <div className="flex items-center justify-between text-xs font-mono font-bold">
+                  <span className="flex items-center gap-2 text-black">
+                    <Loader2 className="w-4 h-4 animate-spin text-black" />
+                    <span>{pdfProgressMsg || 'Memproses kompresi dokumen...'}</span>
+                  </span>
+                  <span className="text-black">{pdfProgressPercent}%</span>
+                </div>
+                <div className="w-full bg-neutral-200 h-2.5 rounded-full border border-black overflow-hidden">
+                  <div 
+                    className="bg-black h-full transition-all duration-300"
+                    style={{ width: `${pdfProgressPercent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Tombol Eksekusi PDF */}
+            {pdfFile && (
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={processPdfCompression}
+                  disabled={isPdfCompressing}
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
+                >
+                  {isPdfCompressing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Sedang Mengompres Dokumen PDF...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 text-amber-300 fill-amber-300" />
+                      <span>Mulai Kompresi Dokumen PDF Sekarang</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+          </div>
+
+          {/* ======================================================== */}
+          {/* HASIL & LIVE PREVIEW DOKUMEN PDF SEBELUM DOWNLOAD */}
+          {/* ======================================================== */}
+          {pdfResult && (
+            <div className="bg-white rounded-2xl p-5 sm:p-7 border-2 border-black shadow-[4px_4px_0px_#000000] space-y-5">
+              
+              {/* Header Hasil Sukses */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b-2 border-black">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-black text-white flex items-center justify-center border-2 border-black shadow-[1px_1px_0px_#000000]">
+                    <CheckCircle2 className="w-5 h-5 stroke-[2.5]" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm sm:text-base font-black text-black">
+                      Dokumen PDF Berhasil Dikompres!
+                    </h3>
+                    <p className="text-xs text-neutral-600 font-mono">
+                      Isi teks dan tata letak dipertahankan 100% utuh • Siap digunakan.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={downloadCompressedPdf}
+                    className="px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
+                  >
+                    <Download className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>Unduh PDF ({formatBytes(pdfResult.compressedSizeBytes)})</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Kartu Metrik Perbandingan Ukuran & Status Integritas */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 p-3 rounded-xl bg-neutral-100 border-2 border-black text-xs font-mono">
+                <div>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Ukuran Awal</p>
+                  <p className="font-black text-black text-sm">{formatBytes(pdfResult.originalSizeBytes)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Ukuran Terkompresi</p>
+                  <p className="font-black text-black text-sm">{formatBytes(pdfResult.compressedSizeBytes)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Hemat Memori</p>
+                  <p className="font-black text-black text-sm">
+                    {pdfResult.savingsPercent} ({formatBytes(pdfResult.savingsBytes)})
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-neutral-500 uppercase font-bold">Total Halaman</p>
+                  <p className="font-black text-black text-sm">{pdfResult.pageCount} Halaman</p>
+                </div>
+              </div>
+
+              {/* Navigasi Live Preview Dokumen */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Eye className="w-4 h-4 text-black stroke-[2.5]" />
+                    <span className="text-xs font-black font-mono uppercase text-black">
+                      Pratinjau Interaktif Dokumen (Live Preview):
+                    </span>
+                  </div>
+
+                  <div className="inline-flex rounded-lg border-2 border-black overflow-hidden p-0.5 bg-neutral-100">
+                    <button
+                      type="button"
+                      onClick={() => setPdfPreviewMode('compressed')}
+                      className={`px-2.5 py-1 text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                        pdfPreviewMode === 'compressed'
+                          ? 'bg-black text-white rounded'
+                          : 'text-neutral-600 hover:text-black'
+                      }`}
+                    >
+                      Hasil Kompresi
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPdfPreviewMode('original')}
+                      className={`px-2.5 py-1 text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                        pdfPreviewMode === 'original'
+                          ? 'bg-black text-white rounded'
+                          : 'text-neutral-600 hover:text-black'
+                      }`}
+                    >
+                      Dokumen Asli
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Document Viewer Iframe */}
+                <div className="w-full rounded-xl overflow-hidden border-2 border-black bg-neutral-100 shadow-[3px_3px_0px_#000000]">
+                  <iframe
+                    key={pdfPreviewMode}
+                    src={pdfPreviewMode === 'compressed' ? pdfResult.dataUrl : pdfOriginalUrl}
+                    className="w-full h-[520px] sm:h-[620px] bg-white border-0"
+                    title="Pratinjau Dokumen PDF"
+                  />
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pt-1 text-[11px] text-neutral-600 font-mono">
+                  <span>
+                    Sedang menampilkan: <strong className="text-black">{pdfPreviewMode === 'compressed' ? 'Dokumen Hasil Kompresi' : 'Dokumen Asli'}</strong>
+                  </span>
+
+                  <a
+                    href={pdfResult.dataUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-black font-bold hover:underline"
+                  >
+                    <span>Buka Pratinjau di Tab Penuh</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              </div>
+
             </div>
           )}
 

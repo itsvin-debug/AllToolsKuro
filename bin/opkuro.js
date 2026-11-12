@@ -22,8 +22,9 @@ try {
 } catch {}
 
 const CLOUD_URL = 'https://alltoolskuro.vercel.app';
-const LOCAL_PORT = 3000;
-const LOCAL_URL = `http://localhost:${LOCAL_PORT}`;
+const FRONTEND_PORT = 5173;
+const BACKEND_PORT = 5001;
+const LOCAL_URL = `http://localhost:${FRONTEND_PORT}`;
 const REMOTE_PKG_URL = 'https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/package.json';
 
 // Banner ASCII Kuro Studio
@@ -64,7 +65,43 @@ function openBrowser(targetUrl) {
   }
 }
 
-// Pemeriksaan port lokal
+// Pemeriksaan ketersediaan service lokal secara aktif
+function checkUrlActive(url, timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    try {
+      const parsed = new URL(url);
+      const req = http.request({
+        hostname: parsed.hostname === 'localhost' ? '127.0.0.1' : parsed.hostname,
+        port: parsed.port,
+        path: '/',
+        method: 'GET',
+        timeout: timeoutMs
+      }, (res) => {
+        resolve(true);
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => {
+        req.destroy();
+        resolve(false);
+      });
+      req.end();
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+// Polling hingga service siap melayani koneksi
+async function waitForLocalServer(url, maxAttempts = 15, delayMs = 600) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const isUp = await checkUrlActive(url);
+    if (isUp) return true;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
+// Pemeriksaan ketersediaan port jaringan lokal
 function isPortInUse(port) {
   return new Promise((resolve) => {
     const server = http.createServer();
@@ -76,7 +113,7 @@ function isPortInUse(port) {
       server.close();
       resolve(false);
     });
-    server.listen(port);
+    server.listen(port, '127.0.0.1');
   });
 }
 
@@ -105,15 +142,23 @@ function checkRemoteVersion() {
   });
 }
 
-// Logika pembaruan mandiri di background
+// Pembaruan mandiri CLI di background
 function runSelfUpdate() {
   try {
     console.log('\nPembaruan baru tersedia! Memperbarui Kuro Studio secara otomatis...');
     execSync('npm install -g github:itsvin-debug/AllToolsKuro', { stdio: 'inherit' });
     console.log('Pembaruan selesai.');
   } catch {
-    // Lewati jika izin npm terbatas tanpa menghentikan peluncuran aplikasi
+    // Lewati jika izin npm terbatas tanpa menghentikan peluncuran
   }
+}
+
+// Validasi keberadaan modul dependensi lokal
+function verifyLocalDependencies() {
+  const rootModules = fs.existsSync(path.join(ROOT_DIR, 'node_modules'));
+  const frontendModules = fs.existsSync(path.join(ROOT_DIR, 'frontend', 'node_modules'));
+  const backendModules = fs.existsSync(path.join(ROOT_DIR, 'backend', 'node_modules'));
+  return rootModules && frontendModules && backendModules;
 }
 
 async function main() {
@@ -123,7 +168,7 @@ async function main() {
     console.log(BANNER);
     console.log(`Penggunaan:
   opkuro              Jalankan instance lokal atau buka web Kuro Studio
-  opkuro --cloud      Buka langsung versi cloud (https://alltoolskuro.vercel.app)
+  opkuro --cloud      Buka langsung versi cloud (${CLOUD_URL})
   opkuro --version    Tampilkan versi terpasang
   opkuro --help       Tampilkan bantuan ini
 `);
@@ -137,13 +182,13 @@ async function main() {
 
   console.log(BANNER);
 
-  // 1. Pengecekan pembaruan otomatis (Background Version Check)
+  // 1. Pengecekan versi terbaru di latar belakang
   const remoteVer = await checkRemoteVersion();
   if (remoteVer && remoteVer !== currentVersion) {
     runSelfUpdate();
   }
 
-  // 2. Mode Cloud
+  // 2. Mode Cloud langsung jika diminta
   if (args.includes('--cloud')) {
     console.log(`Membuka Kuro Studio Cloud di browser (${CLOUD_URL})...`);
     openBrowser(CLOUD_URL);
@@ -151,36 +196,73 @@ async function main() {
   }
 
   // 3. Mode Lokal (Default)
-  const isRunning = await isPortInUse(LOCAL_PORT);
-  if (isRunning) {
-    console.log(`Service lokal terdeteksi aktif pada port ${LOCAL_PORT}.`);
+  const isFrontendActive = await isPortInUse(FRONTEND_PORT);
+  if (isFrontendActive) {
+    console.log(`Service lokal terdeteksi aktif pada port ${FRONTEND_PORT}.`);
     console.log(`Membuka ${LOCAL_URL}...`);
     openBrowser(LOCAL_URL);
-  } else {
-    // Jika repo berada di lingkungan kode lokal, coba nyalakan dev server
-    const hasPackageJson = fs.existsSync(path.join(ROOT_DIR, 'package.json'));
-    if (hasPackageJson) {
-      console.log(`Menjalankan service lokal Kuro Studio pada ${LOCAL_URL}...`);
-      const devProcess = spawn('npm', ['run', 'dev'], {
-        cwd: ROOT_DIR,
-        stdio: 'inherit',
-        shell: true
-      });
+    return;
+  }
 
-      devProcess.on('error', () => {
-        console.log(`Gagal menyalakan service lokal. Mengalihkan ke versi cloud (${CLOUD_URL})...`);
+  // Periksa apakah berjalan di repositori kode lokal
+  const isWorkspace = fs.existsSync(path.join(ROOT_DIR, 'frontend', 'vite.config.js'));
+  if (isWorkspace) {
+    const hasModules = verifyLocalDependencies();
+    if (!hasModules) {
+      console.log('Dependensi subfolder belum terpasang lengkap. Memasang modul dependensi...');
+      try {
+        execSync('npm run install:all', { cwd: ROOT_DIR, stdio: 'inherit' });
+      } catch {
+        console.log(`Pemasangan otomatis gagal. Mengalihkan ke versi cloud (${CLOUD_URL})...`);
         openBrowser(CLOUD_URL);
-      });
-
-      // Beri jeda 2.5 detik agar Vite siap sebelum membuka browser
-      setTimeout(() => {
-        openBrowser(LOCAL_URL);
-      }, 2500);
-    } else {
-      // Jika diinstall global tanpa clone direktori lengkap, langsung buka cloud instance
-      console.log(`Membuka Kuro Studio di browser (${CLOUD_URL})...`);
-      openBrowser(CLOUD_URL);
+        return;
+      }
     }
+
+    console.log(`Menjalankan service lokal Kuro Studio pada ${LOCAL_URL}...`);
+    const devProcess = spawn('npm', ['run', 'dev'], {
+      cwd: ROOT_DIR,
+      stdio: 'inherit',
+      shell: true
+    });
+
+    devProcess.on('error', () => {
+      console.log(`Gagal menyalakan service lokal. Mengalihkan ke versi cloud (${CLOUD_URL})...`);
+      openBrowser(CLOUD_URL);
+    });
+
+    devProcess.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.log(`Proses dev server berhenti (kode ${code}). Mengalihkan ke versi cloud...`);
+        openBrowser(CLOUD_URL);
+      }
+    });
+
+    // Polling kesiapan server sebelum membuka browser secara presisi
+    waitForLocalServer(LOCAL_URL, 15, 600).then((isReady) => {
+      if (isReady) {
+        console.log(`Service lokal siap. Membuka ${LOCAL_URL}...`);
+        openBrowser(LOCAL_URL);
+      } else {
+        console.log(`Service lokal membutuhkan waktu lebih lama. Membuka ${LOCAL_URL}...`);
+        openBrowser(LOCAL_URL);
+      }
+    });
+
+    // Tangani sinyal keluar terminal dengan rapi
+    process.on('SIGINT', () => {
+      devProcess.kill();
+      process.exit(0);
+    });
+    process.on('SIGTERM', () => {
+      devProcess.kill();
+      process.exit(0);
+    });
+
+  } else {
+    // Jika CLI dipanggil dari instalasi global mandiri tanpa folder repo
+    console.log(`Membuka Kuro Studio di browser (${CLOUD_URL})...`);
+    openBrowser(CLOUD_URL);
   }
 }
 

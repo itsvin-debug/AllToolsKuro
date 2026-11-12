@@ -50,7 +50,7 @@ export default function Navbar({
     { id: 'pngToPdf', label: t.welcome?.tools?.pngToPdf?.name || 'PNG to PDF', icon: Images },
     { id: 'linkToDoc', label: t.welcome?.tools?.linkToDoc?.name || 'Link to PDF/PPT', icon: FileText },
     { id: 'imageToLink', label: t.welcome?.tools?.imageToLink?.name || 'File ke Link', icon: Link2 },
-    { id: 'compressor', label: t.welcome?.tools?.compressor?.name || 'Kompres Media HD', icon: Minimize2 },
+    { id: 'compressor', label: t.welcome?.tools?.compressor?.name || 'Kompres Media & PDF', icon: Minimize2 },
     { id: 'qrStudio', label: t.welcome?.tools?.qrStudio?.name || 'QR Code Studio', icon: QrCode },
     { id: 'audioMerger', label: t.welcome?.tools?.audioMerger?.name || 'Audio Merger', icon: Music },
     { id: 'photoStudio', label: t.welcome?.tools?.photoStudio?.name || 'Photo Studio', icon: Sparkles },

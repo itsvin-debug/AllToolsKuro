@@ -55,7 +55,7 @@ Berikut adalah daftar modul yang tersedia pada Kuro Studio:
 | `pngToPdf` | **PNG to PDF** | Konversi Dokumen | Satukan banyak file gambar atau foto PNG dan JPG menjadi satu berkas PDF rapi dengan tata letak proporsional dan kualitas visual tajam. | Aktif |
 | `linkToDoc` | **Link to PDF/PPT** | Ekstraktor Materi | Ekstrak dokumen kuliah dan materi presentasi dari Scribd atau SlideShare menjadi berkas PDF atau PPT utuh langsung dari tautan web. | Aktif |
 | `imageToLink` | **File ke Link** | Hosting Instan | Unggah foto dari perangkatmu dan dapatkan tautan URL publik instan berkecepatan tinggi untuk dibagikan ke mana saja. | Aktif |
-| `compressor` | **Kompres Media HD** | Hemat Memori | Kecilkan ukuran file video dan gambar secara drastis tanpa membuat visual pecah atau burik, sangat hemat kuota dan memori. | Aktif |
+| `compressor` | **Kompres Media & PDF** | Hemat Memori | Kecilkan ukuran video, foto, dan dokumen PDF secara signifikan tanpa merusak isi, teks hilang, atau tata letak bergeser. | Aktif |
 | `qrStudio` | **QR Code Studio** | Desain Kustom | Studio pembuat kode QR estetik dengan logo kustom, pewarnaan neobrutalist fleksibel, dan resolusi tinggi yang siap dipindai. | Aktif |
 | `audioMerger` | **Audio Merger** | Kombinasi Suara | Gabungkan beberapa trek audio atau musik menjadi satu kesatuan alunan utuh dengan perpindahan lagu yang mulus dan jernih. | Aktif |
 | `photoStudio` | **Photo Studio** | Filter & Efek | Editor foto instan dengan ragam filter neobrutalist, rotasi, penyesuaian kontras, serta efek grafis artistik untuk mempercantik gambarmu. | Aktif |
@@ -89,42 +89,71 @@ Ekstraktor dokumen materi kuliah dan presentasi:
 - **Bypass Proteksi Baca**: Mengunduh dan merekonstruksi dokumen utuh dari Scribd, Canva, dan SlideShare tanpa terhalang paywall login.
 - **Pilihan Ekspor**: Mendukung konversi langsung ke format PDF standar penerbitan atau berkas presentasi PPTX yang dapat diedit langsung.
 
+#### E. Kompres Media HD & Dokumen PDF (Multi-Engine)
+Optimalisasi berkas media dan dokumen dengan preservasi integritas 100%:
+- **Kompres Dokumen PDF**: Menggunakan mesin pemadatan object stream non-destruktif (`pdf-lib`) dengan deduplikasi tabel *cross-reference* (xref) dan pembersihan *redundant dictionary streams*. Dokumen teks, formula, dan vektor font tetap 100% tajam tanpa pergeseran letak halaman.
+- **3 Tingkat Kompresi Dokumen**:
+  - *Seimbang (Rekomendasi)*: Pemadatan object stream FlateDecode, ukuran hemat tanpa kompromi kualitas teks.
+  - *Ekstrem (Ukuran Minimal)*: Optimasi kamus objek mendalam untuk dokumen tebal / arsip hasil scan.
+  - *Kualitas Arsip / Legal*: Format bersih bebas bloated revisions untuk skripsi dan berkas hukum.
+- **Pratinjau Langsung (Live Preview)**: *Embedded viewer* PDF interaktif di dalam browser sebelum berkas disimpan atau diunduh, lengkap dengan perbandingan ukuran awal vs terkompresi dan badge persentase penghematan.
+
 ---
 
 ## 3. Kuro Command Line Interface (opkuro)
 
-Kuro Studio menyediakan perkakas CLI global `opkuro` untuk meluncurkan antarmuka web, mengelola konfigurasi, dan memicu server lokal langsung dari terminal.
+Kuro Studio menyediakan perkakas CLI global `opkuro` untuk meluncurkan antarmuka web, mengelola konfigurasi, dan memicu server lokal secara otomatis langsung dari terminal.
 
-### Instalasi Global
-Jalankan salah satu metode berikut:
+### Panduan Instalasi Cepat (Ramah Pemula)
 
-```bash
-# Melalui npm global link dari repositori lokal
-npm link
-
-# Atau jalankan installer otomatis (Linux/macOS)
-curl -fsSL https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/install.sh | bash
-
-# Atau jalankan installer otomatis (Windows PowerShell)
+#### A. Pengguna Windows (PowerShell)
+Buka PowerShell dan jalankan perintah satu baris (one-liner) berikut:
+```powershell
 irm https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/install.ps1 | iex
 ```
+*Atau gunakan npm global:*
+```powershell
+npm install -g github:itsvin-debug/AllToolsKuro
+```
 
-### Penggunaan CLI
+#### B. Pengguna Linux & macOS (Terminal)
+Buka Terminal dan jalankan perintah bash berikut:
 ```bash
-# Buka Kuro Studio di web browser lokal
+curl -fsSL https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/install.sh | bash
+```
+*Atau gunakan npm global:*
+```bash
+npm install -g github:itsvin-debug/AllToolsKuro
+```
+
+#### C. Pengembang (Dari Clone Repositori Lokal)
+Jika Anda mengkloning kode sumber di komputer Anda:
+```bash
+cd AllToolsKuro
+npm install
+npm link
+```
+
+---
+
+### Penggunaan Perintah CLI
+Setelah terpasang, perintah `opkuro` dapat dipanggil dari folder mana saja di terminal:
+
+```bash
+# 1. Jalankan Kuro Studio di browser (otomatis mendeteksi port Vite 5173 / backend 5001)
 opkuro
 
-# Buka Kuro Studio versi cloud production
+# 2. Buka langsung Kuro Studio versi cloud production (tanpa beban server lokal)
 opkuro --cloud
 
-# Menampilkan versi CLI terpasang
+# 3. Menampilkan versi CLI yang sedang terpasang
 opkuro --version
 
-# Menampilkan bantuan parameter
+# 4. Menampilkan panduan parameter dan bantuan
 opkuro --help
 ```
 
-Setiap pemanggilan `opkuro` akan memeriksa rilis pembaruan terbaru secara asinkron di latar belakang tanpa menghambat alur kerja utama pengguna.
+Setiap pemanggilan `opkuro` akan memeriksa rilis pembaruan terbaru secara asinkron di latar belakang tanpa menghambat alur kerja utama pengguna. Jika dijalankan di luar folder repositori, `opkuro` secara cerdas mengarahkan ke antarmuka cloud produksi yang siap pakai.
 
 ---
 
@@ -155,6 +184,28 @@ npm run dev
 ```
 
 Aplikasi frontend akan aktif di `http://localhost:5173` dan server backend lokal akan berjalan di `http://localhost:5001`.
+
+### Mengatasi Kendala Umum (Troubleshooting)
+
+1. **Kendala `MODULE_NOT_FOUND` atau dependensi belum lengkap:**
+   Jalankan perintah instalasi terpadu berikut pada root direktori:
+   ```bash
+   npm run install:all
+   ```
+   Perintah ini secara otomatis memasang seluruh paket di root, subdirektori backend, dan frontend sekaligus.
+
+2. **Kendala Port Digunakan (EADDRINUSE 5173 atau 5001):**
+   Jika port sedang terpakai proses lain, buka langsung instans cloud tanpa menyalakan server lokal:
+   ```bash
+   opkuro --cloud
+   ```
+
+3. **Kebijakan Eksekusi Skrip PowerShell (Windows):**
+   Jika PowerShell memblokir eksekusi skrip unduhan, berikan izin sementara untuk sesi terminal aktif:
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   irm https://raw.githubusercontent.com/itsvin-debug/AllToolsKuro/main/install.ps1 | iex
+   ```
 
 ---
 
@@ -214,23 +265,17 @@ AllToolsKuro/
 │   ├── settings.gradle
 │   └── variables.gradle
 ├── api/
-│   ├── anime/
-│   │   └── search.js
-│   ├── capcut/
-│   │   └── search.js
-│   ├── manhwa/
-│   │   └── search.js
 │   ├── _envGuard.js
 │   ├── _security.js
 │   ├── chat.js
+│   ├── compress-pdf.js
 │   ├── download.js
 │   ├── jj-finder.js
 │   ├── link-to-doc.js
 │   ├── locked-tools.js
-│   ├── ping.js
+│   ├── media.js
 │   ├── proxy-doc-image.js
 │   ├── proxy-download.js
-│   ├── proxy-stream.js
 │   ├── resolve.js
 │   ├── system-battery.js
 │   └── version.js
@@ -333,11 +378,11 @@ AllToolsKuro/
 5 riwayat pembaruan commit terakhir pada repositori:
 
 <!-- AUTO-CHANGELOG-START -->
-- [a835be6] chore: trigger github metadata re-index for solo contributor profile (2026-11-07)
-- [ceb2013] fix(kurobot): enhance context comprehension to answer web introduction and identity queries (2026-11-07)
-- [9a24b98] fix(kurobot): implement mobile touch drag and snap strictly to left or right edges (2026-11-07)
-- [99f15b9] feat: add dynamic API base URL configuration for native Android and web platforms (2026-11-07)
-- [8f878a5] feat(kurobot): overhaul anime neobrutalist UI, strict nickname validation, touch drag snap & 30-min anger lockout (2026-11-07)
+- [4ec64ed] fix(ota): complete separation of Kondisi 1 (changelog) and Kondisi 2 (clean 'Tidak ada update tersedia' dialog with no changelog) (2026-11-08)
+- [d581746] feat(ota): anti-looping state persistence, in-app toast for no-update state, and /api/app/version endpoint (2026-11-08)
+- [9120add] feat(ota): refine in-app update modal with exact status texts, changelog notes, and auto-close (2026-11-08)
+- [74aa3b5] feat(web-android): strictly separate web unduh apk button and android in-app ota update auto-close (2026-11-08)
+- [d97814a] feat(ota): in-app ota update engine with accumulated changelog badge and kurobot 4-quadrant docking (2026-11-08)
 <!-- AUTO-CHANGELOG-END -->
 
 ---

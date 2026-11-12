@@ -193,3 +193,6 @@ export async function resolveLink(targetUrl, options = {}) {
     elapsed_ms: Math.max(1, Date.now() - startTime)
   };
 }
+
+// Alias ekspor untuk kompatibilitas controller
+export const resolveUrl = resolveLink;

@@ -10,7 +10,8 @@ import {
   compressVideoService, 
   mergeAudiosService, 
   uploadUniversalFileService,
-  trimVideoService
+  trimVideoService,
+  compressPdfService
 } from '../services/mediaProcessing.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -183,6 +184,41 @@ router.post('/compress-video', async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Gagal mengompres video: ' + err.message
+    });
+  }
+});
+
+/**
+ * 3.6 POST /api/compress-pdf
+ * Mengompres dokumen PDF dengan preservasi teks, vektor, dan font 100%
+ */
+router.post('/compress-pdf', async (req, res) => {
+  try {
+    const { pdfBase64, originalName, preset } = req.body;
+
+    if (!pdfBase64) {
+      return res.status(400).json({
+        success: false,
+        message: 'File dokumen PDF tidak boleh kosong.'
+      });
+    }
+
+    const result = await compressPdfService({
+      pdfBase64,
+      originalName: originalName || 'document.pdf',
+      preset: preset || 'optimal'
+    });
+
+    return res.json({
+      success: true,
+      message: `PDF berhasil dikompres hemat ${result.savingsPercent}!`,
+      data: result
+    });
+  } catch (err) {
+    console.error('Error compress-pdf:', err.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Gagal mengompres dokumen PDF: ' + err.message
     });
   }
 });

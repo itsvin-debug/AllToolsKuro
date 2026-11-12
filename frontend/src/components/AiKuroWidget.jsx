@@ -66,9 +66,9 @@ const KURO_TOOLS_CATALOG = [
   },
   {
     id: 'compressor',
-    name: 'Kompres Media HD',
+    name: 'Kompres Media & PDF',
     tag: 'Hemat Memori',
-    desc: 'Kecilkan ukuran file video dan gambar secara drastis tanpa membuat visual pecah atau burik, sangat hemat kuota dan memori.'
+    desc: 'Kecilkan ukuran video, foto, dan dokumen PDF secara signifikan tanpa merusak isi, teks hilang, atau tata letak bergeser.'
   },
   {
     id: 'qrStudio',

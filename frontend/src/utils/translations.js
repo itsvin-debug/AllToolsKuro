@@ -88,9 +88,9 @@ export const translations = {
           tag: 'UNIVERSAL'
         },
         compressor: {
-          name: 'Kompres Media HD',
-          desc: 'Optimasi ukuran file gambar dan video hingga kilobyte tanpa merusak ketajaman visual.',
-          tag: 'MB + KB'
+          name: 'Kompres Media & PDF',
+          desc: 'Optimasi ukuran file gambar, video, dan dokumen PDF tanpa merusak ketajaman visual atau tata letak teks.',
+          tag: 'MEDIA & PDF'
         },
         qrStudio: {
           name: 'QR Code Studio',
@@ -639,9 +639,9 @@ export const translations = {
           tag: 'UNIVERSAL'
         },
         compressor: {
-          name: 'HD Media Compressor',
-          desc: 'Optimize image and video file sizes down to kilobytes without sacrificing clarity.',
-          tag: 'MB + KB'
+          name: 'Media & PDF Compressor',
+          desc: 'Optimize image, video, and PDF document file sizes without sacrificing clarity, fonts, or layouts.',
+          tag: 'MEDIA & PDF'
         },
         qrStudio: {
           name: 'QR Code Studio',

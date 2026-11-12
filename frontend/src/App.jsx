@@ -36,7 +36,7 @@ const TOOL_NAMES = {
   pngToPdf: 'PNG to PDF',
   linkToDoc: 'Link to PDF/PPT',
   imageToLink: 'File ke Link',
-  compressor: 'Kompres Media HD',
+  compressor: 'Kompres Media & PDF',
   qrStudio: 'QR Code Studio',
   audioMerger: 'Audio Merger',
   photoStudio: 'Photo Studio',

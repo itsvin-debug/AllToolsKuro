@@ -7,6 +7,8 @@
     "opkuro": "./bin/opkuro.js"
   },
   "scripts": {
+    "postinstall": "npm --prefix backend install && npm --prefix frontend install",
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install",
     "dev": "concurrently -k -n \"BACKEND,FRONTEND\" -c \"cyan.bold,green.bold\" \"npm --prefix backend run dev:server\" \"npm --prefix frontend run dev:vite\"",
     "dev:backend": "npm --prefix backend run dev:server",
     "dev:frontend": "npm --prefix frontend run dev:vite",
@@ -19,10 +21,11 @@
     "@capacitor/cli": "^8.6.0",
     "@capacitor/core": "^8.6.0",
     "axios": "^1.7.9",
-    "cheerio": "^1.0.0"
+    "cheerio": "^1.0.0",
+    "concurrently": "^10.0.6",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
-    "@capacitor/assets": "^4.0.0",
-    "concurrently": "^10.0.6"
+    "@capacitor/assets": "^4.0.0"
   }
 }

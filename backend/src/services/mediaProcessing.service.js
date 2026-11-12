@@ -1,9 +1,10 @@
-  import fs from 'fs';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import util from 'util';
 import axios from 'axios';
+import { PDFDocument } from 'pdf-lib';
 
 const execPromise = util.promisify(exec);
 
@@ -452,4 +453,63 @@ export async function trimVideoService({
       if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
     } catch {}
   }
+}
+
+// Layanan kompresi dokumen PDF aman tanpa merusak struktur halaman
+export async function compressPdfService({
+  pdfBase64,
+  originalName = 'document.pdf',
+  preset = 'optimal'
+}) {
+  if (!pdfBase64) {
+    throw new Error('Data berkas PDF tidak boleh kosong.');
+  }
+
+  const cleanBase64 = pdfBase64.replace(/^data:application\/pdf;base64,/, '');
+  const inputBuffer = Buffer.from(cleanBase64, 'base64');
+  const originalSize = inputBuffer.length;
+
+  const pdfDoc = await PDFDocument.load(inputBuffer, {
+    ignoreEncryption: true,
+    updateMetadata: false
+  });
+
+  try {
+    pdfDoc.setProducer('Kuro Studio PDF Optimizer');
+    pdfDoc.setCreator('Kuro Studio');
+  } catch {}
+
+  const compressedBytes = await pdfDoc.save({
+    useObjectStreams: true,
+    addDefaultPage: false,
+    updateFieldAppearances: false
+  });
+
+  const uid = Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const cleanBase = path.basename(originalName, '.pdf').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
+  const fileName = `kuro_compressed_${cleanBase}_${uid}.pdf`;
+  const outputPath = path.join(uploadsDir, fileName);
+
+  fs.writeFileSync(outputPath, Buffer.from(compressedBytes));
+
+  const compressedSize = compressedBytes.length;
+  const savingsBytes = Math.max(0, originalSize - compressedSize);
+  const savingsPercent = originalSize > 0
+    ? Math.round((savingsBytes / originalSize) * 100)
+    : 0;
+
+  return {
+    success: true,
+    fileName,
+    originalName,
+    url: `/uploads/${fileName}`,
+    pageCount: pdfDoc.getPageCount(),
+    originalSize,
+    originalSizeFormatted: formatBytes(originalSize),
+    compressedSize,
+    compressedSizeFormatted: formatBytes(compressedSize),
+    savingsPercent: `${savingsPercent}%`,
+    savedFormatted: formatBytes(savingsBytes),
+    preset
+  };
 }

@@ -26,6 +26,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "pdf-lib": "^1.17.1",
     "primesave-dl": "^1.0.2",
     "qrcode": "^1.5.4",
     "snapsave-media-downloader": "^2.4.1"
