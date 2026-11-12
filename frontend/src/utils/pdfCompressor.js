@@ -229,3 +229,4 @@ export async function compressPdfDocument(inputData, options = {}) {
     presetLabel: config.label
   };
 }
+
