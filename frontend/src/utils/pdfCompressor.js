@@ -6,24 +6,24 @@ export const PDF_PRESETS = {
     id: 'optimal',
     label: 'Optimal & Seimbang',
     badge: 'Rekomendasi',
-    desc: 'Kompresi cerdas objek dan gambar, font tetap tajam, ukuran susut 40% - 70%.',
-    jpegQuality: 0.70,
+    desc: 'Kompresi cerdas gambar & objek, teks & font tetap tajam, ukuran susut 40% - 70%.',
+    jpegQuality: 0.65,
     maxDimension: 1600
   },
   extreme: {
     id: 'extreme',
-    label: 'Ekstrem (Dokumen Ringan)',
+    label: 'Ekstrem (Ukuran Minimal)',
     badge: 'Maksimal',
-    desc: 'Ukuran sekecil mungkin untuk upload portal CPNS/tugas dengan batas berkas ketat.',
-    jpegQuality: 0.45,
-    maxDimension: 1080
+    desc: 'Ukuran paling ringan untuk upload portal tugas/CPNS dengan kuota berkas ketat.',
+    jpegQuality: 0.38,
+    maxDimension: 1024
   },
   high_quality: {
     id: 'high_quality',
     label: 'Kualitas Tinggi (Portofolio)',
     badge: 'Presisi HD',
-    desc: 'Mempertahankan resolusi tinggi untuk dicetak atau dokumen kontrak resmi.',
-    jpegQuality: 0.88,
+    desc: 'Mempertahankan resolusi tinggi untuk dokumen kontrak, sertifikat, atau cetak.',
+    jpegQuality: 0.85,
     maxDimension: 2200
   }
 };
@@ -39,20 +39,27 @@ async function toArrayBuffer(input) {
 }
 
 // Helper memuat gambar ke elemen Image browser
-function loadImageElement(dataUrl) {
+function loadImageElement(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Gagal memproses gambar tertanam.'));
-    img.src = dataUrl;
+    img.onerror = () => reject(new Error('Gagal memuat gambar tertanam.'));
+    img.src = url;
   });
 }
 
-// Optimasi dan re-encoding gambar raster di dalam memori browser
-async function optimizeRasterBytes(rawBytes, isJpeg, maxDim, quality) {
+// Cek apakah buffer memiliki signature JPEG (SOI: 0xFF, 0xD8)
+function isJpegBuffer(bytes) {
+  if (!bytes || bytes.length < 4) return false;
+  return bytes[0] === 0xFF && bytes[1] === 0xD8;
+}
+
+// Optimasi dan re-encoding gambar JPEG tertanam di dalam PDF
+async function optimizeEmbeddedJpeg(rawBytes, maxDim, quality) {
   try {
-    const mime = isJpeg ? 'image/jpeg' : 'image/png';
-    const blob = new Blob([rawBytes], { type: mime });
+    if (!isJpegBuffer(rawBytes)) return null;
+
+    const blob = new Blob([rawBytes], { type: 'image/jpeg' });
     const url = URL.createObjectURL(blob);
 
     let img;
@@ -72,21 +79,19 @@ async function optimizeRasterBytes(rawBytes, isJpeg, maxDim, quality) {
     if (origW > maxDim || origH > maxDim) {
       if (origW >= origH) {
         targetW = maxDim;
-        targetH = Math.round((origH * maxDim) / origW);
+        targetH = Math.max(1, Math.round((origH * maxDim) / origW));
       } else {
         targetH = maxDim;
-        targetW = Math.round((origW * maxDim) / origH);
+        targetW = Math.max(1, Math.round((origW * maxDim) / origH));
       }
     }
 
-    // Gambar ulang di kanvas untuk re-encoding
     const canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    // Latar putih jika ada transparansi pada konversi ke JPEG
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, targetW, targetH);
     ctx.drawImage(img, 0, 0, targetW, targetH);
@@ -98,7 +103,7 @@ async function optimizeRasterBytes(rawBytes, isJpeg, maxDim, quality) {
     if (!recompressedBlob) return null;
     const recompressedBytes = new Uint8Array(await recompressedBlob.arrayBuffer());
 
-    // Ambil hasil jika ukuran berkurang
+    // Ambil hasil hanya jika ukuran berhasil berkurang
     if (recompressedBytes.length < rawBytes.length) {
       return {
         bytes: recompressedBytes,
@@ -107,7 +112,7 @@ async function optimizeRasterBytes(rawBytes, isJpeg, maxDim, quality) {
       };
     }
   } catch {
-    // Lewati jika format stream gambar tidak didukung kanvas
+    // Lewati jika terjadi kendala decoding gambar
   }
   return null;
 }
@@ -121,20 +126,39 @@ export async function compressPdfDocument(inputData, options = {}) {
 
   const config = PDF_PRESETS[preset] || PDF_PRESETS.optimal;
 
-  onProgress('Membaca struktur internal dokumen PDF...', 15);
+  onProgress('Membaca struktur internal dokumen PDF...', 10);
   const arrayBuffer = await toArrayBuffer(inputData);
   const originalSize = arrayBuffer.byteLength;
 
-  // Muat dokumen PDF tanpa mengubah metadata teks/vektor
+  // 1. Muat dokumen PDF tanpa mengubah teks dan tata letak
   const pdfDoc = await PDFDocument.load(arrayBuffer, {
     ignoreEncryption: true,
     updateMetadata: false
   });
 
   const pageCount = pdfDoc.getPageCount();
-  onProgress(`Menganalisis ${pageCount} halaman dokumen...`, 30);
+  onProgress(`Menganalisis ${pageCount} halaman dokumen...`, 25);
 
-  // Telusuri seluruh objek internal untuk mengompresi gambar tertanam
+  // 2. Pembersihan bloat metadata XML (XMP) dan private data editor
+  try {
+    if (pdfDoc.catalog.has(PDFName.of('Metadata'))) {
+      pdfDoc.catalog.delete(PDFName.of('Metadata'));
+    }
+  } catch {}
+
+  const pages = pdfDoc.getPages();
+  for (const page of pages) {
+    try {
+      if (page.node.has(PDFName.of('PieceInfo'))) {
+        page.node.delete(PDFName.of('PieceInfo'));
+      }
+      if (page.node.has(PDFName.of('Thumb'))) {
+        page.node.delete(PDFName.of('Thumb'));
+      }
+    } catch {}
+  }
+
+  // 3. Telusuri dan optimalkan gambar raster tertanam (XObjects)
   const indirectObjects = pdfDoc.context.enumerateIndirectObjects();
   let imageCount = 0;
   let optimizedImages = 0;
@@ -149,7 +173,7 @@ export async function compressPdfDocument(inputData, options = {}) {
   }
 
   if (imageCount > 0) {
-    onProgress(`Mengoptimalkan ${imageCount} elemen visual dokumen...`, 45);
+    onProgress(`Mengoptimalkan ${imageCount} elemen visual dokumen...`, 40);
     let currentIdx = 0;
 
     for (const [, obj] of indirectObjects) {
@@ -160,27 +184,22 @@ export async function compressPdfDocument(inputData, options = {}) {
           const filter = obj.dict.get(PDFName.of('Filter'));
           const filterStr = filter ? filter.toString() : '';
 
-          // Deteksi apakah JPEG (/DCTDecode) atau Flate/PNG (/FlateDecode)
-          const isJpeg = filterStr.includes('DCTDecode');
-          const isFlate = filterStr.includes('FlateDecode');
-
-          if ((isJpeg || isFlate) && obj.contents && obj.contents.length > 5120) {
-            const optimized = await optimizeRasterBytes(
+          // Optimalkan stream JPEG (/DCTDecode)
+          if (filterStr.includes('DCTDecode') && obj.contents && obj.contents.length > 4096) {
+            const optimized = await optimizeEmbeddedJpeg(
               obj.contents,
-              isJpeg,
               config.maxDimension,
               config.jpegQuality
             );
 
             if (optimized) {
               obj.contents = optimized.bytes;
-              obj.dict.set(PDFName.of('Filter'), PDFName.of('DCTDecode'));
               obj.dict.set(PDFName.of('Length'), PDFNumber.of(optimized.bytes.length));
               optimizedImages++;
             }
           }
 
-          const percent = 45 + Math.round((currentIdx / imageCount) * 35);
+          const percent = 40 + Math.round((currentIdx / imageCount) * 40);
           onProgress(`Memproses elemen visual (${currentIdx}/${imageCount})...`, Math.min(80, percent));
         }
       }
@@ -189,13 +208,12 @@ export async function compressPdfDocument(inputData, options = {}) {
 
   onProgress('Mengemas objek dalam Object Stream PDF 1.5...', 85);
 
-  // Bersihkan identitas duplikat di trailer tanpa mengganggu isi
   try {
     pdfDoc.setProducer('Kuro Studio PDF Optimizer');
     pdfDoc.setCreator('Kuro Studio');
   } catch {}
 
-  // Simpan dengan Object Streams aktif untuk kompresi struktur kamus PDF
+  // 4. Simpan dengan Object Streams aktif untuk kompresi struktur kamus PDF
   const compressedBytes = await pdfDoc.save({
     useObjectStreams: true,
     addDefaultPage: false,
@@ -204,11 +222,21 @@ export async function compressPdfDocument(inputData, options = {}) {
 
   onProgress('Menyusun pratinjau dokumen...', 95);
 
-  const compressedBlob = new Blob([compressedBytes], { type: 'application/pdf' });
+  // 5. Jaminan akurasi ukuran fisik persis sama
+  let finalBytes = compressedBytes;
+  let finalSize = compressedBytes.length;
+
+  // Jika hasil kompresi ternyata tidak lebih kecil (PDF teks murni yang sudah padat),
+  // gunakan bytes yang paling hemat agar ukuran tidak pernah membesar
+  if (finalSize > originalSize) {
+    finalBytes = new Uint8Array(arrayBuffer);
+    finalSize = originalSize;
+  }
+
+  const compressedBlob = new Blob([finalBytes], { type: 'application/pdf' });
   const dataUrl = URL.createObjectURL(compressedBlob);
 
-  const newSize = compressedBytes.length;
-  const savingsBytes = Math.max(0, originalSize - newSize);
+  const savingsBytes = Math.max(0, originalSize - finalSize);
   const savingsPercent = originalSize > 0
     ? Math.round((savingsBytes / originalSize) * 100)
     : 0;
@@ -218,7 +246,7 @@ export async function compressPdfDocument(inputData, options = {}) {
   return {
     success: true,
     originalSizeBytes: originalSize,
-    compressedSizeBytes: newSize,
+    compressedSizeBytes: finalSize,
     savingsBytes,
     savingsPercent: `${savingsPercent}%`,
     pageCount,
@@ -229,4 +257,3 @@ export async function compressPdfDocument(inputData, options = {}) {
     presetLabel: config.label
   };
 }
-
