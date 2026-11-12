@@ -5,11 +5,7 @@
  */
 
 export async function readClipboardText() {
-  if (typeof window !== 'undefined' && window.focus) {
-    try { window.focus(); } catch {}
-  }
-
-  // 1. Coba Clipboard API modern readText()
+  // 1. Coba Clipboard API modern navigator.clipboard.readText() langsung dalam user gesture
   if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
     try {
       const text = await navigator.clipboard.readText();
@@ -19,11 +15,9 @@ export async function readClipboardText() {
       return { 
         success: false, 
         reason: 'empty', 
-        message: 'Papan klip (clipboard) Anda masih kosong. Salin tautan terlebih dahulu!' 
+        message: 'Papan klip (clipboard) masih kosong. Salin tautan terlebih dahulu!' 
       };
     } catch (err) {
-      console.warn('Clipboard readText gagal, mencoba fallback read():', err);
-
       // 2. Coba fallback navigator.clipboard.read()
       if (navigator.clipboard.read) {
         try {
@@ -38,18 +32,16 @@ export async function readClipboardText() {
               }
             }
           }
-        } catch (innerErr) {
-          console.warn('Clipboard read() fallback juga gagal:', innerErr);
-        }
+        } catch {}
       }
 
-      // Deteksi error izin browser
+      // Deteksi penolakan izin browser
       const isDenied = err.name === 'NotAllowedError' || err.name === 'SecurityError';
       return {
         success: false,
         reason: isDenied ? 'permission_denied' : 'error',
         message: isDenied 
-          ? 'Izin clipboard diblokir browser. Izinkan akses clipboard pada ikon gembok di bilah alamat (URL).'
+          ? 'Izin clipboard dibatasi browser. Izinkan clipboard atau ketuk tahan kolom untuk menempel.'
           : 'Gagal membaca papan klip perangkat secara otomatis.'
       };
     }
@@ -58,7 +50,7 @@ export async function readClipboardText() {
   return {
     success: false,
     reason: 'unsupported',
-    message: 'Browser Anda tidak mengizinkan pembacaan papan klip otomatis.'
+    message: 'Browser tidak mengizinkan pembacaan papan klip otomatis.'
   };
 }
 

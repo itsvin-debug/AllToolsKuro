@@ -224,10 +224,27 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   const handlePasteClipboard = async () => {
     const res = await readClipboardText();
     if (res.success && res.text) {
-      handleUrlChange(res.text);
+      const pasted = res.text.trim();
+      setUrlInput(pasted);
+
+      // Otomatis sesuaikan platform jika tautan cocok dengan salah satu platform
+      const detected = detectPlatformFromUrl(pasted);
+      if (detected !== 'unknown' && detected !== activePlatform) {
+        setActivePlatform(detected);
+        onSelectPlatform?.(detected);
+        const targetMeta = platforms.find((p) => p.id === detected);
+        onShowToast?.(
+          isEn 
+            ? `Pasted & switched to ${targetMeta?.name || detected}!` 
+            : `Tautan ditempel & beralih ke ${targetMeta?.name || detected}!`
+        );
+      } else {
+        onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
+      }
+
       setErrorMsg('');
+      setSuggestedPlatform(null);
       if (inputRef.current) inputRef.current.focus();
-      onShowToast?.(isEn ? 'Link pasted successfully!' : 'Tautan berhasil ditempel!');
     } else {
       if (inputRef.current) inputRef.current.focus();
       onShowToast?.(res.message || (isEn ? 'Clipboard is empty.' : 'Papan klip masih kosong.'));

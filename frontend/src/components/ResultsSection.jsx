@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import JSZip from 'jszip';
 import CosmicBackButton from './CosmicBackButton';
 import { addGalleryItem } from '../services/storageService';
 import {
@@ -15,7 +14,6 @@ import {
   Clock,
   Volume2,
   VolumeX,
-  FileArchive,
   RotateCcw,
   RotateCw,
   Disc3,
@@ -446,6 +444,27 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     });
   };
 
+  // Pemicu unduhan langsung menggunakan atribut download HTML5 native browser
+  const triggerNativeDownload = (url, filename) => {
+    try {
+      const tempLink = document.createElement('a');
+      tempLink.style.display = 'none';
+      tempLink.href = url;
+      tempLink.download = filename;
+      tempLink.setAttribute('download', filename);
+      document.body.appendChild(tempLink);
+      tempLink.click();
+      setTimeout(() => {
+        if (document.body.contains(tempLink)) {
+          document.body.removeChild(tempLink);
+        }
+      }, 1000);
+    } catch (err) {
+      console.warn('Gagal memicu unduhan anchor, mengalihkan ke window:', err);
+      window.location.href = url;
+    }
+  };
+
   const downloadPhotoSlide = async (slideItem, index) => {
     if (!slideItem) return;
     const slideId = `slide_${slideItem.id || index}`;
@@ -462,14 +481,8 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       if (customBlob) {
         setDownloadProgress(prev => ({ ...prev, [slideId]: 90 }));
         const blobUrl = window.URL.createObjectURL(customBlob);
-        const tempLink = document.createElement('a');
-        tempLink.style.display = 'none';
-        tempLink.href = blobUrl;
-        tempLink.download = filename;
-        document.body.appendChild(tempLink);
-        tempLink.click();
-        document.body.removeChild(tempLink);
-        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
+        triggerNativeDownload(blobUrl, filename);
+        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 3000);
 
         recordMediaInGallery(
           { ...slideItem, quality: selectedPhotoRes === '2160p' ? '4K Ultra HD' : selectedPhotoRes === '1080p' ? '1080p (Status WA Anti-Burik)' : '720p HD' },
@@ -526,12 +539,12 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     }
   };
 
-  // Mengunduh media ke perangkat dengan indikator progres real-time jaringan (1-100%)
+  // Mengunduh media langsung ke folder Downloads perangkat tanpa izin manual
   const downloadToDevice = (mediaItem, customFilename = null, explicitId = null) => {
     if (!mediaItem) return;
     const mediaId = explicitId || mediaItem.id || mediaItem.type || 'media';
     setDownloadingId(mediaId);
-    setDownloadProgress(prev => ({ ...prev, [mediaId]: 1 }));
+    setDownloadProgress(prev => ({ ...prev, [mediaId]: 25 }));
 
     const ext = mediaItem.extension || (
       mediaItem.type === 'image' || mediaItem.type === 'photo' ? 'jpg' :
@@ -557,183 +570,85 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     // Catat ke Galeri perangkat lokal
     recordMediaInGallery(mediaItem, filename, mediaId);
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('GET', proxyUrl, true);
-    xhr.responseType = 'blob';
+    // Langsung picu unduhan native browser agar masuk ke memori/folder Downloads tanpa jeda timeout async
+    setDownloadProgress(prev => ({ ...prev, [mediaId]: 70 }));
+    triggerNativeDownload(proxyUrl, filename);
 
-    xhr.onprogress = (event) => {
-      if (event.lengthComputable && event.total > 0) {
-        const percent = Math.min(99, Math.max(1, Math.round((event.loaded / event.total) * 100)));
-        setDownloadProgress(prev => ({ ...prev, [mediaId]: percent }));
-      } else {
-        const loadedKb = event.loaded / 1024;
-        const approx = Math.min(96, Math.max(5, Math.round((loadedKb / 6000) * 100)));
-        setDownloadProgress(prev => ({ ...prev, [mediaId]: approx }));
-      }
-    };
-
-    const cleanup = () => {
-      setTimeout(() => {
-        setDownloadingId(null);
-        setDownloadProgress(prev => {
-          const next = { ...prev };
-          delete next[mediaId];
-          return next;
-        });
-      }, 700);
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300 && xhr.response) {
-        setDownloadProgress(prev => ({ ...prev, [mediaId]: 100 }));
-        const blob = xhr.response;
-        const blobUrl = window.URL.createObjectURL(blob);
-        const tempLink = document.createElement('a');
-        tempLink.style.display = 'none';
-        tempLink.href = blobUrl;
-        tempLink.download = filename;
-        document.body.appendChild(tempLink);
-        tempLink.click();
-        document.body.removeChild(tempLink);
-        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
-        cleanup();
-      } else {
-        fallbackDownload();
-      }
-    };
-
-    const fallbackDownload = () => {
-      setDownloadProgress(prev => ({ ...prev, [mediaId]: 100 }));
-      // Gunakan trigger link tersembunyi tanpa target='_blank' agar tidak membuka tab putih
-      const tempLink = document.createElement('a');
-      tempLink.style.display = 'none';
-      tempLink.href = proxyUrl;
-      tempLink.download = filename;
-      document.body.appendChild(tempLink);
-      tempLink.click();
-      document.body.removeChild(tempLink);
-      cleanup();
-    };
-
-    xhr.onerror = fallbackDownload;
-    xhr.send();
+    setDownloadProgress(prev => ({ ...prev, [mediaId]: 100 }));
+    setTimeout(() => {
+      setDownloadingId(null);
+      setDownloadProgress(prev => {
+        const next = { ...prev };
+        delete next[mediaId];
+        return next;
+      });
+    }, 600);
   };
 
-  // Mengunduh seluruh slide sekaligus (foto, video slide, dan musik) ke dalam 1 arsip ZIP
-  const handleDownloadAllSlidesZip = async () => {
+  // Mengunduh seluruh slide secara berurutan sebagai file satuan (.jpg/.mp4) langsung ke folder Downloads
+  const handleDownloadAllSlidesSequential = async () => {
     if (!allSlidesToDownload || allSlidesToDownload.length === 0) return;
     setDownloadingAllSlides(true);
-    setDownloadAllProgressText(isEn ? 'Preparing ZIP...' : 'Menyiapkan ZIP...');
+    setDownloadAllProgressText(isEn ? 'Preparing downloads...' : 'Menyiapkan unduhan...');
 
-    const zip = new JSZip();
-    const folder = zip.folder('slides');
-
+    const total = allSlidesToDownload.length;
     try {
-      const totalItems = allSlidesToDownload.length;
-      for (let i = 0; i < totalItems; i++) {
+      for (let i = 0; i < total; i++) {
         const item = allSlidesToDownload[i];
         const isVid = item.type === 'video' || item.type === 'live_wallpaper';
-        setDownloadAllProgressText(
-          isEn 
-            ? `Downloading ${isVid ? 'video' : 'photo'} ${i + 1} of ${totalItems}...` 
-            : `Mengunduh ${isVid ? 'video slide' : 'foto slide'} ${i + 1} dari ${totalItems}...`
-        );
-
         const ext = item.extension || (isVid ? 'mp4' : 'jpg');
         const resLabel = selectedPhotoRes === '2160p' ? '4k' : selectedPhotoRes === '1080p' ? '1080p_sw' : '720p';
         const filename = item.filename || (
           isVid ? `video_slide_${i + 1}.${ext}` : `slide_${i + 1}_${resLabel}.${ext}`
         );
-        const proxyUrl = item.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(filename)}`;
 
-        try {
-          if (!isVid && selectedPhotoRes !== '2160p') {
+        setDownloadAllProgressText(
+          isEn 
+            ? `Downloading ${i + 1} of ${total} (${isVid ? 'Video' : 'Photo'})...` 
+            : `Mengunduh ${i + 1} dari ${total} (${isVid ? 'Video' : 'Foto'})...`
+        );
+
+        // Jika foto dan resolusi status WA dipilih, proses resolusi terlebih dahulu
+        if (!isVid && selectedPhotoRes !== '2160p') {
+          try {
             const procBlob = await processImageResolution(item.url, selectedPhotoRes);
             if (procBlob) {
-              folder.file(filename, procBlob);
+              const blobUrl = window.URL.createObjectURL(procBlob);
+              triggerNativeDownload(blobUrl, filename);
+              setTimeout(() => window.URL.revokeObjectURL(blobUrl), 3000);
+              recordMediaInGallery(item, filename, `slide_${i + 1}`);
+              await new Promise(r => setTimeout(r, 450));
               continue;
             }
-          }
-
-          const res = await fetch(proxyUrl);
-          if (res.ok) {
-            const blob = await res.blob();
-            folder.file(filename, blob);
-          }
-        } catch {
-          // Abaikan kegagalan individual agar proses batch tetap berlanjut
+          } catch {}
         }
+
+        const proxyUrl = item.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(filename)}`;
+        triggerNativeDownload(proxyUrl, filename);
+        recordMediaInGallery(item, filename, `slide_${i + 1}`);
+
+        // Beri jeda 450ms antar unduhan agar browser menangani unduhan berkas satu per satu dengan tertib
+        await new Promise(r => setTimeout(r, 450));
       }
 
-      // Pastikan audio trek dari postingan tetap disertakan di dalam arsip ZIP
+      // Jika ada audio trek, unduh juga sebagai file audio satuan
       if (activeAudio && activeAudio.url) {
-        setDownloadAllProgressText(isEn ? 'Including audio track...' : 'Menyertakan trek audio...');
-        const audioFilename = activeAudio.filename || 'audio.mp3';
+        setDownloadAllProgressText(isEn ? 'Downloading audio track...' : 'Mengunduh musik...');
+        const audioFilename = activeAudio.filename || `slide_audio_${Date.now()}.mp3`;
         const audioProxyUrl = activeAudio.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(activeAudio.url)}&filename=${encodeURIComponent(audioFilename)}`;
-        try {
-          const aRes = await fetch(audioProxyUrl);
-          if (aRes.ok) {
-            const aBlob = await aRes.blob();
-            folder.file(audioFilename, aBlob);
-          }
-        } catch {}
+        triggerNativeDownload(audioProxyUrl, audioFilename);
+        recordMediaInGallery(activeAudio, audioFilename, 'audio');
+        await new Promise(r => setTimeout(r, 400));
       }
 
-      setDownloadAllProgressText(isEn ? 'Compressing ZIP archive...' : 'Mengompres arsip ZIP...');
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const zipUrl = window.URL.createObjectURL(zipBlob);
-      const zipFilename = `kuro_slides_${Date.now()}.zip`;
-
-      // Simpan seluruh album koleksi slide ke Galeri pengguna agar bisa digeser di galeri
-      try {
-        addGalleryItem({
-          title: result.title || `Koleksi Slide ${result.platform || ''}`,
-          type: 'slide',
-          category: `Downloader (${result.platform || 'Slide'})`,
-          extension: 'SLIDES',
-          size: `${totalItems} Slide`,
-          thumbnail: allSlidesToDownload[0]?.thumbnail || allSlidesToDownload[0]?.url || result.thumbnail,
-          previewUrl: allSlidesToDownload[0]?.url || result.thumbnail,
-          downloadData: zipUrl,
-          filename: zipFilename,
-          slides: allSlidesToDownload.map((item, idx) => {
-            const isVid = item.type === 'video' || item.type === 'live_wallpaper';
-            const sExt = item.extension || (isVid ? 'mp4' : 'jpg');
-            return {
-              id: item.id || idx + 1,
-              type: isVid ? 'video' : 'image',
-              url: item.url,
-              streamUrl: item.streamUrl || (isVid ? `/api/proxy-stream?url=${encodeURIComponent(item.url)}&type=video` : undefined),
-              proxyUrl: item.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(item.filename || `slide_${idx + 1}.${sExt}`)}`,
-              filename: item.filename || `slide_${idx + 1}.${sExt}`,
-              thumbnail: item.thumbnail || (item.type === 'image' || item.type === 'photo' ? item.url : result.thumbnail)
-            };
-          }),
-          audio: (activeAudio && activeAudio.url) ? {
-            url: activeAudio.url,
-            streamUrl: activeAudio.streamUrl || `/api/proxy-stream?url=${encodeURIComponent(activeAudio.url)}&type=audio`,
-            proxyUrl: activeAudio.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(activeAudio.url)}&filename=audio.mp3`,
-            title: result.musicInfo?.title || 'Trek Audio',
-            filename: activeAudio.filename || 'audio.mp3'
-          } : null
-        });
-      } catch (err) {
-        console.error('Gagal menyimpan koleksi slide ke galeri:', err);
-      }
-
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = zipUrl;
-      a.download = zipFilename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => window.URL.revokeObjectURL(zipUrl), 3000);
+      setDownloadAllProgressText(isEn ? 'All files downloaded!' : 'Semua slide berhasil diunduh!');
     } catch (e) {
-      console.error('Error generating zip:', e);
+      console.error('Gagal mengunduh kumpulan slide:', e);
     } finally {
-      setDownloadingAllSlides(false);
-      setDownloadAllProgressText('');
+      setTimeout(() => {
+        setDownloadingAllSlides(false);
+        setDownloadAllProgressText('');
+      }, 1000);
     }
   };
 
@@ -1214,22 +1129,22 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
             {allSlidesToDownload.length > 1 && (
               <button
                 type="button"
-                onClick={handleDownloadAllSlidesZip}
+                onClick={handleDownloadAllSlidesSequential}
                 disabled={downloadingAllSlides}
                 className="w-full sm:flex-1 bg-white hover:bg-neutral-100 text-black font-extrabold text-xs sm:text-sm rounded-lg py-3 flex items-center justify-center gap-2 border-2 border-black shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer disabled:opacity-50 min-h-[44px]"
               >
                 {downloadingAllSlides ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin text-black" />
-                    <span>{downloadAllProgressText || (isEn ? 'Preparing ZIP...' : 'Menyiapkan Semua Slide...')}</span>
+                    <span>{downloadAllProgressText || (isEn ? 'Downloading slides...' : 'Mengunduh Semua Slide...')}</span>
                   </>
                 ) : (
                   <>
-                    <FileArchive className="w-4 h-4 stroke-[2.5]" />
+                    <Layers className="w-4 h-4 stroke-[2.5]" />
                     <span>
                       {isEn 
-                        ? `Download All Slides (${allSlidesToDownload.length} Items - ${selectedPhotoRes.toUpperCase()})` 
-                        : `Unduh Semua Slide (${allSlidesToDownload.length} Slide - ${selectedPhotoRes === '2160p' ? '4K' : selectedPhotoRes === '1080p' ? '1080p SW' : '720p'})`}
+                        ? `Download All Slides (${allSlidesToDownload.length} Files)` 
+                        : `Unduh Semua Slide (${allSlidesToDownload.length} File Satuan)`}
                     </span>
                   </>
                 )}
