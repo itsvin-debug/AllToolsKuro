@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import CosmicBackButton from './CosmicBackButton';
 import BeforeAfterSlider from './BeforeAfterSlider';
@@ -261,6 +261,14 @@ export default function MediaCompressorScreen({ onBack }) {
       return;
     }
 
+    // Bebaskan Blob URL lama agar memori RAM (100MB - 1GB+) segera dilepaskan
+    if (pdfOriginalUrl) {
+      try { URL.revokeObjectURL(pdfOriginalUrl); } catch {}
+    }
+    if (pdfResult?.dataUrl) {
+      try { URL.revokeObjectURL(pdfResult.dataUrl); } catch {}
+    }
+
     setErrorMessage('');
     setPdfFile(file);
     setPdfOriginalSize(file.size);
@@ -275,6 +283,9 @@ export default function MediaCompressorScreen({ onBack }) {
     if (pdfOriginalUrl) {
       try { URL.revokeObjectURL(pdfOriginalUrl); } catch {}
     }
+    if (pdfResult?.dataUrl) {
+      try { URL.revokeObjectURL(pdfResult.dataUrl); } catch {}
+    }
     setPdfFile(null);
     setPdfOriginalSize(0);
     setPdfOriginalUrl('');
@@ -283,6 +294,18 @@ export default function MediaCompressorScreen({ onBack }) {
     setPdfProgressPercent(0);
     setErrorMessage('');
   };
+
+  // Bersihkan object URLs saat unmount untuk mencegah kebocoran memori RAM
+  useEffect(() => {
+    return () => {
+      if (pdfOriginalUrl) {
+        try { URL.revokeObjectURL(pdfOriginalUrl); } catch {}
+      }
+      if (pdfResult?.dataUrl) {
+        try { URL.revokeObjectURL(pdfResult.dataUrl); } catch {}
+      }
+    };
+  }, [pdfOriginalUrl, pdfResult?.dataUrl]);
 
   const processPdfCompression = async () => {
     if (!pdfFile) return;
@@ -1076,10 +1099,16 @@ export default function MediaCompressorScreen({ onBack }) {
                 <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
                   <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Awal</p>
                   <p className="font-black text-black text-xs sm:text-sm mt-0.5 truncate">{formatBytes(pdfResult.originalSizeBytes)}</p>
+                  <span className="text-[9px] text-neutral-500 font-mono block truncate">
+                    {pdfResult.originalSizeBytes.toLocaleString('id-ID')} B
+                  </span>
                 </div>
                 <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
                   <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Ukuran Baru</p>
                   <p className="font-black text-black text-xs sm:text-sm mt-0.5 truncate">{formatBytes(pdfResult.compressedSizeBytes)}</p>
+                  <span className="text-[9px] text-neutral-500 font-mono block truncate">
+                    {pdfResult.compressedSizeBytes.toLocaleString('id-ID')} B
+                  </span>
                 </div>
                 <div className="p-2 sm:p-2.5 bg-white rounded-lg border border-black/20">
                   <p className="text-[10px] text-neutral-500 uppercase font-bold truncate">Penghematan</p>

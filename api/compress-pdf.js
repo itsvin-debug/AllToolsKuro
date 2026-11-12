@@ -1,4 +1,4 @@
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName } from 'pdf-lib';
 import { applySecurityHeaders } from './_security.js';
 
 export default async function handler(req, res) {
@@ -34,6 +34,21 @@ export default async function handler(req, res) {
       updateMetadata: false
     });
 
+    // Pembersihan metadata XML dan bloat editor
+    try {
+      if (pdfDoc.catalog.has(PDFName.of('Metadata'))) {
+        pdfDoc.catalog.delete(PDFName.of('Metadata'));
+      }
+    } catch {}
+
+    const pages = pdfDoc.getPages();
+    for (const page of pages) {
+      try {
+        if (page.node.has(PDFName.of('PieceInfo'))) page.node.delete(PDFName.of('PieceInfo'));
+        if (page.node.has(PDFName.of('Thumb'))) page.node.delete(PDFName.of('Thumb'));
+      } catch {}
+    }
+
     try {
       pdfDoc.setProducer('Kuro Studio PDF Optimizer');
       pdfDoc.setCreator('Kuro Studio');
@@ -45,8 +60,13 @@ export default async function handler(req, res) {
       updateFieldAppearances: false
     });
 
-    const compressedBase64 = Buffer.from(compressedBytes).toString('base64');
-    const compressedSize = compressedBytes.length;
+    let finalBytes = compressedBytes;
+    if (finalBytes.length > originalSize) {
+      finalBytes = inputBuffer;
+    }
+
+    const compressedBase64 = Buffer.from(finalBytes).toString('base64');
+    const compressedSize = finalBytes.length;
     const savingsBytes = Math.max(0, originalSize - compressedSize);
     const savingsPercent = originalSize > 0
       ? Math.round((savingsBytes / originalSize) * 100)

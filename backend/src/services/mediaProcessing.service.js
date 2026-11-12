@@ -4,7 +4,8 @@ import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import util from 'util';
 import axios from 'axios';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
+import zlib from 'zlib';
 
 const execPromise = util.promisify(exec);
 
@@ -474,6 +475,120 @@ export async function compressPdfService({
     updateMetadata: false
   });
 
+  // Hapus metadata XML bloat
+  try {
+    if (pdfDoc.catalog.has(PDFName.of('Metadata'))) {
+      pdfDoc.catalog.delete(PDFName.of('Metadata'));
+    }
+  } catch {}
+
+  const pages = pdfDoc.getPages();
+  for (const page of pages) {
+    try {
+      if (page.node.has(PDFName.of('PieceInfo'))) page.node.delete(PDFName.of('PieceInfo'));
+      if (page.node.has(PDFName.of('Thumb'))) page.node.delete(PDFName.of('Thumb'));
+    } catch {}
+  }
+
+  // Parameter preset
+  let jpegQuality = 58;
+  let maxDimension = 1440;
+  if (preset === 'extreme') {
+    jpegQuality = 32;
+    maxDimension = 960;
+  } else if (preset === 'standard') {
+    jpegQuality = 80;
+    maxDimension = 2048;
+  }
+
+  // Optimasi image streams via sharp jika tersedia
+  try {
+    const sharpModule = await import('sharp');
+    const sharp = sharpModule.default || sharpModule;
+
+    const indirectObjects = pdfDoc.context.enumerateIndirectObjects();
+    for (const [, obj] of indirectObjects) {
+      if (obj instanceof PDFRawStream) {
+        const subtype = obj.dict.get(PDFName.of('Subtype'))?.toString();
+        if (subtype === '/Image' && obj.contents && obj.contents.length > 512) {
+          const filter = obj.dict.get(PDFName.of('Filter'))?.toString() || '';
+          const width = Number(obj.dict.get(PDFName.of('Width'))) || 0;
+          const height = Number(obj.dict.get(PDFName.of('Height'))) || 0;
+          const colorSpace = obj.dict.get(PDFName.of('ColorSpace'))?.toString() || '/DeviceRGB';
+
+          let recompressed = null;
+          let newW = width;
+          let newH = height;
+
+          if (filter.includes('DCTDecode')) {
+            try {
+              const meta = await sharp(obj.contents).metadata();
+              const w = meta.width || width;
+              const h = meta.height || height;
+              let resizeOpts = {};
+              if (w > maxDimension || h > maxDimension) {
+                if (w >= h) {
+                  resizeOpts = { width: maxDimension };
+                  newW = maxDimension;
+                  newH = Math.max(1, Math.round((h * maxDimension) / w));
+                } else {
+                  resizeOpts = { height: maxDimension };
+                  newH = maxDimension;
+                  newW = Math.max(1, Math.round((w * maxDimension) / h));
+                }
+              }
+              let pipeline = sharp(obj.contents);
+              if (resizeOpts.width || resizeOpts.height) {
+                pipeline = pipeline.resize(resizeOpts);
+              }
+              recompressed = await pipeline.jpeg({ quality: jpegQuality }).toBuffer();
+            } catch {}
+          } else if (filter.includes('FlateDecode') || !filter || filter === 'undefined') {
+            try {
+              const inflated = zlib.inflateSync(Buffer.from(obj.contents));
+              let channels = 3;
+              if (colorSpace.includes('Gray')) channels = 1;
+              else if (colorSpace.includes('CMYK')) channels = 4;
+
+              if (width > 0 && height > 0 && inflated.length >= width * height * channels) {
+                let pipeline = sharp(Buffer.from(inflated.slice(0, width * height * channels)), {
+                  raw: { width, height, channels }
+                });
+
+                if (width > maxDimension || height > maxDimension) {
+                  if (width >= height) {
+                    newW = maxDimension;
+                    newH = Math.max(1, Math.round((height * maxDimension) / width));
+                    pipeline = pipeline.resize({ width: maxDimension });
+                  } else {
+                    newH = maxDimension;
+                    newW = Math.max(1, Math.round((width * maxDimension) / height));
+                    pipeline = pipeline.resize({ height: maxDimension });
+                  }
+                }
+
+                recompressed = await pipeline.jpeg({ quality: jpegQuality }).toBuffer();
+              }
+            } catch {}
+          }
+
+          if (recompressed && recompressed.length < obj.contents.length) {
+            obj.contents = recompressed;
+            obj.dict.set(PDFName.of('Filter'), PDFName.of('DCTDecode'));
+            obj.dict.set(PDFName.of('Length'), PDFNumber.of(recompressed.length));
+            obj.dict.set(PDFName.of('ColorSpace'), PDFName.of('DeviceRGB'));
+            obj.dict.set(PDFName.of('BitsPerComponent'), PDFNumber.of(8));
+            obj.dict.delete(PDFName.of('DecodeParms'));
+            if (newW && newH) {
+              obj.dict.set(PDFName.of('Width'), PDFNumber.of(newW));
+              obj.dict.set(PDFName.of('Height'), PDFNumber.of(newH));
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
   try {
     pdfDoc.setProducer('Kuro Studio PDF Optimizer');
     pdfDoc.setCreator('Kuro Studio');
@@ -485,14 +600,19 @@ export async function compressPdfService({
     updateFieldAppearances: false
   });
 
+  let finalBuffer = Buffer.from(compressedBytes);
+  if (finalBuffer.length > originalSize) {
+    finalBuffer = inputBuffer;
+  }
+
   const uid = Date.now() + '_' + Math.random().toString(36).substring(2, 7);
   const cleanBase = path.basename(originalName, '.pdf').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
   const fileName = `kuro_compressed_${cleanBase}_${uid}.pdf`;
   const outputPath = path.join(uploadsDir, fileName);
 
-  fs.writeFileSync(outputPath, Buffer.from(compressedBytes));
+  fs.writeFileSync(outputPath, finalBuffer);
 
-  const compressedSize = compressedBytes.length;
+  const compressedSize = finalBuffer.length;
   const savingsBytes = Math.max(0, originalSize - compressedSize);
   const savingsPercent = originalSize > 0
     ? Math.round((savingsBytes / originalSize) * 100)
