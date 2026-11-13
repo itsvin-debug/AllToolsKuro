@@ -33,3 +33,4 @@ export async function getIpTelemetry(req, res) {
     });
   }
 }
+

@@ -651,3 +651,4 @@ export default function IpCheckerScreen({ onBack, onShowToast, lang = 'id' }) {
     </div>
   );
 }
+
