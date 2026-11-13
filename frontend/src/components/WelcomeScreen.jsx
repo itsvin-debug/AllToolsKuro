@@ -17,7 +17,8 @@ import {
   Lock,
   Unlock,
   Tv,
-  BookOpen
+  BookOpen,
+  Globe
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
@@ -61,11 +62,11 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
   const wt = t.welcome;
 
   const categories = [
-    { id: 'all', label: wt.catAll, count: 16 },
+    { id: 'all', label: wt.catAll, count: 17 },
     { id: 'downloader', label: wt.catDownloader, count: 2 },
     { id: 'file', label: wt.catFile, count: 4 },
     { id: 'creative', label: wt.catCreative, count: 6 },
-    { id: 'utility', label: wt.catUtility, count: 4 }
+    { id: 'utility', label: wt.catUtility, count: 5 }
   ];
 
   const tools = [
@@ -203,6 +204,15 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       tag: wt.tools.manhwaFinder?.tag || 'MANHWA',
       icon: BookOpen,
       onClick: () => onOpenTool('manhwaFinder')
+    },
+    {
+      id: 'ipChecker',
+      category: 'utility',
+      name: wt.tools.ipChecker?.name || 'IP & DNS Checker',
+      desc: wt.tools.ipChecker?.desc || 'Analisis telemetri IP publik, operator ISP, routing ASN, dan keamanan VPN.',
+      tag: wt.tools.ipChecker?.tag || 'NETWORK',
+      icon: Globe,
+      onClick: () => onOpenTool('ipChecker')
     }
   ];
 

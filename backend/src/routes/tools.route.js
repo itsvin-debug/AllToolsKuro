@@ -13,6 +13,7 @@ import {
   trimVideoService,
   compressPdfService
 } from '../services/mediaProcessing.service.js';
+import { getIpTelemetry } from '../controllers/ipCheck.controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +25,12 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 const router = express.Router();
+
+/**
+ * 0. GET /api/ip-check
+ * Advanced IP, ISP, ASN, Geolocation, and Security Telemetry
+ */
+router.get('/ip-check', getIpTelemetry);
 
 /**
  * 1. POST /api/link-to-doc

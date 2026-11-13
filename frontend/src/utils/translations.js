@@ -136,6 +136,11 @@ export const translations = {
           name: 'Rekomendasi Manhwa',
           desc: 'Koleksi dan kurasi manhwa Korea terpopuler dengan filter genre, rating, cover, dan sinopsis cerita.',
           tag: 'MANHWA'
+        },
+        ipChecker: {
+          name: 'IP & DNS Checker',
+          desc: 'Analisis telemetri IP publik, operator ISP, nomor ASN, koordinat lokasi, dan deteksi VPN/Proxy.',
+          tag: 'NETWORK'
         }
       }
     },
@@ -687,6 +692,11 @@ export const translations = {
           name: 'Manhwa Recommendations',
           desc: 'Discover top Korean manhwa with genre filters, reader ratings, covers, and full synopsis.',
           tag: 'MANHWA'
+        },
+        ipChecker: {
+          name: 'IP & DNS Checker',
+          desc: 'Live telemetry for public IP, ISP provider, ASN routing, geographic coordinates, and VPN/Proxy detection.',
+          tag: 'NETWORK'
         }
       }
     },
