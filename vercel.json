@@ -61,6 +61,10 @@
       "destination": "/api/proxy-download?stream=true"
     },
     {
+      "source": "/api/proxy-doc-image",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
       "source": "/api/ping",
       "destination": "/api/locked-tools?action=ping"
     },
@@ -70,7 +74,7 @@
     },
     {
       "source": "/api/system-battery",
-      "destination": "/api/system-battery"
+      "destination": "/api/version?action=battery"
     },
     {
       "source": "/api/verify-admin",

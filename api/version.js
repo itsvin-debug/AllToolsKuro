@@ -10,6 +10,17 @@ export default function handler(req, res) {
     return res.status(200).end();
   }
 
+  // Dukungan telemetri status baterai cloud
+  if (req.query.action === 'battery' || (req.url && req.url.includes('battery'))) {
+    return res.status(200).json({
+      success: true,
+      level: 100,
+      isCharging: true,
+      hasBattery: false,
+      source: 'cloud'
+    });
+  }
+
   const versionPayload = {
     latestVersion: '1.5.2',
     versionCode: 7,
