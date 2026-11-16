@@ -188,19 +188,37 @@ export default async function handler(req, res) {
     let rawData = null;
     let dataSource = 'siputzx';
 
-    // 1. Coba Endpoint Siputzx Utama
+    // 1. Coba Endpoint Siputzx Utama dengan validasi Content-Type & Status
     try {
       const apiRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
-        timeout: 7000,
+        timeout: 8000,
+        validateStatus: () => true,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*'
         }
       });
-      if (apiRes.data && apiRes.data.status && apiRes.data.data) {
-        rawData = apiRes.data.data;
-        dataSource = 'siputzx';
+      const cType = apiRes.headers['content-type'] || '';
+      if (apiRes.status === 200 && cType.toLowerCase().includes('application/json')) {
+        let bodyData = apiRes.data;
+        if (typeof bodyData === 'string') {
+          try { bodyData = JSON.parse(bodyData); } catch { bodyData = null; }
+        }
+        if (bodyData && bodyData.status && bodyData.data) {
+          rawData = bodyData.data;
+          dataSource = 'siputzx';
+        }
       }
     } catch (_) {}
+
+    // Jika API eksternal gagal mendapatkan data profil yang valid
+    if (!rawData) {
+      return res.status(502).json({
+        status: 'error',
+        success: false,
+        message: 'API TikTok eksternal sedang gangguan atau mengembalikan respons tidak valid.'
+      });
+    }
 
     // 2. Normalisasi Data
     const userObj = rawData?.user || rawData || {};

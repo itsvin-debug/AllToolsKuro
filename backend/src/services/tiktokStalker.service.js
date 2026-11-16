@@ -88,36 +88,58 @@ export async function stalkTiktokProfile(rawInput) {
   let rawData = null;
   let dataSource = 'siputzx';
 
-  // 1. Panggil Endpoint Utama (api.siputzx.my.id)
+  // 1. Panggil Endpoint Utama (api.siputzx.my.id) dengan validasi Content-Type & Status
   try {
     const res = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
       timeout: 10000,
+      validateStatus: () => true,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
+        'Accept': 'application/json, text/plain, */*'
       }
     });
 
-    if (res.data && res.data.status && res.data.data) {
-      rawData = res.data.data;
-      dataSource = 'siputzx';
+    const contentType = res.headers['content-type'] || '';
+    const isJson = contentType.toLowerCase().includes('application/json');
+
+    if (res.status === 200 && isJson) {
+      let bodyData = res.data;
+      if (typeof bodyData === 'string') {
+        try {
+          bodyData = JSON.parse(bodyData);
+        } catch {
+          bodyData = null;
+        }
+      }
+      if (bodyData && bodyData.status && bodyData.data) {
+        rawData = bodyData.data;
+        dataSource = 'siputzx';
+      }
     }
   } catch (apiErr) {
-    // Primary API down / timeout -> beralih ke fallback
+    // Primary API down / timeout
   }
 
-  // 2. Jika API siputzx gagal, gunakan Python Hybrid Fallback
+  // 2. Jika API siputzx gagal, coba fallback Python scraper
   if (!rawData) {
     try {
       const pyResult = await callPythonFallback(username);
-      if (pyResult) {
+      if (pyResult && (pyResult.avatar || pyResult.uniqueId || pyResult.nickname)) {
         rawData = pyResult;
         dataSource = 'python_scraper';
       }
     } catch {}
   }
 
-  // 3. Jika kedua backend scraper gagal mendapatkan metadata lengkap, gunakan data defensif
+  // 3. Jika API eksternal gagal dan scraper tidak mendapatkan data valid, kembalikan 502
+  if (!rawData) {
+    return {
+      success: false,
+      status: 'error',
+      statusCode: 502,
+      message: 'API TikTok eksternal sedang gangguan atau mengembalikan respons tidak valid.'
+    };
+  }
   const userObj = rawData?.user || rawData || {};
   const statsObj = rawData?.stats || rawData || {};
 

@@ -242,12 +242,17 @@ function apiServicesDevMiddleware() {
           targetModulePath = '../api/manhwa/search.js';
         } else if (pathname === '/api/version') {
           targetModulePath = '../api/version.js';
+        } else if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk') {
+          targetModulePath = '../api/media.js';
         }
 
         if (targetModulePath) {
           try {
             const apiMod = await import(targetModulePath);
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+            if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk') {
+              req.query.type = 'tiktok-stalk';
+            }
 
             const mockRes = {
               setHeader: (k, v) => res.setHeader(k, v),
@@ -329,7 +334,13 @@ export default defineConfig({
                 return;
               }
               res.writeHead(502, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Backend offline', code: err.code }));
+              res.end(JSON.stringify({ 
+                success: false, 
+                status: 'error', 
+                error: 'Backend offline', 
+                message: 'Server backend tidak dapat dihubungi. Pastikan server API Node.js sudah berjalan.', 
+                code: err.code 
+              }));
             }
           });
         },

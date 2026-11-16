@@ -24,8 +24,14 @@ export async function getTiktokProfileStalk(req, res) {
       'Expires': '0'
     });
 
-    if (!result.success && result.error === 'invalid_username') {
-      return res.status(400).json(result);
+    if (!result.success) {
+      const code = result.statusCode || (result.error === 'invalid_username' ? 400 : 502);
+      return res.status(code).json({
+        status: 'error',
+        success: false,
+        message: result.message || 'API TikTok eksternal sedang gangguan atau mengembalikan respons tidak valid.',
+        error: result.error || 'external_api_error'
+      });
     }
 
     return res.status(200).json(result);

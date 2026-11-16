@@ -34,11 +34,13 @@ const router = express.Router();
 router.get('/ip-check', getIpTelemetry);
 
 /**
- * 0.1 POST & GET /api/tiktok-stalk
+ * 0.1 POST & GET /api/tiktok-stalk & /api/tools/tiktok-stalk
  * Pelacak Profil TikTok 100% Anonim tanpa jejak dan tanpa login
  */
 router.post('/tiktok-stalk', getTiktokProfileStalk);
+router.post('/tools/tiktok-stalk', getTiktokProfileStalk);
 router.get('/tiktok-stalk', getTiktokProfileStalk);
+router.get('/tools/tiktok-stalk', getTiktokProfileStalk);
 
 /**
  * 1. POST /api/link-to-doc

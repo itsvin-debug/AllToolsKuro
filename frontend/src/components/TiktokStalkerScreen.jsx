@@ -76,13 +76,26 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
       // Panggil endpoint backend / tools / api
       const res = await fetch('/api/tools/tiktok-stalk', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify({ username: raw })
       });
 
-      const json = await res.json();
+      const rawText = await res.text();
+      let json = null;
+      try {
+        json = JSON.parse(rawText);
+      } catch (parseErr) {
+        throw new Error(
+          isEn 
+            ? 'Backend server did not return valid JSON. Make sure the API server is running or check external API status.'
+            : 'Server backend tidak merespons format JSON. Pastikan server API sudah berjalan atau API eksternal sedang gangguan.'
+        );
+      }
 
-      if (!res.ok || !json.success) {
+      if (!res.ok || json.status === 'error' || json.success === false) {
         throw new Error(json.message || t.errorNotFound);
       }
 
