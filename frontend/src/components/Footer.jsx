@@ -5,7 +5,7 @@ export default function Footer({ lang = 'id' }) {
   const t = translations[lang] || translations.id;
 
   return (
-    <footer className="bg-white border-t-2 border-black w-full mt-auto py-6">
+    <footer className="bg-white border-t-2 border-black w-full mt-auto pt-6 pb-28 sm:pb-8">
       <div className="max-w-4xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
         <div className="flex items-center gap-2">
           <span className="font-black text-base tracking-tight font-display text-black">

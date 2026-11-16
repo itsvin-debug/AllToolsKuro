@@ -234,6 +234,7 @@ function apiServicesDevMiddleware() {
         const pathname = parsedUrl.pathname;
 
         let targetModulePath = null;
+        let forcedType = null;
         if (pathname === '/api/capcut/search') {
           targetModulePath = '../api/capcut/search.js';
         } else if (pathname === '/api/anime/search') {
@@ -242,16 +243,28 @@ function apiServicesDevMiddleware() {
           targetModulePath = '../api/manhwa/search.js';
         } else if (pathname === '/api/version') {
           targetModulePath = '../api/version.js';
-        } else if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk') {
+        } else if (pathname === '/api/resolve') {
+          targetModulePath = '../api/resolve.js';
+        } else if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk' || pathname === '/api/stalk/tiktok') {
           targetModulePath = '../api/media.js';
+          forcedType = 'tiktok-stalk';
+        } else if (pathname === '/api/stalk/instagram') {
+          targetModulePath = '../api/media.js';
+          forcedType = 'instagram-stalk';
+        } else if (pathname === '/api/stalk/twitter') {
+          targetModulePath = '../api/media.js';
+          forcedType = 'twitter-stalk';
+        } else if (pathname === '/api/stalk/github') {
+          targetModulePath = '../api/media.js';
+          forcedType = 'github-stalk';
         }
 
         if (targetModulePath) {
           try {
             const apiMod = await import(targetModulePath);
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
-            if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk') {
-              req.query.type = 'tiktok-stalk';
+            if (forcedType) {
+              req.query.type = forcedType;
             }
 
             const mockRes = {

@@ -62,9 +62,11 @@ Berikut adalah daftar modul yang tersedia pada Kuro Studio:
 | `videoStudio` | **Video Studio** | Studio Kreatif | Editor video praktis untuk mengatur kecepatan pemutaran, mengubah rasio layar 9:16 untuk story dan 16:9 untuk layar lebar, serta filter visual. | Aktif |
 | `videoTrimmer` | **Video Trimmer** | Pemotong Presisi | Pangkas detik awal atau akhir klip videomu secara akurat tanpa menurunkan bitrate asli atau merusak kualitas audionya. | Aktif |
 | `bgRemover` | **Hapus Background** | AI Background Remover | Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi. | Aktif |
-| `resolver` | **Safelink & Link Resolver** | Bypass Link & Iklan | Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman. | Aktif |
+| `resolver` | **Safelink & Link Resolver** | Bypass Link & Iklan | Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) serta mengekstrak seluruh isi bio Linktree secara instan dan 100% aman. | Aktif |
 | `animeFinder` | **Rekomendasi Anime** | Database Anime HD | Jelajahi ribuan anime terbaik berdasarkan genre favorit, skor rating MyAnimeList, poster visual resolusi tinggi, dan sinopsis lengkap. | Aktif |
 | `manhwaFinder` | **Rekomendasi Manhwa** | Komik Webtoon Korea | Temukan komik Korea (Manhwa) terpopuler dengan filter genre, rating pembaca, cover jernih, dan rangkuman jalan cerita seru. | Aktif |
+| `ipChecker` | **IP & DNS Checker** | Analisis Jaringan | Pantau telemetri alamat IP publik, ISP, ASN, koordinat lokasi, dan deteksi VPN/Proxy secara real-time. | Aktif |
+| `tiktokStalker` | **Social Media Stalker** | Multi-Platform OSINT | Rekognisi intelijen profil anonim untuk TikTok, Instagram, X (Twitter), dan GitHub tanpa login dan tanpa jejak tayangan. | Aktif |
 <!-- AUTO-FEATURES-END -->
 
 ### Detail Spesifikasi Modul Inti
@@ -97,6 +99,19 @@ Optimalisasi berkas media dan dokumen dengan preservasi integritas 100%:
   - *Ekstrem (Ukuran Minimal)*: Optimasi kamus objek mendalam untuk dokumen tebal / arsip hasil scan.
   - *Kualitas Arsip / Legal*: Format bersih bebas bloated revisions untuk skripsi dan berkas hukum.
 - **Pratinjau Langsung (Live Preview)**: *Embedded viewer* PDF interaktif di dalam browser sebelum berkas disimpan atau diunduh, lengkap dengan perbandingan ukuran awal vs terkompresi dan badge persentase penghematan.
+
+#### F. Social Media Stalker (Multi-Platform OSINT 4 Platform)
+Rekognisi dan intelijen profil media sosial 100% anonim tanpa login dan tanpa jejak tayangan profil (*zero footprint*):
+- **TikTok Stalker**: Ekstraksi username murni dari tautan `vt.tiktok.com` / `vm.tiktok.com`, foto profil resolusi penuh, status privat, verified badge, region, tanggal akun dibuat, followers, following, total suka, video, dan bio.
+- **Instagram Stalker**: Ekstraksi foto avatar HD asli, nama lengkap, status privat / publik, pengikut, mengikuti, total postingan, serta tautan bio aktif.
+- **X / Twitter Stalker**: Penelusuran profil akun X, followers, total tweet, tanggal bergabung, lokasi tertera, badge verifikasi, foto avatar, dan banner sampul resolusi tinggi.
+- **GitHub Developer Stalker**: Analisis profil developer open-source, jumlah total stars repositori publik, repositori aktif, followers, following, organisasi perusahaan, website, dan bio portofolio.
+- **Animasi Concentric Radar Sweep**: Visualisasi pemindaian interaktif bertema warna masing-masing brand resmi platform.
+
+#### G. IP & DNS Telemetry Checker
+Pusat pemantauan jaringan real-time:
+- **Analisis Jaringan**: Mendeteksi alamat IP publik (IPv4 / IPv6), nama penyedia layanan internet (ISP), Autonomous System Number (ASN), serta koordinat lokasi geografis.
+- **Deteksi Keamanan**: Mengidentifikasi apakah koneksi menggunakan VPN, proxy publik, atau node Tor.
 
 ---
 

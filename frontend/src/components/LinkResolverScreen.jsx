@@ -209,27 +209,27 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
   }, [resolveResult, searchFilter]);
 
   return (
-    <main className="flex-grow flex flex-col items-center justify-start px-4 sm:px-6 py-6 sm:py-8 max-w-4xl mx-auto w-full">
+    <main className="flex-grow flex flex-col items-center justify-start px-3 sm:px-6 py-4 sm:py-8 max-w-4xl mx-auto w-full">
       {/* Tombol Navigasi & Tag Header */}
-      <div className="w-full flex items-center justify-between mb-4">
+      <div className="w-full flex items-center justify-between mb-3 sm:mb-4">
         <CosmicBackButton onClick={onBack} label="Kembali ke Beranda" />
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-black text-white rounded-full border-2 border-black text-[11px] font-mono font-bold shadow-[2px_2px_0px_#000000]">
+        <div className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-black text-white rounded-full border-2 border-black text-[10px] sm:text-[11px] font-mono font-bold shadow-[2px_2px_0px_#000000]">
           <Link2 className="w-3.5 h-3.5 text-emerald-400" />
           <span>Safelink Resolver</span>
         </div>
       </div>
 
       {/* Hero Card & Input Formulir */}
-      <div className="w-full bg-white rounded-2xl p-5 sm:p-8 border-2 border-black shadow-[4px_4px_0px_#000000] mb-6">
-        <div className="flex items-start gap-3.5 sm:gap-4 mb-5">
-          <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-black text-white flex items-center justify-center shrink-0 border-2 border-black shadow-[2px_2px_0px_#000000]">
+      <div className="w-full bg-white rounded-2xl p-4 sm:p-8 border-2 border-black shadow-[4px_4px_0px_#000000] mb-6">
+        <div className="flex items-start gap-3 sm:gap-4 mb-4 sm:mb-5">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-black text-white flex items-center justify-center shrink-0 border-2 border-black shadow-[2px_2px_0px_#000000]">
             <Link2 className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
           </div>
           <div>
-            <h1 className="text-lg sm:text-2xl font-black text-black">
+            <h1 className="text-lg sm:text-2xl font-black text-black tracking-tight">
               Safelink & Shortlink Resolver
             </h1>
-            <p className="text-xs sm:text-sm text-neutral-600 font-mono mt-0.5">
+            <p className="text-xs sm:text-sm text-neutral-600 font-mono mt-0.5 leading-relaxed">
               Lewati safelink berbelit, countdown waktu, dan halaman iklan membingungkan untuk langsung mendapatkan link unduhan asli (Mediafire, Google Drive, Mega) atau mengekstrak isi halaman aggregator (Linktree).
             </p>
           </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import CosmicBackButton from '../CosmicBackButton';
+import { TikTokLogo } from './BrandLogos';
 import { 
   Search, 
   UserCheck, 
@@ -10,7 +11,6 @@ import {
   Check, 
   RotateCcw, 
   ShieldCheck, 
-  Radio, 
   Heart, 
   Users, 
   UserPlus, 
@@ -248,13 +248,13 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       </div>
 
       {/* Main Title Banner */}
-      <div className="bg-white border-2 border-black rounded-2xl p-6 shadow-[4px_4px_0px_#000000] relative overflow-hidden">
-        <div className="flex items-start gap-4">
-          <div className="p-3.5 bg-[#ef4444] border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0">
-            <Radio className="w-7 h-7" />
+      <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] relative overflow-hidden">
+        <div className="flex items-start gap-3 sm:gap-4">
+          <div className="p-2.5 sm:p-3.5 bg-black border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0">
+            <TikTokLogo className="w-6 h-6 sm:w-7 sm:h-7" />
           </div>
           <div className="space-y-1">
-            <h1 className="text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
+            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
               {t.title}
             </h1>
             <p className="text-sm md:text-base font-semibold text-neutral-600">
@@ -350,7 +350,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
               />
             </div>
 
-            <Radio className="w-8 h-8 text-black relative z-10 animate-pulse" />
+            <TikTokLogo className="w-8 h-8 text-black relative z-10 animate-pulse" />
           </div>
 
           <div className="space-y-2">

@@ -642,7 +642,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       // Deteksi pertanyaan identitas & pengenalan web AllToolsKuro di fallback
       const isWebIntro = /\b(web apa|situs apa|aplikasi apa|apk apa|buat apa|fungsi web|kegunaan web|gunanya web|alltoolskuro|bisa ngapain|bisa apa|apa itu|ini web apa|web apa ini|situs ini buat apa)\b/i.test(lower);
       if (isWebIntro) {
-        const introReply = `Halo ${userName}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digitalmu secara gratis! ✨\n\nDi sini kamu bisa menggunakan ${KURO_TOOLS_CATALOG.length} fitur lengkap:\n• Safelink Bypasser: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct link.\n• Rekomendasi Anime & Manhwa: Temukan ribuan anime MAL dan komik webtoon Korea berdasarkan saringan multi-genre.\n• Cari Link JJ: Ribuan template CapCut, preset Alight Motion, dan XML Google Drive.\n• Media Downloader: Unduh video tanpa watermark TikTok, IG, YT (kualitas HD hingga Status WA Anti-Burik).\n• Studio Visual AI: Hapus Background AI, QR Code Studio, Photo & Video Studio, dan Kompres Media.\n• Konversi Dokumen: PNG to PDF dan materi Scribd/SlideShare.\n\nMau Kuro pandu mencoba fitur yang mana hari ini?`;
+        const introReply = `Halo ${userName}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digitalmu secara gratis! ✨\n\nDi sini kamu bisa menggunakan ${KURO_TOOLS_CATALOG.length} fitur lengkap:\n• Social Media Stalker: Intelijen akun multi-platform (TikTok, Instagram, X/Twitter, GitHub) 100% anonim tanpa login.\n• Safelink & Linktree Resolver: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct download (Mediafire, GDrive, Mega) dan ekstrak ratusan tautan aggregator Linktree secara instan.\n• Rekomendasi Anime & Manhwa: Temukan ribuan anime MAL dan komik webtoon Korea berdasarkan saringan multi-genre.\n• Cari Link JJ: Ribuan template CapCut, preset Alight Motion, dan XML Google Drive.\n• Media Downloader: Unduh video tanpa watermark TikTok, IG, YT (kualitas HD hingga Status WA Anti-Burik).\n• Studio Visual AI: Hapus Background AI, QR Code Studio, Photo & Video Studio, dan Kompres Media.\n• Konversi Dokumen: PNG to PDF dan materi Scribd/SlideShare.\n\nMau Kuro pandu mencoba fitur yang mana hari ini?`;
         setAnimState('wave');
         streamText(introReply, () => {
           setMessages(prev => [...prev, { sender: 'ai', text: introReply, animation: 'wave' }]);
@@ -650,8 +650,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         return;
       }
 
-      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl') || lower.includes('bypas') || lower.includes('baypas')) {
-        handleGuideSpecificTool('resolver', `Tentu saja, ${userName}! Ini dia fitur Safelink Bypasser. Alat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file aslinya.`);
+      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl') || lower.includes('linktree') || lower.includes('bio link') || lower.includes('bypas') || lower.includes('baypas') || lower.includes('mediafire')) {
+        handleGuideSpecificTool('resolver', `Tentu saja, ${userName}! Ini dia fitur Safelink & Linktree Resolver. Alat cepat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file unduhan aslinya, serta mengekstrak isi bio Linktree secara otomatis.`);
         return;
       }
 

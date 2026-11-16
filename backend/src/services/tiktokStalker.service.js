@@ -71,7 +71,7 @@ async function extractLayer1Hydration(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const res = await axios.get(profileUrl, {
-      timeout: 9000,
+      timeout: 8000,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': USER_AGENTS[0],
@@ -139,11 +139,73 @@ async function extractLayer1Hydration(username) {
   return null;
 }
 
-// Layer 2: Python Anti-Bot Worker (Fallback curl_cffi / httpx)
-function extractLayer2Python(username) {
+// Layer 2: Cloud Fallback API (TikWM & Siputzx)
+async function extractLayer2CloudFallback(username) {
+  // A. TikWM API Fallback
+  try {
+    const tikRes = await axios.post(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(username)}`, {}, {
+      timeout: 4500,
+      headers: {
+        'User-Agent': USER_AGENTS[0],
+        'Accept': 'application/json, text/plain, */*'
+      }
+    });
+    if (tikRes.data && (tikRes.data.code === 0 || tikRes.data.data?.user)) {
+      const d = tikRes.data.data;
+      return {
+        source: 'layer2_tikwm_cloud',
+        user: d.user || {},
+        stats: d.stats || {},
+        statsV2: {}
+      };
+    }
+  } catch {}
+
+  // B. Siputzx API Fallback
+  try {
+    const sipRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
+      timeout: 4500,
+      headers: { 'User-Agent': USER_AGENTS[1] }
+    });
+    const sData = sipRes.data?.data || sipRes.data?.result;
+    if (sipRes.data && sipRes.data.status && sData) {
+      return {
+        source: 'layer2_siputzx_cloud',
+        user: {
+          uniqueId: sData.username || sData.uniqueId || username,
+          nickname: sData.nickname || sData.name || username,
+          avatarLarger: sData.avatar || sData.avatarLarger || '',
+          avatarMedium: sData.avatar || '',
+          avatarThumb: sData.avatar || '',
+          signature: sData.bio || sData.description || sData.signature || '',
+          verified: Boolean(sData.verified),
+          privateAccount: Boolean(sData.privateAccount),
+          region: sData.region || 'Global'
+        },
+        stats: {
+          followerCount: sData.followers || sData.followerCount || 0,
+          followingCount: sData.following || sData.followingCount || 0,
+          heartCount: sData.likes || sData.heartCount || 0,
+          videoCount: sData.videos || sData.videoCount || 0,
+          friendCount: 0
+        },
+        statsV2: {}
+      };
+    }
+  } catch {}
+
+  return null;
+}
+
+// Layer 3: Python Anti-Bot Worker (Hanya jika dijalankan di lokal, bukan di Vercel)
+function extractLayer3Python(username) {
+  if (process.env.VERCEL === '1') {
+    return Promise.resolve(null);
+  }
+
   return new Promise((resolve) => {
     const scriptPath = path.join(__dirname, 'scraper_fallback.py');
-    execFile('python', [scriptPath, username], { timeout: 10000 }, (err, stdout) => {
+    execFile('python', [scriptPath, username], { timeout: 8000 }, (err, stdout) => {
       if (err || !stdout) {
         resolve(null);
         return;
@@ -154,7 +216,7 @@ function extractLayer2Python(username) {
           resolve({ notFound: true });
         } else if (parsed.status && parsed.user) {
           resolve({
-            source: 'layer2_python_worker',
+            source: 'layer3_python_worker',
             user: parsed.user,
             stats: parsed.stats || {},
             statsV2: parsed.statsV2 || {}
@@ -169,13 +231,13 @@ function extractLayer2Python(username) {
   });
 }
 
-// Layer 3: TikTok Official oEmbed & Meta Tag Fallback
-async function extractLayer3OEmbed(username) {
+// Layer 4: TikTok Official oEmbed & Meta Tag Fallback
+async function extractLayer4OEmbed(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(profileUrl)}`;
     const res = await axios.get(oembedUrl, {
-      timeout: 7000,
+      timeout: 6000,
       validateStatus: (status) => status < 500,
       headers: { 'User-Agent': USER_AGENTS[1] }
     });
@@ -192,8 +254,8 @@ async function extractLayer3OEmbed(username) {
       let ogDesc = '';
       try {
         const pageRes = await axios.get(profileUrl, {
-          timeout: 5000,
-          headers: { 'User-Agent': USER_AGENTS[1] }
+          timeout: 4000,
+          headers: { 'User-Agent': USER_AGENTS[0] }
         });
         const html = pageRes.data || '';
         const imgMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
@@ -203,7 +265,7 @@ async function extractLayer3OEmbed(username) {
       } catch (_) {}
 
       return {
-        source: 'layer3_official_oembed',
+        source: 'layer4_official_oembed',
         user: {
           uniqueId: username,
           nickname: oembedData.author_name,
@@ -234,7 +296,7 @@ async function extractLayer3OEmbed(username) {
   return null;
 }
 
-// Pemetaan Data Bersih & Normalisasi Properti Anti-Zero
+// Petakan struktur data mentah ke skema keluaran konsisten
 function mapProfileData(raw, username) {
   const user = raw.user || {};
   const stats = raw.stats || {};
@@ -328,14 +390,19 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
   // 1. Layer 1: Node.js Direct Hydration Extractor (Mobile Engine)
   extractedResult = await extractLayer1Hydration(username);
 
-  // 2. Layer 2: Python Anti-Bot Worker (jika Layer 1 belum menemukan data)
+  // 2. Layer 2: Cloud Fallback API (TikWM & Siputzx)
   if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
-    extractedResult = await extractLayer2Python(username);
+    extractedResult = await extractLayer2CloudFallback(username);
   }
 
-  // 3. Layer 3: TikTok Official oEmbed & OpenGraph Fallback
+  // 3. Layer 3: Python Anti-Bot Worker (jika di environment lokal)
   if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
-    extractedResult = await extractLayer3OEmbed(username);
+    extractedResult = await extractLayer3Python(username);
+  }
+
+  // 4. Layer 4: TikTok Official oEmbed & OpenGraph Fallback
+  if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
+    extractedResult = await extractLayer4OEmbed(username);
   }
 
   // Jika akun resmi dinyatakan tidak ditemukan oleh TikTok
