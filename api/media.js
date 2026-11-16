@@ -96,6 +96,41 @@ function cleanHtmlTags(str) {
   return str.replace(/<[^>]+>/g, '').trim();
 }
 
+async function resolveTikTokUsername(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return '';
+  let input = rawInput.trim();
+
+  if (input.includes('vt.tiktok.com') || input.includes('vm.tiktok.com')) {
+    try {
+      const fullUrl = input.startsWith('http') ? input : `https://${input}`;
+      const head = await axios.get(fullUrl, {
+        maxRedirects: 5,
+        timeout: 6000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+      });
+      const resolved = head.request?.res?.responseUrl || head.config?.url;
+      if (resolved) input = resolved;
+    } catch (err) {
+      if (err.response?.headers?.location) {
+        input = err.response.headers.location;
+      }
+    }
+  }
+
+  const urlMatch = input.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
+  if (urlMatch && urlMatch[1]) {
+    return urlMatch[1].replace(/\/.*$/, '').trim();
+  }
+
+  if (input.startsWith('@')) {
+    return input.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
+  }
+
+  return input.split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_.]/g, '');
+}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -126,6 +161,94 @@ export default async function handler(req, res) {
       genreIds.push(parseInt(g, 10));
     }
   });
+
+  // ==========================================
+  // JALUR 0: TIKTOK PROFILE STALKER (100% ANONIM)
+  // ==========================================
+  if (type === 'tiktok-stalk' || type === 'tiktok_stalk' || type === 'tiktokstalk') {
+    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
+    if (!rawTarget) {
+      return res.status(400).json({
+        success: false,
+        error: 'missing_target',
+        message: 'Mohon masukkan username atau tautan profil TikTok.'
+      });
+    }
+
+    const username = await resolveTikTokUsername(rawTarget);
+    if (!username) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_username',
+        message: 'Username TikTok tidak valid.'
+      });
+    }
+
+    const profileUrl = `https://www.tiktok.com/@${username}`;
+    let rawData = null;
+    let dataSource = 'siputzx';
+
+    // 1. Coba Endpoint Siputzx Utama
+    try {
+      const apiRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
+        timeout: 7000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        }
+      });
+      if (apiRes.data && apiRes.data.status && apiRes.data.data) {
+        rawData = apiRes.data.data;
+        dataSource = 'siputzx';
+      }
+    } catch (_) {}
+
+    // 2. Normalisasi Data
+    const userObj = rawData?.user || rawData || {};
+    const statsObj = rawData?.stats || rawData || {};
+
+    const uniqueId = userObj.uniqueId || userObj.username || username;
+    const nickname = userObj.nickname || uniqueId;
+    const avatar = userObj.avatarLarger || userObj.avatar || userObj.avatarMedium || userObj.avatarThumb || '';
+    const signature = userObj.signature || userObj.bio || '';
+    const verified = Boolean(userObj.verified);
+    const isPrivate = Boolean(userObj.privateAccount || userObj.isSecret);
+    const secUid = userObj.secUid || '';
+    const id = userObj.id || userObj.userId || '';
+    const region = userObj.region || '';
+    const bioLinkRaw = userObj.bioLink?.link || (typeof userObj.bioLink === 'string' ? userObj.bioLink : null);
+
+    const followers = Number(statsObj.followerCount || statsObj.followers || 0);
+    const following = Number(statsObj.followingCount || statsObj.following || 0);
+    const likes = Number(statsObj.heartCount || statsObj.heart || statsObj.likes || 0);
+    const videos = Number(statsObj.videoCount || statsObj.video || statsObj.videos || 0);
+    const friends = Number(statsObj.friendCount || statsObj.friends || 0);
+
+    return res.status(200).json({
+      success: true,
+      source: dataSource,
+      timestamp: new Date().toISOString(),
+      data: {
+        username: uniqueId,
+        nickname,
+        avatar,
+        bio: signature,
+        bioLink: bioLinkRaw,
+        verified,
+        privateAccount: isPrivate,
+        id,
+        secUid,
+        region,
+        profileUrl,
+        stats: {
+          followers,
+          following,
+          likes,
+          videos,
+          friends
+        }
+      }
+    });
+  }
 
   // ==========================================
   // JALUR 1: MANHWA FINDER

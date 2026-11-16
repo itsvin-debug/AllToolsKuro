@@ -154,6 +154,25 @@ const KURO_TOOLS = {
       'omniscient reader', 'tower of god', 'genre manhwa', 'baca manhwa'
     ],
     desc: 'Fitur Rekomendasi Manhwa untuk menemukan komik webtoon Korea terpopuler dengan filter genre favorit, rating pembaca, cover visual, dan sinopsis alur cerita seru.'
+  },
+  ipChecker: {
+    id: 'ipChecker',
+    name: 'IP & DNS Checker',
+    element_id: 'tool-ipChecker',
+    keywords: [
+      'ip', 'cek ip', 'my ip', 'ip checker', 'isp', 'asn', 'lokasi ip', 'dns', 'vpn check', 'proxy check'
+    ],
+    desc: 'Fitur IP & DNS Checker untuk memantau telemetri IP publik, operator ISP, nomor ASN, koordinat lokasi, dan deteksi proteksi VPN/Proxy secara real-time.'
+  },
+  tiktokStalker: {
+    id: 'tiktokStalker',
+    name: 'TikTok Stalker',
+    element_id: 'tool-tiktokStalker',
+    keywords: [
+      'stalk', 'stalker', 'stalking', 'tiktok stalk', 'profil tiktok', 'stalk tiktok', 'kepoin tiktok',
+      'lihat profil tiktok', 'akun tiktok', 'anonim tiktok', 'cek akun tiktok'
+    ],
+    desc: 'Fitur TikTok Stalker untuk melihat profil, bio, dan statistik akun TikTok secara 100% anonim tanpa login dan tanpa jejak tayangan profil.'
   }
 };
 
@@ -161,7 +180,7 @@ const TOUR_ORDER = [
   'downloader', 'jjFinder', 'pngToPdf', 'linkToDoc',
   'imageToLink', 'compressor', 'qrStudio', 'audioMerger',
   'photoStudio', 'videoStudio', 'videoTrimmer', 'bgRemover', 'resolver',
-  'animeFinder', 'manhwaFinder'
+  'animeFinder', 'manhwaFinder', 'ipChecker', 'tiktokStalker'
 ];
 
 function cleanSpeechText(text) {
@@ -254,7 +273,8 @@ function isAllToolsKuroTopic(text) {
     'audio', 'musik', 'lagu', 'merger', 'photo studio', 'video studio', 'trimmer', 'potong video',
     'hapus background', 'bg remover', 'hapus bg', 'transparan', 'gratis', 'update', 'pembaruan', 'apk', 'aplikasi',
     'web', 'website', 'situs', 'platform', 'fungsi', 'kegunaan', 'manfaat', 'tujuan',
-    'wong ai ni', 'anime', 'manhwa', 'komik', 'webtoon', 'preset jj', 'rekomendasi'
+    'wong ai ni', 'anime', 'manhwa', 'komik', 'webtoon', 'preset jj', 'rekomendasi',
+    'stalk', 'stalker', 'stalking', 'tiktok stalk', 'profil tiktok', 'ip checker', 'cek ip', 'my ip'
   ];
 
   // Kata kunci pendek wajib menggunakan word boundary agar tidak cocok dengan substring kata lain (misal "ig" di dalam "nigga")
@@ -476,6 +496,38 @@ export default async function handler(req, res) {
         action: 'navigate_tool',
         target_tool: 'jjFinder',
         targetTool: 'jjFinder',
+        target_element: tool.element_id,
+        targetElement: tool.element_id
+      });
+    }
+
+    // DETEKSI TIKTOK STALKER (ANONIM TANPA LOGIN)
+    if (/\b(stalk|stalker|stalking|kepoin|tiktok stalk|stalk tiktok|profil tiktok)\b/i.test(lowerMsg)) {
+      const tool = KURO_TOOLS['tiktokStalker'];
+      return res.status(200).json({
+        reply: `Tentu! Untuk memantau akun TikTok secara 100% anonim tanpa login dan tanpa jejak tayangan profil, gunakan fitur ${tool.name}.`,
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'talking',
+        action: 'navigate_tool',
+        target_tool: 'tiktokStalker',
+        targetTool: 'tiktokStalker',
+        target_element: tool.element_id,
+        targetElement: tool.element_id
+      });
+    }
+
+    // DETEKSI IP & DNS CHECKER
+    if (/\b(ip checker|cek ip|my ip|telemetri ip|lokasi ip|dns checker)\b/i.test(lowerMsg)) {
+      const tool = KURO_TOOLS['ipChecker'];
+      return res.status(200).json({
+        reply: `Tentu! Untuk menganalisis telemetri IP publik, operator ISP, nomor ASN, dan keamanan VPN, gunakan fitur ${tool.name}.`,
+        is_valid_context: true,
+        isValidContext: true,
+        animation: 'talking',
+        action: 'navigate_tool',
+        target_tool: 'ipChecker',
+        targetTool: 'ipChecker',
         target_element: tool.element_id,
         targetElement: tool.element_id
       });

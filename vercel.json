@@ -49,6 +49,14 @@
       "destination": "/api/version"
     },
     {
+      "source": "/api/tools/tiktok-stalk",
+      "destination": "/api/media?type=tiktok-stalk"
+    },
+    {
+      "source": "/api/tiktok-stalk",
+      "destination": "/api/media?type=tiktok-stalk"
+    },
+    {
       "source": "/api/anime/search",
       "destination": "/api/media?type=anime"
     },

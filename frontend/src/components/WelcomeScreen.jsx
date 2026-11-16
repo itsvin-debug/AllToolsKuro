@@ -18,7 +18,8 @@ import {
   Unlock,
   Tv,
   BookOpen,
-  Globe
+  Globe,
+  Radio
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
@@ -62,11 +63,11 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
   const wt = t.welcome;
 
   const categories = [
-    { id: 'all', label: wt.catAll, count: 17 },
+    { id: 'all', label: wt.catAll, count: 18 },
     { id: 'downloader', label: wt.catDownloader, count: 2 },
     { id: 'file', label: wt.catFile, count: 4 },
     { id: 'creative', label: wt.catCreative, count: 6 },
-    { id: 'utility', label: wt.catUtility, count: 5 }
+    { id: 'utility', label: wt.catUtility, count: 6 }
   ];
 
   const tools = [
@@ -213,6 +214,15 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       tag: wt.tools.ipChecker?.tag || 'NETWORK',
       icon: Globe,
       onClick: () => onOpenTool('ipChecker')
+    },
+    {
+      id: 'tiktokStalker',
+      category: 'utility',
+      name: wt.tools.tiktokStalker?.name || 'TikTok Stalker',
+      desc: wt.tools.tiktokStalker?.desc || 'Lihat profil TikTok secara anonim tanpa login dan tanpa jejak tayangan profil.',
+      tag: wt.tools.tiktokStalker?.tag || 'NO FOOTPRINT',
+      icon: Radio,
+      onClick: () => onOpenTool('tiktokStalker')
     }
   ];
 

@@ -13,6 +13,7 @@ import JjFinderScreen from './components/JjFinderScreen';
 import AnimeFinderScreen from './components/AnimeFinderScreen';
 import ManhwaFinderScreen from './components/ManhwaFinderScreen';
 import IpCheckerScreen from './components/IpCheckerScreen';
+import TiktokStalkerScreen from './components/TiktokStalkerScreen';
 import PngToPdfScreen from './components/PngToPdfScreen';
 import MediaCompressorScreen from './components/MediaCompressorScreen';
 import QrStudioScreen from './components/QrStudioScreen';
@@ -47,7 +48,8 @@ const TOOL_NAMES = {
   resolver: 'Safelink Resolver',
   animeFinder: 'Rekomendasi Anime',
   manhwaFinder: 'Rekomendasi Manhwa',
-  ipChecker: 'IP & DNS Checker'
+  ipChecker: 'IP & DNS Checker',
+  tiktokStalker: 'TikTok Stalker'
 };
 
 export default function App() {
@@ -326,6 +328,14 @@ export default function App() {
 
           {currentScreen === 'ipChecker' && (
             <IpCheckerScreen
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'tiktokStalker' && (
+            <TiktokStalkerScreen
               onBack={() => handleNavigate('welcome')}
               onShowToast={handleShowToast}
               lang={settings.language || 'id'}

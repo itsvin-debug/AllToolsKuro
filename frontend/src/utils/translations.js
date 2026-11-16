@@ -141,6 +141,11 @@ export const translations = {
           name: 'IP & DNS Checker',
           desc: 'Analisis telemetri IP publik, operator ISP, nomor ASN, koordinat lokasi, dan deteksi VPN/Proxy.',
           tag: 'NETWORK'
+        },
+        tiktokStalker: {
+          name: 'TikTok Stalker',
+          desc: 'Lihat profil TikTok secara anonim tanpa login dan tanpa meninggalkan jejak tayangan profil.',
+          tag: 'NO FOOTPRINT'
         }
       }
     },
@@ -555,6 +560,32 @@ export const translations = {
       noResultsTitle: 'Manhwa Tidak Ditemukan',
       noResultsDesc: 'Coba kata kunci lain atau pilih filter genre berbeda.'
     },
+    tiktokStalker: {
+      title: 'TikTok Profile Stalker',
+      subtitle: 'Pantau intelijen akun TikTok secara 100% anonim tanpa login dan tanpa jejak tayangan profil.',
+      inputPlaceholder: 'Masukkan username (@username) atau tautan TikTok...',
+      stalkBtn: 'Mulai Lacak Profil',
+      stalking: 'Memindai Akun...',
+      radarInit: 'Menghubungkan Radar Anonim...',
+      radarFetching: 'Mengambil Data Profil & Statistik...',
+      radarAnalyzing: 'Menyusun Intelijen Akun...',
+      verifiedBadge: 'Terverifikasi',
+      publicBadge: 'Publik',
+      privateBadge: 'Akun Privat',
+      statFollowers: 'Pengikut',
+      statFollowing: 'Mengikuti',
+      statLikes: 'Total Suka',
+      statVideos: 'Video',
+      statFriends: 'Teman',
+      bioTitle: 'Bio / Deskripsi Profil',
+      bioEmpty: 'Tidak ada bio yang dicantumkan.',
+      bioLinkTitle: 'Tautan Bio',
+      copyProfileUrl: 'Salin Tautan Profil',
+      copiedSuccess: 'Tautan profil berhasil disalin!',
+      openTiktok: 'Buka Profil TikTok',
+      errorNotFound: 'Profil TikTok tidak ditemukan atau koneksi terganggu.',
+      errorInvalid: 'Username atau URL TikTok tidak valid. Mohon periksa kembali input Anda.'
+    },
     footer: {
       suite: 'UTILITY SUITE',
       text: 'Platform utilitas all-in-one untuk media, dokumen, audio, dan alat kreatif digital.'
@@ -697,6 +728,11 @@ export const translations = {
           name: 'IP & DNS Checker',
           desc: 'Live telemetry for public IP, ISP provider, ASN routing, geographic coordinates, and VPN/Proxy detection.',
           tag: 'NETWORK'
+        },
+        tiktokStalker: {
+          name: 'TikTok Stalker',
+          desc: 'View TikTok profiles 100% anonymously without login and without leaving profile view footprints.',
+          tag: 'NO FOOTPRINT'
         }
       }
     },
@@ -1110,6 +1146,32 @@ export const translations = {
       openOfficial: 'Official Details',
       noResultsTitle: 'No Manhwa Found',
       noResultsDesc: 'Try different search keywords or select different genres.'
+    },
+    tiktokStalker: {
+      title: 'TikTok Profile Stalker',
+      subtitle: 'Track TikTok account intelligence 100% anonymously without login and with zero profile view footprints.',
+      inputPlaceholder: 'Enter username (@username) or TikTok profile link...',
+      stalkBtn: 'Track Profile Now',
+      stalking: 'Scanning Account...',
+      radarInit: 'Connecting Anonymous Radar...',
+      radarFetching: 'Fetching Profile & Metrics...',
+      radarAnalyzing: 'Compiling Account Intelligence...',
+      verifiedBadge: 'Verified',
+      publicBadge: 'Public',
+      privateBadge: 'Private Account',
+      statFollowers: 'Followers',
+      statFollowing: 'Following',
+      statLikes: 'Total Likes',
+      statVideos: 'Videos',
+      statFriends: 'Friends',
+      bioTitle: 'Bio / Description',
+      bioEmpty: 'No bio provided.',
+      bioLinkTitle: 'Bio Link',
+      copyProfileUrl: 'Copy Profile Link',
+      copiedSuccess: 'Profile link copied to clipboard!',
+      openTiktok: 'Open TikTok Profile',
+      errorNotFound: 'TikTok profile not found or connection interrupted.',
+      errorInvalid: 'Invalid TikTok username or link. Please check your input.'
     },
     footer: {
       suite: 'UTILITY SUITE',

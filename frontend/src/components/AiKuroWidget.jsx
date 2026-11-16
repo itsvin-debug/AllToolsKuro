@@ -123,6 +123,18 @@ const KURO_TOOLS_CATALOG = [
     name: 'Rekomendasi Manhwa',
     tag: 'Komik Webtoon Korea',
     desc: 'Temukan komik Korea (Manhwa) terpopuler dengan filter genre, rating pembaca, cover jernih, dan rangkuman jalan cerita seru.'
+  },
+  {
+    id: 'ipChecker',
+    name: 'IP & DNS Checker',
+    tag: 'Analisis Jaringan & Keamanan',
+    desc: 'Cek telemetri IP publik, operator ISP, nomor ASN, koordinat lokasi, dan deteksi VPN/Proxy secara real-time.'
+  },
+  {
+    id: 'tiktokStalker',
+    name: 'TikTok Stalker',
+    tag: 'Pelacak Profil Anonim',
+    desc: 'Pantau intelijen akun TikTok secara 100% anonim tanpa login dan tanpa meninggalkan jejak tayangan profil.'
   }
 ];
 
@@ -655,6 +667,16 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
       if (lower.includes('capcut') || lower.includes('template') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('xml') || lower.includes('cc') || lower.includes('jj')) {
         handleGuideSpecificTool('jjFinder', `Tentu, ${userName}! Fitur Cari Link JJ menyediakan ribuan template CapCut, preset Alight Motion, dan file XML Google Drive yang siap digunakan.`);
+        return;
+      }
+
+      if (lower.includes('stalk') || lower.includes('kepoin') || lower.includes('stalker') || lower.includes('tiktok stalk') || lower.includes('profil tiktok')) {
+        handleGuideSpecificTool('tiktokStalker', `Tentu, ${userName}! Gunakan TikTok Stalker untuk melihat detail profil, bio, dan statistik akun TikTok secara 100% anonim tanpa jejak kunjungan.`);
+        return;
+      }
+
+      if (lower.includes('ip') || lower.includes('isp') || lower.includes('asn') || lower.includes('dns') || lower.includes('vpn') || lower.includes('lokasi ip')) {
+        handleGuideSpecificTool('ipChecker', `Tentu, ${userName}! Fitur IP & DNS Checker siap menampilkan telemetri jaringan, provider ISP, dan deteksi VPN kamu secara lengkap.`);
         return;
       }
 

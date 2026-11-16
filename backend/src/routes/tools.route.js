@@ -14,6 +14,7 @@ import {
   compressPdfService
 } from '../services/mediaProcessing.service.js';
 import { getIpTelemetry } from '../controllers/ipCheck.controller.js';
+import { getTiktokProfileStalk } from '../controllers/tiktokStalker.controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,6 +32,13 @@ const router = express.Router();
  * Advanced IP, ISP, ASN, Geolocation, and Security Telemetry
  */
 router.get('/ip-check', getIpTelemetry);
+
+/**
+ * 0.1 POST & GET /api/tiktok-stalk
+ * Pelacak Profil TikTok 100% Anonim tanpa jejak dan tanpa login
+ */
+router.post('/tiktok-stalk', getTiktokProfileStalk);
+router.get('/tiktok-stalk', getTiktokProfileStalk);
 
 /**
  * 1. POST /api/link-to-doc
