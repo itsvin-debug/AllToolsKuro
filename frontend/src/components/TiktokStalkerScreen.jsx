@@ -226,7 +226,7 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
     <div className="w-full max-w-4xl mx-auto px-4 py-6 md:py-8 space-y-6">
       {/* Header & Back Navigation */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <CosmicBackButton onBack={onBack} label={isEn ? 'Back' : 'Kembali'} />
+        <CosmicBackButton onClick={onBack} onBack={onBack} label={isEn ? 'Back' : 'Kembali'} />
 
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#10b981] text-black text-xs font-black uppercase tracking-wider border-2 border-black rounded-lg shadow-[2px_2px_0px_#000000]">

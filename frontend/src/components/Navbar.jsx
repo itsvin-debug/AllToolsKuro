@@ -21,6 +21,8 @@ import {
   RefreshCw,
   Tv,
   BookOpen,
+  Radio,
+  ShieldCheck,
   X
 } from 'lucide-react';
 import { translations } from '../utils/translations';
@@ -59,7 +61,9 @@ export default function Navbar({
     { id: 'bgRemover', label: t.welcome?.tools?.bgRemover?.name || 'Hapus Background', icon: Scissors },
     { id: 'resolver', label: t.welcome?.tools?.resolver?.name || 'Safelink Resolver', icon: Link2 },
     { id: 'animeFinder', label: t.welcome?.tools?.animeFinder?.name || 'Rekomendasi Anime', icon: Tv },
-    { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen }
+    { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen },
+    { id: 'ipChecker', label: t.welcome?.tools?.ipChecker?.name || 'IP & DNS Checker', icon: ShieldCheck },
+    { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'TikTok Stalker', icon: Radio }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);
