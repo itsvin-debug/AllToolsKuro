@@ -23,6 +23,7 @@ import {
   BookOpen,
   Radio,
   ShieldCheck,
+  Globe2,
   X
 } from 'lucide-react';
 import { translations } from '../utils/translations';
@@ -63,7 +64,7 @@ export default function Navbar({
     { id: 'animeFinder', label: t.welcome?.tools?.animeFinder?.name || 'Rekomendasi Anime', icon: Tv },
     { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen },
     { id: 'ipChecker', label: t.welcome?.tools?.ipChecker?.name || 'IP & DNS Checker', icon: ShieldCheck },
-    { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'TikTok Stalker', icon: Radio }
+    { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'Social Media Stalker', icon: Globe2 }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);

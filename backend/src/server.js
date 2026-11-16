@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import downloadRoutes from './routes/download.route.js';
 import toolsRoutes from './routes/tools.route.js';
 import resolverRoutes from './routes/resolver.route.js';
+import stalkerRoutes from './routes/stalker.route.js';
 import envGuard from './middlewares/envGuard.js';
 
 // load konfigurasi env
@@ -64,6 +65,7 @@ app.use(envGuard);
 app.use('/api', downloadRoutes);
 app.use('/api', toolsRoutes);
 app.use('/api', resolverRoutes);
+app.use('/api/stalk', stalkerRoutes);
 
 // Endpoint real-time ping untuk telemetri jaringan
 app.get('/api/ping', (req, res) => {

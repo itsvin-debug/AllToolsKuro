@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { scrapeInstagram } from '../backend/src/scrapers/instagramScraper.js';
+import { scrapeTwitter } from '../backend/src/scrapers/twitterScraper.js';
+import { scrapeGithub } from '../backend/src/scrapers/githubScraper.js';
 
 /**
  * api/media.js - Konsolidasi API Pencarian Anime & Manhwa Real-Time
@@ -448,6 +451,35 @@ export default async function handler(req, res) {
       data: mappedData
     });
   }
+
+  // ==========================================
+  // JALUR 0.1: INSTAGRAM PROFILE STALKER
+  // ==========================================
+  if (type === 'instagram-stalk' || type === 'instagram_stalk' || type === 'instagram') {
+    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const result = await scrapeInstagram(rawTarget, { forceRefresh });
+    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+  }
+
+  // ==========================================
+  // JALUR 0.2: X / TWITTER PROFILE STALKER
+  // ==========================================
+  if (type === 'twitter-stalk' || type === 'twitter_stalk' || type === 'twitter' || type === 'x-stalk' || type === 'x') {
+    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const result = await scrapeTwitter(rawTarget, { forceRefresh });
+    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+  }
+
+  // ==========================================
+  // JALUR 0.3: GITHUB PROFILE STALKER
+  // ==========================================
+  if (type === 'github-stalk' || type === 'github_stalk' || type === 'github') {
+    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const result = await scrapeGithub(rawTarget, { forceRefresh });
+    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
   }
 
   // ==========================================

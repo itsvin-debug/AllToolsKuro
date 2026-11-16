@@ -19,7 +19,8 @@ import {
   Tv,
   BookOpen,
   Globe,
-  Radio
+  Radio,
+  Globe2
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
@@ -218,10 +219,10 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
     {
       id: 'tiktokStalker',
       category: 'utility',
-      name: wt.tools.tiktokStalker?.name || 'TikTok Stalker',
-      desc: wt.tools.tiktokStalker?.desc || 'Lihat profil TikTok secara anonim tanpa login dan tanpa jejak tayangan profil.',
-      tag: wt.tools.tiktokStalker?.tag || 'NO FOOTPRINT',
-      icon: Radio,
+      name: wt.tools.tiktokStalker?.name || 'Social Media Stalker',
+      desc: wt.tools.tiktokStalker?.desc || 'Pantau intelijen akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim.',
+      tag: wt.tools.tiktokStalker?.tag || '4 PLATFORM',
+      icon: Globe2,
       onClick: () => onOpenTool('tiktokStalker')
     }
   ];

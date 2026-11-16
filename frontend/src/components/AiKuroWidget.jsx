@@ -132,9 +132,9 @@ const KURO_TOOLS_CATALOG = [
   },
   {
     id: 'tiktokStalker',
-    name: 'TikTok Stalker',
-    tag: 'Pelacak Profil Anonim',
-    desc: 'Pantau intelijen akun TikTok secara 100% anonim tanpa login dan tanpa meninggalkan jejak tayangan profil.'
+    name: 'Social Media Stalker',
+    tag: 'Multi-Platform OSINT (4 Platform)',
+    desc: 'Pantau intelijen akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login dan tanpa meninggalkan jejak tayangan profil.'
   }
 ];
 
@@ -670,8 +670,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         return;
       }
 
-      if (lower.includes('stalk') || lower.includes('kepoin') || lower.includes('stalker') || lower.includes('tiktok stalk') || lower.includes('profil tiktok')) {
-        handleGuideSpecificTool('tiktokStalker', `Tentu, ${userName}! Gunakan TikTok Stalker untuk melihat detail profil, bio, dan statistik akun TikTok secara 100% anonim tanpa jejak kunjungan.`);
+      if (lower.includes('stalk') || lower.includes('kepoin') || lower.includes('stalker') || lower.includes('tiktok') || lower.includes('instagram') || lower.includes('twitter') || lower.includes('github stalk') || lower.includes('osint') || lower.includes('profil ig') || lower.includes('profil twitter')) {
+        handleGuideSpecificTool('tiktokStalker', `Tentu, ${userName}! Gunakan Social Media Stalker untuk melihat detail profil, bio, dan statistik akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa jejak kunjungan.`);
         return;
       }
 

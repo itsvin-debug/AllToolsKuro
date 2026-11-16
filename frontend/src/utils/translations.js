@@ -143,9 +143,9 @@ export const translations = {
           tag: 'NETWORK'
         },
         tiktokStalker: {
-          name: 'TikTok Stalker',
-          desc: 'Lihat profil TikTok secara anonim tanpa login dan tanpa meninggalkan jejak tayangan profil.',
-          tag: 'NO FOOTPRINT'
+          name: 'Social Media Stalker',
+          desc: 'Pantau intelijen akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa jejak.',
+          tag: '4 PLATFORM'
         }
       }
     },
@@ -730,9 +730,9 @@ export const translations = {
           tag: 'NETWORK'
         },
         tiktokStalker: {
-          name: 'TikTok Stalker',
-          desc: 'View TikTok profiles 100% anonymously without login and without leaving profile view footprints.',
-          tag: 'NO FOOTPRINT'
+          name: 'Social Media Stalker',
+          desc: 'Inspect TikTok, Instagram, X (Twitter), and GitHub profiles 100% anonymously with zero footprint.',
+          tag: '4 PLATFORMS'
         }
       }
     },

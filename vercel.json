@@ -49,6 +49,26 @@
       "destination": "/api/version"
     },
     {
+      "source": "/api/stalk/tiktok",
+      "destination": "/api/media?type=tiktok-stalk"
+    },
+    {
+      "source": "/api/stalk/instagram",
+      "destination": "/api/media?type=instagram-stalk"
+    },
+    {
+      "source": "/api/stalk/twitter",
+      "destination": "/api/media?type=twitter-stalk"
+    },
+    {
+      "source": "/api/stalk/github",
+      "destination": "/api/media?type=github-stalk"
+    },
+    {
+      "source": "/api/stalk/image-proxy",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
       "source": "/api/tools/tiktok-stalk",
       "destination": "/api/media?type=tiktok-stalk"
     },
