@@ -2,125 +2,106 @@ import sys
 import json
 import re
 
-def scrape_tiktok_profile(username):
-    username = username.strip().lstrip('@')
-    profile_url = f"https://www.tiktok.com/@{username}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache"
-    }
+def scrape_with_curl_cffi(username):
+    try:
+        from curl_cffi import requests
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
+        }
+        r = requests.get(f'https://www.tiktok.com/@{username}', impersonate='safari15_5', headers=headers, timeout=10)
+        if r.status_code == 200:
+            return r.text
+    except Exception:
+        pass
+    return None
 
+def scrape_with_httpx(username):
     try:
         import httpx
-        from bs4 import BeautifulSoup
-
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
+        }
         with httpx.Client(timeout=10.0, follow_redirects=True, headers=headers) as client:
-            resp = client.get(profile_url)
-            
-            if resp.status_code == 200:
-                html = resp.text
-                
-                # Coba parse Universal Data for Rehydration
-                match = re.search(r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)</script>', html)
-                if match:
-                    try:
-                        raw_json = json.loads(match.group(1))
-                        user_info = raw_json.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {}).get('userInfo', {})
-                        user = user_info.get('user', {})
-                        stats = user_info.get('stats', {})
-                        
-                        if user:
-                            return {
-                                "status": True,
-                                "source": "universal_data",
-                                "data": {
-                                    "uniqueId": user.get('uniqueId', username),
-                                    "nickname": user.get('nickname', username),
-                                    "avatarLarger": user.get('avatarLarger', user.get('avatarMedium', '')),
-                                    "avatar": user.get('avatarMedium', user.get('avatarThumb', '')),
-                                    "signature": user.get('signature', ''),
-                                    "verified": bool(user.get('verified', False)),
-                                    "privateAccount": bool(user.get('privateAccount', False)),
-                                    "secUid": user.get('secUid', ''),
-                                    "id": user.get('id', ''),
-                                    "region": user.get('region', ''),
-                                    "bioLink": user.get('bioLink', {}),
-                                    "followerCount": stats.get('followerCount', 0),
-                                    "followingCount": stats.get('followingCount', 0),
-                                    "heartCount": stats.get('heartCount', 0),
-                                    "videoCount": stats.get('videoCount', 0),
-                                    "friendCount": stats.get('friendCount', 0)
-                                }
-                            }
-                    except Exception:
-                        pass
+            r = client.get(f'https://www.tiktok.com/@{username}')
+            if r.status_code == 200:
+                return r.text
+    except Exception:
+        pass
+    return None
 
-                # Coba parse metadata OpenGraph standar HTML
-                soup = BeautifulSoup(html, 'html.parser')
-                title_tag = soup.find('title')
-                desc_tag = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
-                image_tag = soup.find('meta', attrs={'property': 'og:image'})
-                
-                nickname = title_tag.text.split('(')[0].strip() if title_tag else username
-                signature = desc_tag.get('content', '') if desc_tag else ''
-                avatar = image_tag.get('content', '') if image_tag else ''
+def parse_tiktok_html(html, username):
+    if not html:
+        return None
 
+    # 1. Coba parse __UNIVERSAL_DATA_FOR_REHYDRATION__
+    match = re.search(r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)</script>', html)
+    if match:
+        try:
+            raw_json = json.loads(match.group(1))
+            detail = raw_json.get('__DEFAULT_SCOPE__', {}).get('webapp.user-detail', {})
+            status_code = detail.get('statusCode')
+            if status_code in [10202, 10221]:
+                return {"status": False, "error": "user_not_found"}
+
+            user_info = detail.get('userInfo', {})
+            user = user_info.get('user', {})
+            stats = user_info.get('stats', {})
+            stats_v2 = user_info.get('statsV2', {})
+
+            if user and (user.get('uniqueId') or user.get('nickname')):
                 return {
                     "status": True,
-                    "source": "opengraph_fallback",
-                    "data": {
-                        "uniqueId": username,
-                        "nickname": nickname or username,
-                        "avatarLarger": avatar,
-                        "avatar": avatar,
-                        "signature": signature,
-                        "verified": False,
-                        "privateAccount": False,
-                        "secUid": "",
-                        "id": "",
-                        "region": "",
-                        "bioLink": None,
-                        "followerCount": 0,
-                        "followingCount": 0,
-                        "heartCount": 0,
-                        "videoCount": 0,
-                        "friendCount": 0
-                    }
+                    "source": "universal_data",
+                    "user": user,
+                    "stats": stats,
+                    "statsV2": stats_v2
                 }
-    except Exception as e:
-        return {
-            "status": False,
-            "error": str(e),
-            "data": {
-                "uniqueId": username,
-                "nickname": username,
-                "avatarLarger": "",
-                "avatar": "",
-                "signature": "",
-                "verified": False,
-                "privateAccount": False
-            }
-        }
+        except Exception:
+            pass
 
-    return {
-        "status": False,
-        "error": "Web page blocked or not accessible",
-        "data": {
-            "uniqueId": username,
-            "nickname": username,
-            "avatarLarger": "",
-            "avatar": "",
-            "signature": "",
-            "verified": False,
-            "privateAccount": False
-        }
-    }
+    # 2. Coba parse SIGI_STATE
+    sigi_match = re.search(r'<script id="SIGI_STATE"[^>]*>([\s\S]*?)</script>', html)
+    if sigi_match:
+        try:
+            sigi_json = json.loads(sigi_match.group(1))
+            users_map = sigi_json.get('UserModule', {}).get('users', {})
+            stats_map = sigi_json.get('UserModule', {}).get('stats', {})
+            
+            user = users_map.get(username) or next(iter(users_map.values()), {})
+            stats = stats_map.get(username) or next(iter(stats_map.values()), {})
+
+            if user:
+                return {
+                    "status": True,
+                    "source": "sigi_state",
+                    "user": user,
+                    "stats": stats,
+                    "statsV2": {}
+                }
+        except Exception:
+            pass
+
+    return None
+
+def main():
+    target = sys.argv[1].strip().lstrip('@') if len(sys.argv) > 1 else 'tiktok'
+    
+    # Prioritas 1: curl_cffi dengan peniruan safari/chrome
+    html = scrape_with_curl_cffi(target)
+    
+    # Prioritas 2: httpx mobile
+    if not html:
+        html = scrape_with_httpx(target)
+
+    parsed = parse_tiktok_html(html, target)
+    if parsed:
+        print(json.dumps(parsed))
+    else:
+        print(json.dumps({"status": False, "error": "extraction_failed"}))
 
 if __name__ == '__main__':
-    target = sys.argv[1] if len(sys.argv) > 1 else 'tiktok'
-    result = scrape_tiktok_profile(target)
-    print(json.dumps(result))
+    main()

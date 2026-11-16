@@ -81,6 +81,14 @@
       "destination": "/api/proxy-download?stream=true"
     },
     {
+      "source": "/api/tools/tiktok-avatar",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
+      "source": "/api/tiktok-avatar",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
       "source": "/api/ping",
       "destination": "/api/locked-tools?action=ping"
     },

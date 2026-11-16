@@ -19,7 +19,9 @@ import {
   Share2, 
   EyeOff, 
   AlertCircle,
-  ClipboardPaste
+  ClipboardPaste,
+  RefreshCw,
+  Calendar
 } from 'lucide-react';
 import { translations } from '../utils/translations';
 
@@ -125,6 +127,45 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
 
       setProfileData(json.data);
       onShowToast?.(isEn ? 'TikTok account intel loaded!' : 'Intel profil TikTok berhasil dimuat!', 'success');
+    } catch (err) {
+      setErrorMsg(err.message || t.errorNotFound);
+      onShowToast?.(err.message || t.errorNotFound, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    const target = profileData?.username || inputVal.trim();
+    if (!target) return;
+
+    setLoading(true);
+    setErrorMsg(null);
+
+    try {
+      const res = await fetch('/api/tools/tiktok-stalk', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ username: target, refresh: true })
+      });
+
+      const rawText = await res.text();
+      let json = null;
+      try {
+        json = JSON.parse(rawText);
+      } catch {
+        throw new Error(isEn ? 'Failed to parse server response.' : 'Gagal membaca respons server.');
+      }
+
+      if (!res.ok || json.status === 'error' || json.success === false) {
+        throw new Error(json.message || t.errorNotFound);
+      }
+
+      setProfileData(json.data);
+      onShowToast?.(isEn ? 'Profile intel refreshed!' : 'Intel profil berhasil disegarkan!', 'success');
     } catch (err) {
       setErrorMsg(err.message || t.errorNotFound);
       onShowToast?.(err.message || t.errorNotFound, 'error');
@@ -344,7 +385,7 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
                 <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border-2 border-black overflow-hidden shadow-[3px_3px_0px_#000000] bg-neutral-100 flex items-center justify-center shrink-0">
                   {profileData.avatar ? (
                     <img 
-                      src={profileData.avatar.startsWith('http') ? `/api/tools/image-proxy?url=${encodeURIComponent(profileData.avatar)}` : profileData.avatar} 
+                      src={profileData.avatar.startsWith('http') ? `/api/tools/tiktok-avatar?url=${encodeURIComponent(profileData.avatar)}` : profileData.avatar} 
                       alt={profileData.nickname || profileData.username} 
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
@@ -409,11 +450,17 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
                   @{profileData.username}
                 </div>
 
-                {/* Region & SecUid Badges */}
+                {/* Region, SecUid & CreateDate Badges */}
                 <div className="flex flex-wrap gap-2 text-xs font-bold text-neutral-600 pt-1">
                   {profileData.region && (
                     <span className="px-2.5 py-0.5 bg-neutral-100 border border-black rounded-lg">
                       Region: <span className="text-black uppercase">{profileData.region}</span>
+                    </span>
+                  )}
+                  {profileData.createTime && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-neutral-100 border border-black rounded-lg">
+                      <Calendar className="w-3 h-3 text-neutral-500" />
+                      <span>{isEn ? 'Joined' : 'Bergabung'}: <span className="text-black font-semibold">{profileData.createTime}</span></span>
                     </span>
                   )}
                   {profileData.id && (
@@ -537,14 +584,27 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
 
             {/* Bottom Actions */}
             <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={handleCopyAllIntel}
-                className="w-full sm:w-auto px-5 py-2.5 bg-[#facc15] hover:bg-[#eab308] text-black font-black text-xs md:text-sm border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {copiedIntel ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-                <span>{copiedIntel ? (isEn ? 'Intel Copied!' : 'Intel Berhasil Disalin!') : (isEn ? 'Copy Full Intel Report' : 'Salin Laporan Intel Lengkap')}</span>
-              </button>
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={handleCopyAllIntel}
+                  className="flex-1 sm:flex-none px-5 py-2.5 bg-[#facc15] hover:bg-[#eab308] text-black font-black text-xs md:text-sm border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  {copiedIntel ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+                  <span>{copiedIntel ? (isEn ? 'Intel Copied!' : 'Intel Berhasil Disalin!') : (isEn ? 'Copy Full Intel Report' : 'Salin Laporan Intel Lengkap')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={handleRefresh}
+                  className="flex-1 sm:flex-none px-4 py-2.5 bg-neutral-100 hover:bg-neutral-200 text-black font-black text-xs md:text-sm border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] active:translate-x-[2px] active:translate-y-[2px] transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  title={isEn ? 'Force refresh live data from TikTok' : 'Segarkan data live dari TikTok'}
+                >
+                  <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                  <span>{isEn ? 'Refresh Data' : 'Segarkan Data'}</span>
+                </button>
+              </div>
 
               <button
                 type="button"

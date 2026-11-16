@@ -96,6 +96,20 @@ function cleanHtmlTags(str) {
   return str.replace(/<[^>]+>/g, '').trim();
 }
 
+// In-Memory Cache (TTL 60 detik) untuk proteksi anti-rate-limit TikTok Stalker
+const profileCache = new Map();
+const CACHE_TTL_MS = 60 * 1000;
+
+function formatUnixTimestamp(unix) {
+  if (!unix || isNaN(unix)) return null;
+  try {
+    const d = new Date(Number(unix) * 1000);
+    return d.toLocaleDateString('id-ID', { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return null;
+  }
+}
+
 async function resolveTikTokUsername(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return '';
   let input = rawInput.trim();
@@ -163,10 +177,12 @@ export default async function handler(req, res) {
   });
 
   // ==========================================
-  // JALUR 0: TIKTOK PROFILE STALKER (100% ANONIM)
+  // JALUR 0: TIKTOK PROFILE STALKER (100% MANDIRI / SELF-HOSTED)
   // ==========================================
   if (type === 'tiktok-stalk' || type === 'tiktok_stalk' || type === 'tiktokstalk') {
     const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+
     if (!rawTarget) {
       return res.status(400).json({
         success: false,
@@ -184,11 +200,25 @@ export default async function handler(req, res) {
       });
     }
 
+    const cacheKey = username.toLowerCase();
+    const cachedItem = profileCache.get(cacheKey);
+    const now = Date.now();
+
+    if (!forceRefresh && cachedItem && (now - cachedItem.timestamp) < CACHE_TTL_MS) {
+      return res.status(200).json({
+        success: true,
+        cached: true,
+        source: 'memory_cache',
+        timestamp: new Date(cachedItem.timestamp).toISOString(),
+        data: cachedItem.data
+      });
+    }
+
     const profileUrl = `https://www.tiktok.com/@${username}`;
     let rawData = null;
     let dataSource = 'rehydration';
 
-    // 1. Jalankan Direct Rehydration Scraper (Sangat Akurat & Menembus WAF TikTok)
+    // 1. Layer 1: Direct Rehydration Scraper (Cepat & Akurat)
     try {
       const directRes = await axios.get(profileUrl, {
         timeout: 9000,
@@ -196,7 +226,10 @@ export default async function handler(req, res) {
         headers: {
           'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none'
         }
       });
 
@@ -215,13 +248,44 @@ export default async function handler(req, res) {
         const parsed = JSON.parse(match[1]);
         const defaultScope = parsed['__DEFAULT_SCOPE__'] || {};
         const userDetail = defaultScope['webapp.user-detail'] || {};
+
+        if (userDetail.statusCode === 10202 || userDetail.statusCode === 10221) {
+          return res.status(404).json({
+            status: 'error',
+            success: false,
+            error: 'user_not_found',
+            message: `Akun TikTok @${username} tidak ditemukan atau telah dihapus/diblokir.`
+          });
+        }
+
         const userInfo = userDetail.userInfo;
-        if (userInfo && userInfo.user) {
+        if (userInfo && userInfo.user && (userInfo.user.uniqueId || userInfo.user.nickname)) {
           rawData = {
             user: userInfo.user,
-            stats: userInfo.stats || {}
+            stats: userInfo.stats || {},
+            statsV2: userInfo.statsV2 || {}
           };
           dataSource = 'tiktok_rehydration';
+        }
+      }
+
+      // Fallback SIGI_STATE
+      if (!rawData) {
+        const sigiMatch = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/);
+        if (sigiMatch && sigiMatch[1]) {
+          const sigiJson = JSON.parse(sigiMatch[1]);
+          const usersMap = sigiJson.UserModule?.users || {};
+          const statsMap = sigiJson.UserModule?.stats || {};
+          const user = usersMap[username] || Object.values(usersMap)[0];
+          const stats = statsMap[username] || Object.values(statsMap)[0];
+          if (user) {
+            rawData = {
+              user,
+              stats: stats || {},
+              statsV2: {}
+            };
+            dataSource = 'tiktok_sigi_state';
+          }
         }
       }
     } catch (err) {
@@ -235,29 +299,74 @@ export default async function handler(req, res) {
       }
     }
 
-    // 2. Jika Scraper Langsung belum dapat, coba API primer siputzx
+    // 2. Layer 3: Official TikTok oEmbed & Meta Fallback
     if (!rawData) {
       try {
-        const apiRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
-          timeout: 7000,
-          validateStatus: () => true,
+        const oembedRes = await axios.get(`https://www.tiktok.com/oembed?url=${encodeURIComponent(profileUrl)}`, {
+          timeout: 6000,
+          validateStatus: (status) => status < 500,
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
           }
         });
-        const cType = apiRes.headers['content-type'] || '';
-        if (apiRes.status === 200 && cType.toLowerCase().includes('application/json')) {
-          let bodyData = apiRes.data;
-          if (typeof bodyData === 'string') {
-            try { bodyData = JSON.parse(bodyData); } catch {}
-          }
-          if (bodyData && (bodyData.data || bodyData.result)) {
-            rawData = bodyData;
-            dataSource = 'siputzx';
-          }
+
+        if (oembedRes.status === 400 || oembedRes.status === 404) {
+          return res.status(404).json({
+            status: 'error',
+            success: false,
+            error: 'user_not_found',
+            message: `Akun TikTok @${username} tidak ditemukan atau tidak tersedia publik.`
+          });
         }
-      } catch (_) {}
+
+        if (oembedRes.status === 200 && oembedRes.data?.author_name) {
+          let ogImage = '';
+          let ogDesc = '';
+          try {
+            const pageRes = await axios.get(profileUrl, {
+              timeout: 4000,
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            const html = pageRes.data || '';
+            const imgMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
+            if (imgMatch) ogImage = imgMatch[1];
+            const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/) || html.match(/<meta name="description" content="([^"]+)"/);
+            if (descMatch) ogDesc = descMatch[1];
+          } catch (_) {}
+
+          rawData = {
+            user: {
+              uniqueId: username,
+              nickname: oembedRes.data.author_name,
+              avatarLarger: ogImage,
+              avatarMedium: ogImage,
+              avatarThumb: ogImage,
+              signature: ogDesc,
+              verified: false,
+              privateAccount: false,
+              region: 'Global'
+            },
+            stats: {
+              followerCount: 0,
+              followingCount: 0,
+              heartCount: 0,
+              videoCount: 0,
+              friendCount: 0
+            },
+            statsV2: {}
+          };
+          dataSource = 'tiktok_official_oembed';
+        }
+      } catch (err) {
+        if (err.response?.status === 400 || err.response?.status === 404) {
+          return res.status(404).json({
+            status: 'error',
+            success: false,
+            error: 'user_not_found',
+            message: `Akun TikTok @${username} tidak ditemukan atau tidak tersedia publik.`
+          });
+        }
+      }
     }
 
     if (!rawData) {
@@ -269,61 +378,76 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. Normalisasi Multi-Path & Penanganan Nilai Suka Overflow
-    const userObj = rawData?.data?.user || rawData?.result?.user || rawData?.user || rawData?.data || rawData || {};
-    const statsObj = rawData?.data?.stats || rawData?.result?.stats || rawData?.stats || rawData?.data || rawData || {};
+    // 3. Normalisasi Multi-Path & Penanganan Overflow Suka
+    const userObj = rawData.user || {};
+    const statsObj = rawData.stats || {};
+    const statsV2 = rawData.statsV2 || {};
 
-    const uniqueId = userObj.uniqueId || userObj.username || username;
-    const nickname = userObj.nickname || userObj.name || uniqueId;
+    const cleanUsername = userObj.uniqueId || userObj.username || username;
+    const nickname = userObj.nickname || userObj.name || cleanUsername;
     const avatar = userObj.avatarLarger || userObj.avatarMedium || userObj.avatarThumb || userObj.avatar || '';
-    const signature = typeof (userObj.signature || userObj.bio) === 'string' ? (userObj.signature || userObj.bio) : '';
+    const signature = typeof userObj.signature === 'string' ? userObj.signature : (typeof userObj.bio === 'string' ? userObj.bio : '');
     const verified = Boolean(userObj.verified || userObj.isVerified);
-    const isPrivate = Boolean(userObj.privateAccount || userObj.isPrivate || userObj.isSecret);
+    const isPrivate = Boolean(userObj.privateAccount || userObj.isPrivate || userObj.secret);
     const secUid = userObj.secUid || '';
     const id = userObj.id || userObj.uid || userObj.userId || '';
-    const region = userObj.region || '';
+    const region = userObj.region || 'Global';
     const bioLinkRaw = userObj.bioLink?.link || (typeof userObj.bioLink === 'string' ? userObj.bioLink : null);
+    const createDate = formatUnixTimestamp(userObj.createTime);
 
-    const followers = Number(statsObj.followerCount ?? statsObj.followers ?? 0);
-    const following = Number(statsObj.followingCount ?? statsObj.following ?? 0);
+    const followers = Number(statsObj.followerCount ?? statsV2.followerCount ?? 0);
+    const following = Number(statsObj.followingCount ?? statsV2.followingCount ?? 0);
     
     let likes = 0;
     if (statsObj.heart && Number(statsObj.heart) > 0) {
       likes = Number(statsObj.heart);
     } else if (statsObj.heartCount && Number(statsObj.heartCount) > 0) {
       likes = Number(statsObj.heartCount);
+    } else if (statsV2.heartCount && Number(statsV2.heartCount) > 0) {
+      likes = Number(statsV2.heartCount);
     } else if (statsObj.likes) {
       likes = Number(statsObj.likes);
     }
 
-    const videos = Number(statsObj.videoCount ?? statsObj.videos ?? 0);
-    const friends = Number(statsObj.friendCount ?? statsObj.friends ?? 0);
+    const videos = Number(statsObj.videoCount ?? statsV2.videoCount ?? 0);
+    const friends = Number(statsObj.friendCount ?? statsV2.friendCount ?? 0);
+
+    const mappedData = {
+      username: cleanUsername,
+      nickname,
+      avatar,
+      bio: signature,
+      bioLink: bioLinkRaw,
+      verified,
+      privateAccount: isPrivate,
+      id,
+      secUid,
+      region,
+      createTime: createDate,
+      profileUrl,
+      stats: {
+        followers,
+        following,
+        likes,
+        videos,
+        friends
+      }
+    };
+
+    // Simpan ke memory cache
+    profileCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: mappedData
+    });
 
     return res.status(200).json({
       success: true,
+      cached: false,
       source: dataSource,
       timestamp: new Date().toISOString(),
-      data: {
-        username: uniqueId,
-        nickname,
-        avatar,
-        bio: signature,
-        bioLink: bioLinkRaw,
-        verified,
-        privateAccount: isPrivate,
-        id,
-        secUid,
-        region,
-        profileUrl,
-        stats: {
-          followers,
-          following,
-          likes,
-          videos,
-          friends
-        }
-      }
+      data: mappedData
     });
+  }
   }
 
   // ==========================================

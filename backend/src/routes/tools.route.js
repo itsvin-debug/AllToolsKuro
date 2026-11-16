@@ -73,6 +73,8 @@ const handleImageProxy = async (req, res) => {
 
 router.get('/image-proxy', handleImageProxy);
 router.get('/tools/image-proxy', handleImageProxy);
+router.get('/tiktok-avatar', handleImageProxy);
+router.get('/tools/tiktok-avatar', handleImageProxy);
 
 /**
  * 1. POST /api/link-to-doc

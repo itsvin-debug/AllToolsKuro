@@ -16,7 +16,8 @@ export async function getTiktokProfileStalk(req, res) {
       });
     }
 
-    const result = await stalkTiktokProfile(rawTarget.trim());
+    const forceRefresh = req.query?.refresh === 'true' || req.body?.refresh === true;
+    const result = await stalkTiktokProfile(rawTarget.trim(), { forceRefresh });
 
     res.set({
       'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
