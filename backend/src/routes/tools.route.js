@@ -43,6 +43,38 @@ router.get('/tiktok-stalk', getTiktokProfileStalk);
 router.get('/tools/tiktok-stalk', getTiktokProfileStalk);
 
 /**
+ * 0.2 GET /api/tools/image-proxy & /api/image-proxy
+ * Proxy gambar anti-hotlink untuk avatar CDN TikTok
+ */
+const handleImageProxy = async (req, res) => {
+  const targetUrl = req.query?.url;
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return res.status(400).send('Parameter url gambar wajib diisi.');
+  }
+
+  try {
+    const streamRes = await axios.get(targetUrl, {
+      responseType: 'stream',
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://www.tiktok.com/'
+      }
+    });
+
+    res.setHeader('Content-Type', streamRes.headers['content-type'] || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    streamRes.data.pipe(res);
+  } catch (err) {
+    res.status(502).send('Gagal memuat gambar dari CDN sumber.');
+  }
+};
+
+router.get('/image-proxy', handleImageProxy);
+router.get('/tools/image-proxy', handleImageProxy);
+
+/**
  * 1. POST /api/link-to-doc
  * Mengubah URL Scribd / Canva / Web menjadi data dokumen PDF / PPT
  */

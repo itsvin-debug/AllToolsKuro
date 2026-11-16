@@ -33,6 +33,30 @@ function formatMetric(num) {
   return val.toLocaleString('id-ID');
 }
 
+// Helper perender bio multi-baris dengan deteksi tautan otomatis
+function renderBioWithLinks(text) {
+  if (!text) return null;
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return parts.map((part, idx) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={idx}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[#f43f5e] hover:underline font-extrabold inline-flex items-center gap-0.5 break-all"
+        >
+          <span>{part}</span>
+          <ExternalLink className="w-3 h-3 inline" />
+        </a>
+      );
+    }
+    return part;
+  });
+}
+
 export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }) {
   const isEn = lang === 'en';
   const t = translations[lang]?.tiktokStalker || translations.id.tiktokStalker;
@@ -320,14 +344,22 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
                 <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border-2 border-black overflow-hidden shadow-[3px_3px_0px_#000000] bg-neutral-100 flex items-center justify-center shrink-0">
                   {profileData.avatar ? (
                     <img 
-                      src={profileData.avatar} 
+                      src={profileData.avatar.startsWith('http') ? `/api/tools/image-proxy?url=${encodeURIComponent(profileData.avatar)}` : profileData.avatar} 
                       alt={profileData.nickname || profileData.username} 
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                       crossOrigin="anonymous"
                       onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.nextSibling.style.display = 'flex';
+                        // Jika proxy gagal, coba URL avatar langsung dengan no-referrer
+                        if (e.target.dataset.triedDirect !== 'true') {
+                          e.target.dataset.triedDirect = 'true';
+                          e.target.src = profileData.avatar;
+                        } else {
+                          e.target.style.display = 'none';
+                          if (e.target.nextSibling) {
+                            e.target.nextSibling.style.display = 'flex';
+                          }
+                        }
                       }}
                     />
                   ) : null}
@@ -482,9 +514,9 @@ export default function TiktokStalkerScreen({ onBack, onShowToast, lang = 'id' }
               <div className="text-xs font-black uppercase tracking-wider text-neutral-500">
                 {t.bioTitle}
               </div>
-              <p className="text-sm md:text-base font-semibold text-neutral-900 whitespace-pre-wrap leading-relaxed">
-                {profileData.bio || t.bioEmpty}
-              </p>
+              <div className="text-sm md:text-base font-semibold text-neutral-900 whitespace-pre-line break-words leading-relaxed">
+                {profileData.bio ? renderBioWithLinks(profileData.bio) : <span className="text-neutral-400 italic">{t.bioEmpty}</span>}
+              </div>
 
               {/* Bio Link if available */}
               {profileData.bioLink && (

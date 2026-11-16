@@ -73,6 +73,14 @@
       "destination": "/api/proxy-download?stream=true"
     },
     {
+      "source": "/api/tools/image-proxy",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
+      "source": "/api/image-proxy",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
       "source": "/api/ping",
       "destination": "/api/locked-tools?action=ping"
     },

@@ -186,60 +186,118 @@ export default async function handler(req, res) {
 
     const profileUrl = `https://www.tiktok.com/@${username}`;
     let rawData = null;
-    let dataSource = 'siputzx';
+    let dataSource = 'rehydration';
 
-    // 1. Coba Endpoint Siputzx Utama dengan validasi Content-Type & Status
+    // 1. Jalankan Direct Rehydration Scraper (Sangat Akurat & Menembus WAF TikTok)
     try {
-      const apiRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
-        timeout: 8000,
-        validateStatus: () => true,
+      const directRes = await axios.get(profileUrl, {
+        timeout: 9000,
+        validateStatus: (status) => status < 500,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'application/json, text/plain, */*'
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
         }
       });
-      const cType = apiRes.headers['content-type'] || '';
-      if (apiRes.status === 200 && cType.toLowerCase().includes('application/json')) {
-        let bodyData = apiRes.data;
-        if (typeof bodyData === 'string') {
-          try { bodyData = JSON.parse(bodyData); } catch { bodyData = null; }
-        }
-        if (bodyData && bodyData.status && bodyData.data) {
-          rawData = bodyData.data;
-          dataSource = 'siputzx';
+
+      if (directRes.status === 404) {
+        return res.status(404).json({
+          status: 'error',
+          success: false,
+          error: 'user_not_found',
+          message: `Akun TikTok @${username} tidak ditemukan atau telah dihapus/diblokir.`
+        });
+      }
+
+      const html = typeof directRes.data === 'string' ? directRes.data : '';
+      const match = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+      if (match && match[1]) {
+        const parsed = JSON.parse(match[1]);
+        const defaultScope = parsed['__DEFAULT_SCOPE__'] || {};
+        const userDetail = defaultScope['webapp.user-detail'] || {};
+        const userInfo = userDetail.userInfo;
+        if (userInfo && userInfo.user) {
+          rawData = {
+            user: userInfo.user,
+            stats: userInfo.stats || {}
+          };
+          dataSource = 'tiktok_rehydration';
         }
       }
-    } catch (_) {}
+    } catch (err) {
+      if (err.response?.status === 404) {
+        return res.status(404).json({
+          status: 'error',
+          success: false,
+          error: 'user_not_found',
+          message: `Akun TikTok @${username} tidak ditemukan atau telah dihapus/diblokir.`
+        });
+      }
+    }
 
-    // Jika API eksternal gagal mendapatkan data profil yang valid
+    // 2. Jika Scraper Langsung belum dapat, coba API primer siputzx
     if (!rawData) {
-      return res.status(502).json({
+      try {
+        const apiRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
+          timeout: 7000,
+          validateStatus: () => true,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*'
+          }
+        });
+        const cType = apiRes.headers['content-type'] || '';
+        if (apiRes.status === 200 && cType.toLowerCase().includes('application/json')) {
+          let bodyData = apiRes.data;
+          if (typeof bodyData === 'string') {
+            try { bodyData = JSON.parse(bodyData); } catch {}
+          }
+          if (bodyData && (bodyData.data || bodyData.result)) {
+            rawData = bodyData;
+            dataSource = 'siputzx';
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!rawData) {
+      return res.status(404).json({
         status: 'error',
         success: false,
-        message: 'API TikTok eksternal sedang gangguan atau mengembalikan respons tidak valid.'
+        error: 'user_not_found',
+        message: `Akun TikTok @${username} tidak ditemukan atau data publik tidak tersedia.`
       });
     }
 
-    // 2. Normalisasi Data
-    const userObj = rawData?.user || rawData || {};
-    const statsObj = rawData?.stats || rawData || {};
+    // 3. Normalisasi Multi-Path & Penanganan Nilai Suka Overflow
+    const userObj = rawData?.data?.user || rawData?.result?.user || rawData?.user || rawData?.data || rawData || {};
+    const statsObj = rawData?.data?.stats || rawData?.result?.stats || rawData?.stats || rawData?.data || rawData || {};
 
     const uniqueId = userObj.uniqueId || userObj.username || username;
-    const nickname = userObj.nickname || uniqueId;
-    const avatar = userObj.avatarLarger || userObj.avatar || userObj.avatarMedium || userObj.avatarThumb || '';
-    const signature = userObj.signature || userObj.bio || '';
-    const verified = Boolean(userObj.verified);
-    const isPrivate = Boolean(userObj.privateAccount || userObj.isSecret);
+    const nickname = userObj.nickname || userObj.name || uniqueId;
+    const avatar = userObj.avatarLarger || userObj.avatarMedium || userObj.avatarThumb || userObj.avatar || '';
+    const signature = typeof (userObj.signature || userObj.bio) === 'string' ? (userObj.signature || userObj.bio) : '';
+    const verified = Boolean(userObj.verified || userObj.isVerified);
+    const isPrivate = Boolean(userObj.privateAccount || userObj.isPrivate || userObj.isSecret);
     const secUid = userObj.secUid || '';
-    const id = userObj.id || userObj.userId || '';
+    const id = userObj.id || userObj.uid || userObj.userId || '';
     const region = userObj.region || '';
     const bioLinkRaw = userObj.bioLink?.link || (typeof userObj.bioLink === 'string' ? userObj.bioLink : null);
 
-    const followers = Number(statsObj.followerCount || statsObj.followers || 0);
-    const following = Number(statsObj.followingCount || statsObj.following || 0);
-    const likes = Number(statsObj.heartCount || statsObj.heart || statsObj.likes || 0);
-    const videos = Number(statsObj.videoCount || statsObj.video || statsObj.videos || 0);
-    const friends = Number(statsObj.friendCount || statsObj.friends || 0);
+    const followers = Number(statsObj.followerCount ?? statsObj.followers ?? 0);
+    const following = Number(statsObj.followingCount ?? statsObj.following ?? 0);
+    
+    let likes = 0;
+    if (statsObj.heart && Number(statsObj.heart) > 0) {
+      likes = Number(statsObj.heart);
+    } else if (statsObj.heartCount && Number(statsObj.heartCount) > 0) {
+      likes = Number(statsObj.heartCount);
+    } else if (statsObj.likes) {
+      likes = Number(statsObj.likes);
+    }
+
+    const videos = Number(statsObj.videoCount ?? statsObj.videos ?? 0);
+    const friends = Number(statsObj.friendCount ?? statsObj.friends ?? 0);
 
     return res.status(200).json({
       success: true,

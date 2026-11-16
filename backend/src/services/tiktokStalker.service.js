@@ -6,6 +6,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1';
+const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
 // Pengurai cerdas tautan & shortlink TikTok (vt/vm) menjadi username murni
 export async function resolveTiktokUsername(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return '';
@@ -18,9 +21,7 @@ export async function resolveTiktokUsername(rawInput) {
       const res = await axios.get(fullUrl, {
         maxRedirects: 5,
         timeout: 8000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        }
+        headers: { 'User-Agent': UA_MOBILE }
       });
       const resolved = res.request?.res?.responseUrl || res.config?.url;
       if (resolved) {
@@ -49,27 +50,109 @@ export async function resolveTiktokUsername(rawInput) {
   return clean;
 }
 
-// Fallback sekunder menggunakan Python scraper_fallback.py
-function callPythonFallback(username) {
-  return new Promise((resolve) => {
-    const scriptPath = path.join(__dirname, 'scraper_fallback.py');
-    execFile('python', [scriptPath, username], { timeout: 10000 }, (err, stdout) => {
-      if (err || !stdout) {
-        resolve(null);
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout);
-        if (parsed.status && parsed.data) {
-          resolve(parsed.data);
-        } else {
-          resolve(null);
-        }
-      } catch {
-        resolve(null);
+// Scraper langsung ke web TikTok menggunakan Universal Data Rehydration (bypass WAF via mobile UA)
+export async function scrapeTiktokRehydration(username) {
+  const profileUrl = `https://www.tiktok.com/@${username}`;
+  
+  // Coba fetch dengan mobile UA (sangat efektif melewati WAF Challenge)
+  try {
+    const res = await axios.get(profileUrl, {
+      timeout: 10000,
+      validateStatus: (status) => status < 500,
+      headers: {
+        'User-Agent': UA_MOBILE,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
       }
     });
-  });
+
+    if (res.status === 404) {
+      return { notFound: true };
+    }
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    const match = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+    if (match && match[1]) {
+      const parsed = JSON.parse(match[1]);
+      const defaultScope = parsed['__DEFAULT_SCOPE__'] || {};
+      const userDetail = defaultScope['webapp.user-detail'] || {};
+      const userInfo = userDetail.userInfo;
+      if (userInfo && userInfo.user) {
+        return {
+          source: 'tiktok_rehydration',
+          user: userInfo.user,
+          stats: userInfo.stats || {}
+        };
+      }
+    }
+  } catch (err) {
+    if (err.response?.status === 404) {
+      return { notFound: true };
+    }
+  }
+
+  return null;
+}
+
+// Ekstraktor multi-path untuk membaca payload beragam dari penyedia eksternal
+function extractDeepProfile(raw, targetUsername) {
+  if (!raw) return null;
+
+  // Telusuri kemungkinan lokasi objek user dan stats
+  const user = raw.data?.user || raw.result?.user || raw.userInfo?.user || raw.user || raw.data || raw;
+  const stats = raw.data?.stats || raw.result?.stats || raw.userInfo?.stats || raw.stats || raw.data || raw;
+
+  const username = user.uniqueId || user.username || targetUsername;
+  const nickname = user.nickname || user.name || username;
+  const avatar = user.avatarLarger || user.avatarMedium || user.avatarThumb || user.avatar || '';
+  
+  // Pertahankan karakter newline \n agar format bio multi-baris tampil sempurna
+  const rawBio = user.signature || user.bio || '';
+  const bio = typeof rawBio === 'string' ? rawBio : '';
+
+  const verified = Boolean(user.verified || user.isVerified);
+  const isPrivate = Boolean(user.privateAccount || user.isPrivate || user.isSecret);
+  const secUid = user.secUid || '';
+  const id = user.id || user.uid || user.userId || '';
+  const region = user.region || '';
+  const bioLink = user.bioLink?.link || (typeof user.bioLink === 'string' ? user.bioLink : null);
+
+  const followers = Number(stats.followerCount ?? stats.followers ?? 0);
+  const following = Number(stats.followingCount ?? stats.following ?? 0);
+  
+  // Tangani overflow signed 32-bit int di TikTok (misal 2.7 miliar heartCount menjadi negatif)
+  let likes = 0;
+  if (stats.heart && Number(stats.heart) > 0) {
+    likes = Number(stats.heart);
+  } else if (stats.heartCount && Number(stats.heartCount) > 0) {
+    likes = Number(stats.heartCount);
+  } else if (stats.likes) {
+    likes = Number(stats.likes);
+  }
+
+  const videos = Number(stats.videoCount ?? stats.videos ?? 0);
+  const friends = Number(stats.friendCount ?? stats.friends ?? 0);
+
+  return {
+    username,
+    nickname,
+    avatar,
+    bio,
+    bioLink,
+    verified,
+    privateAccount: isPrivate,
+    id,
+    secUid,
+    region,
+    profileUrl: `https://www.tiktok.com/@${username}`,
+    stats: {
+      followers,
+      following,
+      likes,
+      videos,
+      friends
+    }
+  };
 }
 
 // Layanan utama pelacak profil TikTok
@@ -79,110 +162,77 @@ export async function stalkTiktokProfile(rawInput) {
   if (!username) {
     return {
       success: false,
+      status: 'error',
+      statusCode: 400,
       error: 'invalid_username',
       message: 'Username atau tautan profil TikTok tidak valid. Mohon periksa kembali input Anda.'
     };
   }
 
-  const profileUrl = `https://www.tiktok.com/@${username}`;
   let rawData = null;
-  let dataSource = 'siputzx';
+  let dataSource = 'rehydration';
 
-  // 1. Panggil Endpoint Utama (api.siputzx.my.id) dengan validasi Content-Type & Status
-  try {
-    const res = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
-      timeout: 10000,
-      validateStatus: () => true,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*'
-      }
-    });
-
-    const contentType = res.headers['content-type'] || '';
-    const isJson = contentType.toLowerCase().includes('application/json');
-
-    if (res.status === 200 && isJson) {
-      let bodyData = res.data;
-      if (typeof bodyData === 'string') {
-        try {
-          bodyData = JSON.parse(bodyData);
-        } catch {
-          bodyData = null;
-        }
-      }
-      if (bodyData && bodyData.status && bodyData.data) {
-        rawData = bodyData.data;
-        dataSource = 'siputzx';
-      }
+  // 1. Eksekusi Scraper Rehydration Langsung (Sangat Akurat & Real-Time)
+  const directResult = await scrapeTiktokRehydration(username);
+  if (directResult) {
+    if (directResult.notFound) {
+      return {
+        success: false,
+        status: 'error',
+        statusCode: 404,
+        error: 'user_not_found',
+        message: `Akun TikTok @${username} tidak ditemukan atau telah dihapus/diblokir.`
+      };
     }
-  } catch (apiErr) {
-    // Primary API down / timeout
+    rawData = directResult;
+    dataSource = 'tiktok_rehydration';
   }
 
-  // 2. Jika API siputzx gagal, coba fallback Python scraper
+  // 2. Jika Scraper Langsung belum mendapatkan data, coba API primer siputzx
   if (!rawData) {
     try {
-      const pyResult = await callPythonFallback(username);
-      if (pyResult && (pyResult.avatar || pyResult.uniqueId || pyResult.nickname)) {
-        rawData = pyResult;
-        dataSource = 'python_scraper';
+      const res = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
+        timeout: 8000,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          'Accept': 'application/json, text/plain, */*'
+        }
+      });
+
+      const contentType = res.headers['content-type'] || '';
+      if (res.status === 200 && contentType.toLowerCase().includes('application/json')) {
+        let bodyData = res.data;
+        if (typeof bodyData === 'string') {
+          try { bodyData = JSON.parse(bodyData); } catch {}
+        }
+        if (bodyData && (bodyData.data || bodyData.result)) {
+          rawData = bodyData;
+          dataSource = 'siputzx';
+        }
       }
-    } catch {}
+    } catch (_) {}
   }
 
-  // 3. Jika API eksternal gagal dan scraper tidak mendapatkan data valid, kembalikan 502
-  if (!rawData) {
+  // 3. Ekstraksi Deep Payload
+  const parsedProfile = extractDeepProfile(rawData, username);
+
+  // Jika akun tidak memiliki avatar, tidak ada id/secUid, dan followers bernilai 0, anggap akun tidak valid
+  if (!parsedProfile || (!parsedProfile.avatar && !parsedProfile.id && parsedProfile.stats.followers === 0 && parsedProfile.stats.likes === 0)) {
     return {
       success: false,
       status: 'error',
-      statusCode: 502,
-      message: 'API TikTok eksternal sedang gangguan atau mengembalikan respons tidak valid.'
+      statusCode: 404,
+      error: 'user_not_found',
+      message: `Akun TikTok @${username} tidak ditemukan atau data publik tidak tersedia.`
     };
   }
-  const userObj = rawData?.user || rawData || {};
-  const statsObj = rawData?.stats || rawData || {};
-
-  const uniqueId = userObj.uniqueId || userObj.username || username;
-  const nickname = userObj.nickname || uniqueId;
-  const avatar = userObj.avatarLarger || userObj.avatar || userObj.avatarMedium || userObj.avatarThumb || '';
-  const signature = userObj.signature || userObj.bio || '';
-  const verified = Boolean(userObj.verified);
-  const isPrivate = Boolean(userObj.privateAccount || userObj.isSecret);
-  const secUid = userObj.secUid || '';
-  const id = userObj.id || userObj.userId || '';
-  const region = userObj.region || '';
-  const bioLinkRaw = userObj.bioLink?.link || (typeof userObj.bioLink === 'string' ? userObj.bioLink : null);
-
-  const followers = Number(statsObj.followerCount || statsObj.followers || 0);
-  const following = Number(statsObj.followingCount || statsObj.following || 0);
-  const likes = Number(statsObj.heartCount || statsObj.heart || statsObj.likes || 0);
-  const videos = Number(statsObj.videoCount || statsObj.video || statsObj.videos || 0);
-  const friends = Number(statsObj.friendCount || statsObj.friends || 0);
 
   return {
     success: true,
+    status: 'success',
     source: dataSource,
     timestamp: new Date().toISOString(),
-    data: {
-      username: uniqueId,
-      nickname,
-      avatar,
-      bio: signature,
-      bioLink: bioLinkRaw,
-      verified,
-      privateAccount: isPrivate,
-      id,
-      secUid,
-      region,
-      profileUrl,
-      stats: {
-        followers,
-        following,
-        likes,
-        videos,
-        friends
-      }
-    }
+    data: parsedProfile
   };
 }

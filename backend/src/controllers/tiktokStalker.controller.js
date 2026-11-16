@@ -25,7 +25,7 @@ export async function getTiktokProfileStalk(req, res) {
     });
 
     if (!result.success) {
-      const code = result.statusCode || (result.error === 'invalid_username' ? 400 : 502);
+      const code = result.statusCode || (result.error === 'user_not_found' ? 404 : (result.error === 'invalid_username' ? 400 : 502));
       return res.status(code).json({
         status: 'error',
         success: false,
