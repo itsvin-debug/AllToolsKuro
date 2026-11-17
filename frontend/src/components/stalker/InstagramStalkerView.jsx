@@ -548,25 +548,6 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
               </div>
             </div>
 
-            {/* Private Account Notice Banner */}
-            {profileData.privateAccount && (
-              <div className="bg-amber-50 border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] flex items-start gap-3">
-                <div className="p-2 bg-[#facc15] text-black border-2 border-black rounded-lg shrink-0">
-                  <Lock className="w-4 h-4 stroke-[2.5]" />
-                </div>
-                <div className="space-y-0.5">
-                  <h4 className="font-black text-black text-xs sm:text-sm uppercase tracking-wide">
-                    {isEn ? 'Private Instagram Account' : 'Akun Instagram Bersifat Privat'}
-                  </h4>
-                  <p className="text-xs font-semibold text-neutral-600 leading-relaxed">
-                    {isEn 
-                      ? 'Follower, following, and post metrics are verified. Photos and media are locked by account privacy.'
-                      : 'Metrik pengikut, mengikuti, dan total postingan berhasil diverifikasi. Foto dan media dikunci oleh setelan privasi pemilik akun.'}
-                  </p>
-                </div>
-              </div>
-            )}
-
             {/* Bio Section */}
             <div className="bg-neutral-50 border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] space-y-2">
               <div className="text-xs font-black uppercase text-neutral-500 tracking-wider">
@@ -593,6 +574,25 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                 </div>
               )}
             </div>
+
+            {/* Private Account Notice Banner (Di Bawah Bio) */}
+            {profileData.privateAccount && (
+              <div className="bg-amber-50 border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] flex items-start gap-3">
+                <div className="p-2 bg-[#facc15] text-black border-2 border-black rounded-lg shrink-0">
+                  <Lock className="w-4 h-4 stroke-[2.5]" />
+                </div>
+                <div className="space-y-0.5">
+                  <h4 className="font-black text-black text-xs sm:text-sm uppercase tracking-wide">
+                    {isEn ? 'Private Account (Locked)' : 'Akun ini dikunci (Privat)'}
+                  </h4>
+                  <p className="text-xs font-semibold text-neutral-700 leading-relaxed">
+                    {isEn 
+                      ? 'This account is locked (Private). Follower, following, post counts, and bio were extracted successfully, but media galleries are hidden by the owner.'
+                      : 'Akun ini dikunci (Privat). Statistik pengikut, mengikuti, jumlah postingan, dan bio berhasil diekstrak, namun galeri media disembunyikan oleh pemilik akun.'}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Recent Public Posts Grid */}
             {!profileData.privateAccount && profileData.recentMedia && profileData.recentMedia.length > 0 && (
