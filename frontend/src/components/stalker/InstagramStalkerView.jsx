@@ -106,6 +106,30 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
   }, [loading]);
 
   const fetchInstagramData = async (cleanUsername, forceRefresh = false) => {
+    const controller = new AbortController();
+    const timeoutTimer = setTimeout(() => controller.abort(), 3500);
+
+    const normalizeInstagram = (u) => ({
+      username: u.username || cleanUsername,
+      nickname: u.full_name || u.name || cleanUsername,
+      avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
+      bio: u.bio || u.biography || '',
+      bioLink: u.bio_link || u.external_url || null,
+      verified: Boolean(u.verified || u.is_verified),
+      privateAccount: Boolean(u.is_private || u.private),
+      followers: Number(u.followers || u.follower_count || 0),
+      following: Number(u.following || u.following_count || 0),
+      posts: Number(u.posts || u.media_count || 0),
+      stats: {
+        followers: Number(u.followers || u.follower_count || 0),
+        following: Number(u.following || u.following_count || 0),
+        posts: Number(u.posts || u.media_count || 0)
+      },
+      recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
+      category: u.category || 'Kreator',
+      profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
+    });
+
     // Saluran 1: Backend API Gateway
     const runBackend = async () => {
       const res = await fetch('/api/stalk/instagram', {
@@ -114,7 +138,8 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh })
+        body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh }),
+        signal: controller.signal
       });
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) throw new Error('Backend non-json');
@@ -127,32 +152,16 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
 
     // Saluran 2: Direct Siputzx API dari browser
     const runSiputzx = async () => {
-      const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`);
+      const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
       const text = await res.text();
       let json = null;
       try { json = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
       const u = json?.data || json?.result || json;
       if (json?.status && u && (u.username || u.name || u.full_name)) {
-        return {
-          username: u.username || cleanUsername,
-          nickname: u.full_name || u.name || cleanUsername,
-          avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
-          bio: u.bio || u.biography || '',
-          bioLink: u.bio_link || u.external_url || null,
-          verified: Boolean(u.verified || u.is_verified),
-          privateAccount: Boolean(u.is_private || u.private),
-          followers: Number(u.followers || u.follower_count || 0),
-          following: Number(u.following || u.following_count || 0),
-          posts: Number(u.posts || u.media_count || 0),
-          stats: {
-            followers: Number(u.followers || u.follower_count || 0),
-            following: Number(u.following || u.following_count || 0),
-            posts: Number(u.posts || u.media_count || 0)
-          },
-          recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
-          category: u.category || 'Kreator',
-          profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
-        };
+        return normalizeInstagram(u);
       }
       throw new Error('Siputzx empty');
     };
@@ -160,40 +169,27 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     // Saluran 3: AllOrigins CORS proxy ke Siputzx
     const runAllOriginsSiputzx = async () => {
       const targetUrl = `https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`;
-      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
+      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
+        signal: controller.signal
+      });
       const text = await aoRes.text();
       let json = null;
       try { json = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
       const u = json?.data || json?.result || json;
       if (json?.status && u && (u.username || u.name || u.full_name)) {
-        return {
-          username: u.username || cleanUsername,
-          nickname: u.full_name || u.name || cleanUsername,
-          avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
-          bio: u.bio || u.biography || '',
-          bioLink: u.bio_link || u.external_url || null,
-          verified: Boolean(u.verified || u.is_verified),
-          privateAccount: Boolean(u.is_private || u.private),
-          followers: Number(u.followers || u.follower_count || 0),
-          following: Number(u.following || u.following_count || 0),
-          posts: Number(u.posts || u.media_count || 0),
-          stats: {
-            followers: Number(u.followers || u.follower_count || 0),
-            following: Number(u.following || u.following_count || 0),
-            posts: Number(u.posts || u.media_count || 0)
-          },
-          recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
-          category: u.category || 'Kreator',
-          profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
-        };
+        return normalizeInstagram(u);
       }
       throw new Error('AllOrigins empty');
     };
 
     try {
-      return await Promise.any([runBackend(), runSiputzx(), runAllOriginsSiputzx()]);
+      const winner = await Promise.any([runBackend(), runSiputzx(), runAllOriginsSiputzx()]);
+      controller.abort();
+      return winner;
     } catch (_) {
       return null;
+    } finally {
+      clearTimeout(timeoutTimer);
     }
   };
 

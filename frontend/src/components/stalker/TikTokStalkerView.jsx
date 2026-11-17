@@ -90,7 +90,41 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
     const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
     if (!clean) return null;
 
-    // Saluran 1: Backend API Gateway
+    const controller = new AbortController();
+    const timeoutTimer = setTimeout(() => controller.abort(), 3500);
+
+    // Normalizer profil TikTok universal untuk semua sumber API
+    const normalizeTikTok = (d, source) => {
+      const u = d.user || d;
+      const s = d.stats || d.statsV2 || {};
+      return {
+        success: true,
+        source,
+        data: {
+          username: u.uniqueId || u.username || clean,
+          nickname: u.nickname || u.name || clean,
+          avatar: u.avatarLarger || u.avatarMedium || u.avatarThumb || u.avatar || '',
+          bio: u.signature || u.bio || u.description || '',
+          bioLink: u.bioLink?.link || (typeof u.bioLink === 'string' ? u.bioLink : null),
+          verified: Boolean(u.verified),
+          privateAccount: Boolean(u.privateAccount),
+          region: u.region || 'Global',
+          id: u.id || '',
+          secUid: u.secUid || '',
+          createTime: u.createTime || null,
+          profileUrl: `https://www.tiktok.com/@${u.uniqueId || u.username || clean}`,
+          stats: {
+            followers: Number(s.followerCount ?? s.followers ?? u.followers ?? 0),
+            following: Number(s.followingCount ?? s.following ?? u.following ?? 0),
+            likes: Number(s.heartCount ?? s.heart ?? s.likes ?? u.likes ?? 0),
+            videos: Number(s.videoCount ?? s.videos ?? u.videos ?? 0),
+            friends: Number(s.friendCount ?? s.friends ?? u.friends ?? 0)
+          }
+        }
+      };
+    };
+
+    // Saluran 1: Backend API Gateway (/api/stalk/tiktok)
     const runBackend = async () => {
       const res = await fetch('/api/stalk/tiktok', {
         method: 'POST',
@@ -98,7 +132,8 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ username: clean, refresh: forceRefresh })
+        body: JSON.stringify({ username: clean, refresh: forceRefresh }),
+        signal: controller.signal
       });
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) throw new Error('Backend non-json');
@@ -109,123 +144,62 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       throw new Error(parsed?.message || 'Backend empty');
     };
 
-    // Saluran 2: Direct browser TikWM (IP residensial pengguna tidak terkena blokir Cloudflare Vercel)
+    // Saluran 2: Direct browser TikWM (IP residensial bebas blokir)
     const runTikWM = async () => {
       const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
         method: 'POST',
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
       });
       const text = await tikRes.text();
       let tikJson = null;
       try { tikJson = JSON.parse(text); } catch { throw new Error('TikWM non-json'); }
       if (tikJson?.data?.user) {
-        const u = tikJson.data.user;
-        const s = tikJson.data.stats || {};
-        return {
-          success: true,
-          data: {
-            username: u.uniqueId || clean,
-            nickname: u.nickname || clean,
-            avatar: u.avatarLarger || u.avatarMedium || u.avatarThumb || '',
-            bio: u.signature || '',
-            bioLink: u.bioLink?.link || null,
-            verified: Boolean(u.verified),
-            privateAccount: Boolean(u.privateAccount),
-            region: u.region || 'Global',
-            id: u.id || '',
-            secUid: u.secUid || '',
-            createTime: null,
-            profileUrl: `https://www.tiktok.com/@${u.uniqueId || clean}`,
-            stats: {
-              followers: s.followerCount || 0,
-              following: s.followingCount || 0,
-              likes: s.heartCount || s.heart || 0,
-              videos: s.videoCount || 0,
-              friends: s.friendCount || 0
-            }
-          }
-        };
+        return normalizeTikTok(tikJson.data, 'client_tikwm');
       }
       throw new Error('TikWM empty user');
     };
 
     // Saluran 3: Direct browser Siputzx API
     const runSiputzx = async () => {
-      const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`);
+      const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
       const text = await sipRes.text();
       let sipJson = null;
       try { sipJson = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
       const sData = sipJson?.data || sipJson?.result;
       if (sipJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
-        return {
-          success: true,
-          data: {
-            username: sData.username || sData.uniqueId || clean,
-            nickname: sData.nickname || sData.name || clean,
-            avatar: sData.avatar || sData.avatarLarger || '',
-            bio: sData.bio || sData.description || '',
-            bioLink: sData.bioLink || null,
-            verified: Boolean(sData.verified),
-            privateAccount: Boolean(sData.privateAccount),
-            region: sData.region || 'Global',
-            id: sData.id || '',
-            secUid: '',
-            createTime: null,
-            profileUrl: `https://www.tiktok.com/@${sData.username || clean}`,
-            stats: {
-              followers: sData.followers || sData.followerCount || 0,
-              following: sData.following || sData.followingCount || 0,
-              likes: sData.likes || sData.heartCount || 0,
-              videos: sData.videos || sData.videoCount || 0,
-              friends: 0
-            }
-          }
-        };
+        return normalizeTikTok(sData, 'client_siputzx');
       }
       throw new Error('Siputzx empty');
     };
 
-    // Saluran 4: AllOrigins CORS Tunnel ke Siputzx
+    // Saluran 4: AllOrigins CORS Tunnel
     const runAllOrigins = async () => {
       const targetUrl = `https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`;
-      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
+      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
+        signal: controller.signal
+      });
       const text = await aoRes.text();
       let aoJson = null;
       try { aoJson = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
       const sData = aoJson?.data || aoJson?.result;
       if (aoJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
-        return {
-          success: true,
-          data: {
-            username: sData.username || sData.uniqueId || clean,
-            nickname: sData.nickname || sData.name || clean,
-            avatar: sData.avatar || sData.avatarLarger || '',
-            bio: sData.bio || sData.description || '',
-            bioLink: sData.bioLink || null,
-            verified: Boolean(sData.verified),
-            privateAccount: Boolean(sData.privateAccount),
-            region: sData.region || 'Global',
-            id: sData.id || '',
-            secUid: '',
-            createTime: null,
-            profileUrl: `https://www.tiktok.com/@${sData.username || clean}`,
-            stats: {
-              followers: sData.followers || sData.followerCount || 0,
-              following: sData.following || sData.followingCount || 0,
-              likes: sData.likes || sData.heartCount || 0,
-              videos: sData.videos || sData.videoCount || 0,
-              friends: 0
-            }
-          }
-        };
+        return normalizeTikTok(sData, 'client_allorigins');
       }
       throw new Error('AllOrigins empty');
     };
 
     try {
-      return await Promise.any([runBackend(), runTikWM(), runSiputzx(), runAllOrigins()]);
+      const winner = await Promise.any([runBackend(), runTikWM(), runSiputzx(), runAllOrigins()]);
+      controller.abort();
+      return winner;
     } catch (_) {
       return null;
+    } finally {
+      clearTimeout(timeoutTimer);
     }
   };
 

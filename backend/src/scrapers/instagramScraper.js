@@ -54,10 +54,24 @@ function extractInstagramStatsFromText(text) {
   };
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 3500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchEngine1DirectApi(username) {
   try {
     const webRes = await axios.get(`https://i.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
-      timeout: 5500,
+      timeout: 3500,
       validateStatus: (status) => status < 500,
       headers: {
         'x-ig-app-id': '936619743392459',
@@ -120,10 +134,71 @@ async function fetchEngine1DirectApi(username) {
   throw new Error('Engine 1 Direct API did not yield valid profile data');
 }
 
+async function fetchEngineEmbed(username) {
+  try {
+    const res = await fetchWithTimeout(`https://www.instagram.com/${encodeURIComponent(username)}/embed/`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    }, 3500);
+
+    const html = await res.text();
+    if (res.status === 404) {
+      const err = new Error(`Akun Instagram @${username} tidak ditemukan.`);
+      err.isNotFound = true;
+      throw err;
+    }
+
+    if (html) {
+      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:description"/);
+      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
+      const titleMatch = html.match(/<title>([^<]+)<\/title>/);
+
+      if (descMatch && descMatch[1]) {
+        const rawDesc = decodeHtmlEntities(descMatch[1]);
+        const statsExtracted = extractInstagramStatsFromText(rawDesc);
+        let name = username;
+        if (titleMatch && titleMatch[1]) {
+          name = decodeHtmlEntities(titleMatch[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
+        }
+
+        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+        return {
+          data: {
+            username,
+            nickname: name || username,
+            avatar: rawImg,
+            bio: rawDesc.includes(' - ') ? rawDesc.split(' - ')[1]?.trim() || '' : '',
+            bioLink: null,
+            verified: rawDesc.toLowerCase().includes('verified'),
+            privateAccount: false,
+            followers: statsExtracted.followers,
+            following: statsExtracted.following,
+            posts: statsExtracted.posts,
+            stats: {
+              followers: statsExtracted.followers,
+              following: statsExtracted.following,
+              posts: statsExtracted.posts
+            },
+            recentMedia: [],
+            category: 'Kreator',
+            profileUrl: `https://www.instagram.com/${username}`
+          },
+          source: 'instagram_embed'
+        };
+      }
+    }
+  } catch (err) {
+    if (err.isNotFound) throw err;
+  }
+  throw new Error('Engine Embed did not yield valid profile data');
+}
+
 async function fetchEngine2OpenGraph(username) {
   try {
     const ogRes = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-      timeout: 5500,
+      timeout: 3500,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
@@ -208,7 +283,7 @@ async function fetchEngine2OpenGraph(username) {
 async function fetchEngine3Mirror(username) {
   try {
     const mirrorRes = await axios.get(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(username)}`, {
-      timeout: 5500,
+      timeout: 3500,
       validateStatus: () => true,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
     });
@@ -276,9 +351,10 @@ export async function scrapeInstagram(rawInput, options = {}) {
   let sourceEngine = 'web_profile_info';
 
   try {
-    // Jalankan seluruh engine Instagram secara paralel menggunakan Promise.any
+    // Jalankan seluruh engine Instagram secara paralel menggunakan Promise.any (< 3.5s)
     const winner = await Promise.any([
       fetchEngine1DirectApi(username),
+      fetchEngineEmbed(username),
       fetchEngine2OpenGraph(username),
       fetchEngine3Mirror(username)
     ]);

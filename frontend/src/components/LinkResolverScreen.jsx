@@ -120,7 +120,7 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
 
     try {
       const res = await axios.post('/api/resolve', { url: target }, {
-        timeout: 30000
+        timeout: 10000
       });
 
       clearTimeout(animTimer1);
@@ -162,10 +162,14 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         setErrorMessage(res.data?.message || 'Link tujuan tidak ditemukan atau dilindungi proteksi.');
       }
     } catch (err) {
-      // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd)
+      // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd) dengan timeout 3.5s
       if (target.includes('linktr.ee') || target.includes('heylink.me') || target.includes('carrd.co')) {
         try {
-          const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 3500);
+          const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`, {
+            signal: controller.signal
+          }).finally(() => clearTimeout(timer));
           const html = await aoRes.text();
           if (html.includes('__NEXT_DATA__')) {
             const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);

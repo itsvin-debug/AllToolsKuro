@@ -217,24 +217,34 @@ export default async function handler(req, res) {
   // JALUR 0: SOCIAL MEDIA STALKER
   // ==========================================
   if (route === 'stalk' || platform) {
-    if (platform === 'tiktok' || platform.includes('tiktok')) {
-      const result = await scrapeTiktok(rawTarget, { forceRefresh });
-      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
-    }
+    try {
+      if (platform === 'tiktok' || platform.includes('tiktok')) {
+        const result = await scrapeTiktok(rawTarget, { forceRefresh });
+        return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+      }
 
-    if (platform === 'instagram' || platform.includes('instagram')) {
-      const result = await scrapeInstagram(rawTarget, { forceRefresh });
-      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
-    }
+      if (platform === 'instagram' || platform.includes('instagram')) {
+        const result = await scrapeInstagram(rawTarget, { forceRefresh });
+        return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+      }
 
-    if (platform === 'twitter' || platform === 'x' || platform.includes('twitter')) {
-      const result = await scrapeTwitter(rawTarget, { forceRefresh });
-      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
-    }
+      if (platform === 'twitter' || platform === 'x' || platform.includes('twitter')) {
+        const result = await scrapeTwitter(rawTarget, { forceRefresh });
+        return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+      }
 
-    if (platform === 'github' || platform.includes('github')) {
-      const result = await scrapeGithub(rawTarget, { forceRefresh });
-      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+      if (platform === 'github' || platform.includes('github')) {
+        const result = await scrapeGithub(rawTarget, { forceRefresh });
+        return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+      }
+    } catch (err) {
+      return res.status(200).json({
+        success: false,
+        status: 'error',
+        statusCode: 404,
+        error: 'stalk_failed',
+        message: err.message || 'Profil tidak ditemukan atau koneksi terganggu.'
+      });
     }
   }
 

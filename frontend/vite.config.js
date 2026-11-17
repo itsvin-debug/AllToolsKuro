@@ -315,11 +315,25 @@ function apiServicesDevMiddleware() {
               } catch {
                 req.body = {};
               }
-              await apiMod.default(req, mockRes);
+              try {
+                await apiMod.default(req, mockRes);
+              } catch (err) {
+                if (!res.headersSent) {
+                  res.setHeader('Content-Type', 'application/json');
+                  res.statusCode = 500;
+                  res.end(JSON.stringify({ success: false, message: err.message }));
+                }
+              }
             });
             return;
           } catch (err) {
             console.warn(`apiServicesDevMiddleware error (${pathname}):`, err.message);
+            if (!res.headersSent) {
+              res.setHeader('Content-Type', 'application/json');
+              res.statusCode = 500;
+              res.end(JSON.stringify({ success: false, message: err.message }));
+            }
+            return;
           }
         }
         next();

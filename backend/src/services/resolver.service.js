@@ -173,13 +173,12 @@ export function extractAggregatorItems(html, baseUrl) {
   const seen = new Set();
   const baseHost = new URL(baseUrl).hostname.toLowerCase();
 
-  // 1. Ekstraksi script __NEXT_DATA__ (Linktree, Carrd, dll)
+  // 1. Ekstraksi script __NEXT_DATA__ (Linktree, Carrd, dll) dengan regex kilat (< 1ms)
   if (html.includes('__NEXT_DATA__')) {
     try {
-      const $ = cheerio.load(html);
-      const nextDataText = $('script#__NEXT_DATA__').html();
-      if (nextDataText) {
-        const data = JSON.parse(nextDataText);
+      const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
         const links = data.props?.pageProps?.links || data.props?.pageProps?.account?.links || [];
         for (const l of links) {
           const u = l.url?.trim();

@@ -66,12 +66,27 @@ function formatUnixTimestamp(unix) {
   }
 }
 
-// Layer 1: Node.js Direct Hydration Extractor (Utama & Tercepat)
+// Helper HTTP request dengan AbortController dan batas waktu ketat
+async function fetchWithTimeout(url, options = {}, timeoutMs = 3500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Layer 1: Node.js Direct Hydration Extractor (Batas ketat 2.5s agar tidak terkena tarpit WAF Vercel)
 async function extractLayer1Hydration(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const res = await axios.get(profileUrl, {
-      timeout: 3500,
+      timeout: 2500,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': USER_AGENTS[0],
@@ -147,19 +162,23 @@ async function extractLayer1Hydration(username) {
   throw new Error('Layer 1 did not find valid TikTok user data in HTML');
 }
 
-// Layer 2: Cloud Fallback API (TikWM & Siputzx)
-async function extractLayer2CloudFallback(username) {
-  // A. TikWM API Fallback
+// Engine 2A: TikWM JSON Cloud API (Paling Cepat & Stabil di Cloud Vercel)
+async function extractTikWM(username) {
   try {
-    const tikRes = await axios.post(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(username)}`, {}, {
-      timeout: 4500,
+    const res = await fetchWithTimeout(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(username)}`, {
+      method: 'POST',
       headers: {
         'User-Agent': USER_AGENTS[0],
         'Accept': 'application/json, text/plain, */*'
       }
-    });
-    if (tikRes.data && (tikRes.data.code === 0 || tikRes.data.data?.user)) {
-      const d = tikRes.data.data;
+    }, 3500);
+
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { throw new Error('TikWM non-json'); }
+
+    if (json && (json.code === 0 || json.data?.user)) {
+      const d = json.data;
       if (d?.user && (d.user.uniqueId || d.user.nickname)) {
         return {
           source: 'layer2_tikwm_cloud',
@@ -169,16 +188,25 @@ async function extractLayer2CloudFallback(username) {
         };
       }
     }
-  } catch {}
+  } catch (err) {
+    throw new Error(`TikWM failed: ${err.message}`);
+  }
+  throw new Error('TikWM empty user');
+}
 
-  // B. Siputzx API Fallback
+// Engine 2B: Siputzx Public Cloud API
+async function extractSiputzx(username) {
   try {
-    const sipRes = await axios.get(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
-      timeout: 4500,
+    const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
       headers: { 'User-Agent': USER_AGENTS[1] }
-    });
-    const sData = sipRes.data?.data || sipRes.data?.result;
-    if (sipRes.data && sipRes.data.status && sData && (sData.username || sData.uniqueId)) {
+    }, 3500);
+
+    const text = await res.text();
+    let json = null;
+    try { json = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
+
+    const sData = json?.data || json?.result;
+    if (json && (json.status || json.code === 200) && sData && (sData.username || sData.uniqueId || sData.nickname)) {
       return {
         source: 'layer2_siputzx_cloud',
         user: {
@@ -202,9 +230,10 @@ async function extractLayer2CloudFallback(username) {
         statsV2: {}
       };
     }
-  } catch {}
-
-  throw new Error('Layer 2 cloud fallback failed to retrieve valid TikTok user');
+  } catch (err) {
+    throw new Error(`Siputzx failed: ${err.message}`);
+  }
+  throw new Error('Siputzx empty');
 }
 
 // Layer 3: Python Anti-Bot Worker (Hanya jika dijalankan di lokal, bukan di Vercel)
@@ -246,59 +275,59 @@ async function extractLayer4OEmbed(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(profileUrl)}`;
-    const res = await axios.get(oembedUrl, {
-      timeout: 6000,
-      validateStatus: (status) => status < 500,
+    const res = await fetchWithTimeout(oembedUrl, {
       headers: { 'User-Agent': USER_AGENTS[1] }
-    });
+    }, 2500);
 
     if (res.status === 400 || res.status === 404) {
       return { notFound: true };
     }
 
-    if (res.status === 200 && res.data && res.data.author_name) {
-      const oembedData = res.data;
-      
-      // Ambil OpenGraph metadata pelengkap
-      let ogImage = '';
-      let ogDesc = '';
-      try {
-        const pageRes = await axios.get(profileUrl, {
-          timeout: 4000,
-          headers: { 'User-Agent': USER_AGENTS[0] }
-        });
-        const html = pageRes.data || '';
-        const imgMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
-        if (imgMatch) ogImage = imgMatch[1];
-        const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/) || html.match(/<meta name="description" content="([^"]+)"/);
-        if (descMatch) ogDesc = descMatch[1];
-      } catch (_) {}
+    if (res.ok) {
+      const oembedData = await res.json();
+      if (oembedData && oembedData.author_name) {
+        let ogImage = '';
+        let ogDesc = '';
+        try {
+          // Batas 1500ms agar serverless function tidak terhenti jika tiktok.com memblokir IP
+          const pageRes = await fetchWithTimeout(profileUrl, {
+            headers: { 'User-Agent': USER_AGENTS[0] }
+          }, 1500);
+          if (pageRes.ok) {
+            const html = await pageRes.text();
+            const imgMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
+            if (imgMatch) ogImage = imgMatch[1];
+            const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/) || html.match(/<meta name="description" content="([^"]+)"/);
+            if (descMatch) ogDesc = descMatch[1];
+          }
+        } catch (_) {}
 
-      return {
-        source: 'layer4_official_oembed',
-        user: {
-          uniqueId: username,
-          nickname: oembedData.author_name,
-          avatarLarger: ogImage,
-          avatarMedium: ogImage,
-          avatarThumb: ogImage,
-          signature: ogDesc,
-          verified: false,
-          privateAccount: false,
-          region: 'Global'
-        },
-        stats: {
-          followerCount: 0,
-          followingCount: 0,
-          heartCount: 0,
-          videoCount: 0,
-          friendCount: 0
-        },
-        statsV2: {}
-      };
+        return {
+          source: 'layer4_official_oembed',
+          user: {
+            uniqueId: username,
+            nickname: oembedData.author_name,
+            avatarLarger: ogImage,
+            avatarMedium: ogImage,
+            avatarThumb: ogImage,
+            signature: ogDesc,
+            verified: false,
+            privateAccount: false,
+            region: 'Global'
+          },
+          stats: {
+            followerCount: 0,
+            followingCount: 0,
+            heartCount: 0,
+            videoCount: 0,
+            friendCount: 0
+          },
+          statsV2: {}
+        };
+      }
     }
   } catch (err) {
-    if (err.response?.status === 400 || err.response?.status === 404) {
+    if (err.message?.includes('400') || err.message?.includes('404')) {
       return { notFound: true };
     }
     throw new Error(`Layer 4 failed: ${err.message}`);
@@ -398,15 +427,16 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  // Eksekusi paralel Layer 1 (Direct Hydration) & Layer 2 (Cloud Fallback) menggunakan Promise.any
-  // Layer yang berhasil dan mengembalikan data user valid akan langsung menang
+  // Eksekusi paralel Engine TikWM, Siputzx, dan Direct Hydration secara serentak
+  // Mesin pertama yang mengembalikan data user valid akan langsung menang (< 2 detik)
   try {
     extractedResult = await Promise.any([
-      extractLayer1Hydration(username),
-      extractLayer2CloudFallback(username)
+      extractTikWM(username),
+      extractSiputzx(username),
+      extractLayer1Hydration(username)
     ]);
   } catch (_) {
-    // Jika Layer 1 & 2 keduanya gagal, coba Layer 4 (oEmbed) lalu Layer 3 (Python)
+    // Jika seluruh engine utama gagal, coba Layer 4 (oEmbed) lalu Layer 3 (Python jika di lokal)
     try {
       extractedResult = await extractLayer4OEmbed(username);
     } catch (_) {

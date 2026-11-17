@@ -127,7 +127,7 @@ function extractSflSlug(targetUrl) {
   }
 }
 
-async function followManualRedirects(startUrl, maxHops = 5) {
+async function followManualRedirects(startUrl, maxHops = 4) {
   let curr = startUrl;
   let lastHtml = '';
   let lastStatus = 200;
@@ -136,8 +136,8 @@ async function followManualRedirects(startUrl, maxHops = 5) {
     try {
       const res = await axios.get(curr, {
         maxRedirects: 0,
-        timeout: 10000,
-        maxContentLength: 10 * 1024 * 1024,
+        timeout: 3500,
+        maxContentLength: 5 * 1024 * 1024,
         headers: {
           'User-Agent': UA_DESKTOP,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -173,13 +173,12 @@ function extractAggregatorItems(html, baseUrl) {
   const seen = new Set();
   const baseHost = new URL(baseUrl).hostname.toLowerCase();
 
-  // 1. Ekstraksi script __NEXT_DATA__ pada Linktree
+  // 1. Ekstraksi script __NEXT_DATA__ pada Linktree dengan regex cepat (< 1ms)
   if (html.includes('__NEXT_DATA__')) {
     try {
-      const $ = cheerio.load(html);
-      const nextDataText = $('script#__NEXT_DATA__').html();
-      if (nextDataText) {
-        const data = JSON.parse(nextDataText);
+      const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
         const links = data.props?.pageProps?.links || data.props?.pageProps?.account?.links || [];
         for (const l of links) {
           const u = l.url?.trim();
@@ -269,6 +268,37 @@ export default async function handler(req, res) {
     });
   }
 
+  // 1b. Jalur Kilat Link Aggregator (Linktree, Heylink, Carrd, dll)
+  const isAggregator = AGGREGATOR_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || cleanUrl.includes('linktr.ee');
+  if (isAggregator) {
+    try {
+      const aggRes = await axios.get(cleanUrl, {
+        timeout: 4000,
+        maxContentLength: 5 * 1024 * 1024,
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+        }
+      });
+      if (typeof aggRes.data === 'string') {
+        const aggregatorItems = extractAggregatorItems(aggRes.data, cleanUrl);
+        if (aggregatorItems.length > 0) {
+          return res.status(200).json({
+            status: 'success',
+            result_type: 'multiple_links',
+            category: 'aggregator',
+            original_url: cleanUrl,
+            items: aggregatorItems,
+            count: aggregatorItems.length,
+            engine: 'aggregator-scanner',
+            elapsed_ms: Math.max(1, Date.now() - startTime)
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
   // 2. Tipe A: Evaluasi Rute Redirect HTTP (301/302) & Status 200 OK
   const { finalUrl, html } = await followManualRedirects(cleanUrl);
   const finalHost = finalUrl ? new URL(finalUrl).hostname.toLowerCase() : host;
@@ -290,7 +320,6 @@ export default async function handler(req, res) {
   }
 
   // 3. Tipe B: Link Aggregator / Bio Link (Linktree, Heylink, Carrd, dll)
-  const isAggregator = AGGREGATOR_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || cleanUrl.includes('linktr.ee');
   if (html && (isAggregator || html.includes('__NEXT_DATA__'))) {
     const aggregatorItems = extractAggregatorItems(html, finalUrl || cleanUrl);
     if (aggregatorItems.length > 0) {

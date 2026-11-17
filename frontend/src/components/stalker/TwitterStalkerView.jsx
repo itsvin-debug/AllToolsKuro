@@ -86,101 +86,113 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
 
   const fetchTwitterData = async (target, forceRefresh = false) => {
     const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
-    let json = null;
+    if (!clean) return null;
+
+    const controller = new AbortController();
+    const timeoutTimer = setTimeout(() => controller.abort(), 3500);
 
     // 1. Direct browser fetch ke api.fxtwitter.com (Sangat cepat, bebas blokir IP)
-    try {
+    const runFxTwitter = async () => {
       const fxRes = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(clean)}`, {
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
       });
       const fxText = await fxRes.text();
-      if (fxText.startsWith('{')) {
-        const fxJson = JSON.parse(fxText);
-        if (fxJson?.code === 200 && fxJson.user) {
-          const u = fxJson.user;
-          json = {
-            success: true,
-            data: {
-              username: u.screen_name || clean,
-              nickname: u.name || clean,
-              avatar: u.avatar_url ? u.avatar_url.replace('_normal.', '.') : '',
-              banner: u.banner_url || '',
-              bio: u.description || '',
-              bioLink: u.website || null,
-              verified: Boolean(u.verification?.verified || u.verified),
-              privateAccount: Boolean(u.protected),
-              joinedDate: u.joined ? new Date(u.joined).toLocaleDateString(isEn ? 'en-US' : 'id-ID', { month: 'short', year: 'numeric' }) : null,
-              location: u.location || '',
-              profileUrl: `https://x.com/${u.screen_name || clean}`,
-              stats: {
-                followers: u.followers || 0,
-                following: u.following || 0,
-                tweets: u.tweets || 0
-              }
+      let fxJson = null;
+      try { fxJson = JSON.parse(fxText); } catch { throw new Error('FxTwitter non-json'); }
+      if (fxJson?.code === 200 && fxJson.user) {
+        const u = fxJson.user;
+        return {
+          success: true,
+          data: {
+            username: u.screen_name || clean,
+            nickname: u.name || clean,
+            avatar: u.avatar_url ? u.avatar_url.replace('_normal.', '.') : '',
+            banner: u.banner_url || '',
+            bio: u.description || '',
+            bioLink: u.website || null,
+            verified: Boolean(u.verification?.verified || u.verified),
+            privateAccount: Boolean(u.protected),
+            joinedDate: u.joined ? new Date(u.joined).toLocaleDateString(isEn ? 'en-US' : 'id-ID', { month: 'short', year: 'numeric' }) : null,
+            location: u.location || '',
+            profileUrl: `https://x.com/${u.screen_name || clean}`,
+            stats: {
+              followers: u.followers || 0,
+              following: u.following || 0,
+              tweets: u.tweets || 0
             }
-          };
-        }
+          }
+        };
       }
-    } catch (_) {}
+      throw new Error('FxTwitter empty');
+    };
 
     // 2. Fallback backend server
-    if (!json) {
-      try {
-        const res = await fetch('/api/stalk/twitter', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
-          body: JSON.stringify({ username: clean, refresh: forceRefresh })
-        });
-        const ct = res.headers.get('content-type') || '';
-        if (ct.includes('application/json')) {
-          const parsed = await res.json();
-          if (res.ok && parsed.success && parsed.data) {
-            json = parsed;
-          }
-        }
-      } catch (_) {}
-    }
+    const runBackend = async () => {
+      const res = await fetch('/api/stalk/twitter', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ username: clean, refresh: forceRefresh }),
+        signal: controller.signal
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) throw new Error('Backend non-json');
+      const text = await res.text();
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
+      if (res.ok && parsed.success && parsed.data) {
+        return parsed;
+      }
+      throw new Error(parsed?.message || 'Backend empty');
+    };
 
     // 3. Fallback vxtwitter
-    if (!json) {
-      try {
-        const vxRes = await fetch(`https://api.vxtwitter.com/${encodeURIComponent(clean)}`, {
-          headers: { 'Accept': 'application/json' }
-        });
-        const vxText = await vxRes.text();
-        if (vxText.startsWith('{')) {
-          const vxJson = JSON.parse(vxText);
-          if (vxJson?.user_screen_name || vxJson?.user_name) {
-            json = {
-              success: true,
-              data: {
-                username: vxJson.user_screen_name || clean,
-                nickname: vxJson.user_name || clean,
-                avatar: vxJson.user_profile_image_url || '',
-                banner: '',
-                bio: vxJson.text || '',
-                bioLink: null,
-                verified: false,
-                privateAccount: false,
-                joinedDate: null,
-                location: '',
-                profileUrl: `https://x.com/${vxJson.user_screen_name || clean}`,
-                stats: {
-                  followers: vxJson.likes || 0,
-                  following: 0,
-                  tweets: 0
-                }
-              }
-            };
+    const runVxTwitter = async () => {
+      const vxRes = await fetch(`https://api.vxtwitter.com/${encodeURIComponent(clean)}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
+      const vxText = await vxRes.text();
+      let vxJson = null;
+      try { vxJson = JSON.parse(vxText); } catch { throw new Error('VxTwitter non-json'); }
+      if (vxJson?.user_screen_name || vxJson?.user_name) {
+        return {
+          success: true,
+          data: {
+            username: vxJson.user_screen_name || clean,
+            nickname: vxJson.user_name || clean,
+            avatar: vxJson.user_profile_image_url || '',
+            banner: '',
+            bio: vxJson.text || '',
+            bioLink: null,
+            verified: false,
+            privateAccount: false,
+            joinedDate: null,
+            location: '',
+            profileUrl: `https://x.com/${vxJson.user_screen_name || clean}`,
+            stats: {
+              followers: vxJson.likes || 0,
+              following: 0,
+              tweets: 0
+            }
           }
-        }
-      } catch (_) {}
-    }
+        };
+      }
+      throw new Error('VxTwitter empty');
+    };
 
-    return json;
+    try {
+      const winner = await Promise.any([runFxTwitter(), runBackend(), runVxTwitter()]);
+      controller.abort();
+      return winner;
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timeoutTimer);
+    }
   };
 
   const handleStalk = async (targetUsername) => {
