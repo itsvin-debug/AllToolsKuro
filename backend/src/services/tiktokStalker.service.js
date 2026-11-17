@@ -88,55 +88,63 @@ async function extractLayer1Hydration(username) {
       return { notFound: true };
     }
 
+    if (res.status !== 200) {
+      throw new Error(`Layer 1 received non-200 HTTP status: ${res.status}`);
+    }
+
     const html = typeof res.data === 'string' ? res.data : '';
 
     // 1. Ekstraksi __UNIVERSAL_DATA_FOR_REHYDRATION__
     const match = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
     if (match && match[1]) {
-      const parsed = JSON.parse(match[1]);
-      const defaultScope = parsed['__DEFAULT_SCOPE__'] || {};
-      const userDetail = defaultScope['webapp.user-detail'] || {};
+      try {
+        const parsed = JSON.parse(match[1]);
+        const defaultScope = parsed['__DEFAULT_SCOPE__'] || {};
+        const userDetail = defaultScope['webapp.user-detail'] || {};
 
-      // Cek status code resmi TikTok untuk akun tidak ditemukan / banned
-      if (userDetail.statusCode === 10202 || userDetail.statusCode === 10221) {
-        return { notFound: true };
-      }
+        if (userDetail.statusCode === 10202 || userDetail.statusCode === 10221) {
+          return { notFound: true };
+        }
 
-      const userInfo = userDetail.userInfo;
-      if (userInfo && userInfo.user && (userInfo.user.uniqueId || userInfo.user.nickname)) {
-        return {
-          source: 'layer1_rehydration',
-          user: userInfo.user,
-          stats: userInfo.stats || {},
-          statsV2: userInfo.statsV2 || {}
-        };
-      }
+        const userInfo = userDetail.userInfo;
+        if (userInfo && userInfo.user && (userInfo.user.uniqueId || userInfo.user.nickname)) {
+          return {
+            source: 'layer1_rehydration',
+            user: userInfo.user,
+            stats: userInfo.stats || {},
+            statsV2: userInfo.statsV2 || {}
+          };
+        }
+      } catch (_) {}
     }
 
     // 2. Fallback SIGI_STATE
     const sigiMatch = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/);
     if (sigiMatch && sigiMatch[1]) {
-      const sigiJson = JSON.parse(sigiMatch[1]);
-      const usersMap = sigiJson.UserModule?.users || {};
-      const statsMap = sigiJson.UserModule?.stats || {};
-      const user = usersMap[username] || Object.values(usersMap)[0];
-      const stats = statsMap[username] || Object.values(statsMap)[0];
-      if (user) {
-        return {
-          source: 'layer1_sigi_state',
-          user,
-          stats: stats || {},
-          statsV2: {}
-        };
-      }
+      try {
+        const sigiJson = JSON.parse(sigiMatch[1]);
+        const usersMap = sigiJson.UserModule?.users || {};
+        const statsMap = sigiJson.UserModule?.stats || {};
+        const user = usersMap[username] || Object.values(usersMap)[0];
+        const stats = statsMap[username] || Object.values(statsMap)[0];
+        if (user && (user.uniqueId || user.nickname)) {
+          return {
+            source: 'layer1_sigi_state',
+            user,
+            stats: stats || {},
+            statsV2: {}
+          };
+        }
+      } catch (_) {}
     }
   } catch (err) {
     if (err.response?.status === 404) {
       return { notFound: true };
     }
+    throw new Error(`Layer 1 failed: ${err.message}`);
   }
 
-  return null;
+  throw new Error('Layer 1 did not find valid TikTok user data in HTML');
 }
 
 // Layer 2: Cloud Fallback API (TikWM & Siputzx)
@@ -152,12 +160,14 @@ async function extractLayer2CloudFallback(username) {
     });
     if (tikRes.data && (tikRes.data.code === 0 || tikRes.data.data?.user)) {
       const d = tikRes.data.data;
-      return {
-        source: 'layer2_tikwm_cloud',
-        user: d.user || {},
-        stats: d.stats || {},
-        statsV2: {}
-      };
+      if (d?.user && (d.user.uniqueId || d.user.nickname)) {
+        return {
+          source: 'layer2_tikwm_cloud',
+          user: d.user || {},
+          stats: d.stats || {},
+          statsV2: {}
+        };
+      }
     }
   } catch {}
 
@@ -168,7 +178,7 @@ async function extractLayer2CloudFallback(username) {
       headers: { 'User-Agent': USER_AGENTS[1] }
     });
     const sData = sipRes.data?.data || sipRes.data?.result;
-    if (sipRes.data && sipRes.data.status && sData) {
+    if (sipRes.data && sipRes.data.status && sData && (sData.username || sData.uniqueId)) {
       return {
         source: 'layer2_siputzx_cloud',
         user: {
@@ -194,7 +204,7 @@ async function extractLayer2CloudFallback(username) {
     }
   } catch {}
 
-  return null;
+  throw new Error('Layer 2 cloud fallback failed to retrieve valid TikTok user');
 }
 
 // Layer 3: Python Anti-Bot Worker (Hanya jika dijalankan di lokal, bukan di Vercel)
@@ -291,9 +301,10 @@ async function extractLayer4OEmbed(username) {
     if (err.response?.status === 400 || err.response?.status === 404) {
       return { notFound: true };
     }
+    throw new Error(`Layer 4 failed: ${err.message}`);
   }
 
-  return null;
+  throw new Error('Layer 4 oEmbed did not return valid user');
 }
 
 // Petakan struktur data mentah ke skema keluaran konsisten
@@ -387,48 +398,24 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  if (process.env.VERCEL === '1') {
-    // Jalur cepat Vercel: jalankan Layer 1 dan Layer 2 secara paralel untuk atasi pemblokiran IP datacenter AWS
-    const layer1Promise = extractLayer1Hydration(username).catch(() => null);
-    const layer2Promise = extractLayer2CloudFallback(username).catch(() => null);
-
-    const winner = await Promise.race([
-      layer1Promise.then(r => (r && r.user ? r : new Promise(() => {}))),
-      layer2Promise.then(r => (r && r.user ? r : new Promise(() => {}))),
-      new Promise(resolve => setTimeout(() => resolve(null), 3600))
+  // Eksekusi paralel Layer 1 (Direct Hydration) & Layer 2 (Cloud Fallback) menggunakan Promise.any
+  // Layer yang berhasil dan mengembalikan data user valid akan langsung menang
+  try {
+    extractedResult = await Promise.any([
+      extractLayer1Hydration(username),
+      extractLayer2CloudFallback(username)
     ]);
-
-    if (winner && winner.user) {
-      extractedResult = winner;
-    } else {
-      const l1 = await layer1Promise;
-      if (l1 && (l1.user || l1.notFound)) {
-        extractedResult = l1;
-      } else {
-        const l2 = await layer2Promise;
-        if (l2 && (l2.user || l2.notFound)) {
-          extractedResult = l2;
-        }
+  } catch (_) {
+    // Jika Layer 1 & 2 keduanya gagal, coba Layer 4 (oEmbed) lalu Layer 3 (Python)
+    try {
+      extractedResult = await extractLayer4OEmbed(username);
+    } catch (_) {
+      if (process.env.VERCEL !== '1') {
+        try {
+          extractedResult = await extractLayer3Python(username);
+        } catch (_) {}
       }
     }
-  } else {
-    // 1. Layer 1: Node.js Direct Hydration Extractor (Mobile Engine)
-    extractedResult = await extractLayer1Hydration(username);
-
-    // 2. Layer 2: Cloud Fallback API (TikWM & Siputzx)
-    if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
-      extractedResult = await extractLayer2CloudFallback(username);
-    }
-  }
-
-  // 3. Layer 3: Python Anti-Bot Worker (jika di environment lokal)
-  if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
-    extractedResult = await extractLayer3Python(username);
-  }
-
-  // 4. Layer 4: TikTok Official oEmbed & OpenGraph Fallback
-  if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
-    extractedResult = await extractLayer4OEmbed(username);
   }
 
   // Jika akun resmi dinyatakan tidak ditemukan oleh TikTok

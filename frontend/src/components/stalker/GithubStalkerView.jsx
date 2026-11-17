@@ -502,15 +502,15 @@ export default function GithubStalkerView({ onBack, onChangePlatform, onShowToas
                 <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl border-2 border-black overflow-hidden shadow-[3px_3px_0px_#000000] bg-neutral-100 flex items-center justify-center shrink-0">
                   {profileData.avatar ? (
                     <img 
-                      src={profileData.avatar.startsWith('http') ? `/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}` : profileData.avatar} 
+                      src={profileData.avatar.startsWith('http') ? `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&w=300&h=300&fit=cover` : profileData.avatar} 
                       alt={profileData.nickname || profileData.username} 
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                       crossOrigin="anonymous"
                       onError={(e) => {
-                        if (e.target.dataset.triedWs !== 'true') {
-                          e.target.dataset.triedWs = 'true';
-                          e.target.src = `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&default=404`;
+                        if (e.target.dataset.triedProxy !== 'true') {
+                          e.target.dataset.triedProxy = 'true';
+                          e.target.src = `/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}`;
                         } else if (e.target.dataset.triedDirect !== 'true') {
                           e.target.dataset.triedDirect = 'true';
                           e.target.src = profileData.avatar;

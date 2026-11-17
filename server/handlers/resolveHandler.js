@@ -1,6 +1,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { applySecurityHeaders } from './_security.js';
+import { applySecurityHeaders } from '../../api/_security.js';
 
 /**
  * api/resolve.js - Vercel Serverless Function: 100% Pure Node.js Safelink & Linktree Resolver

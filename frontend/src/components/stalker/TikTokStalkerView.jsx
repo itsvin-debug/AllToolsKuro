@@ -88,10 +88,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
 
   const fetchTikTokData = async (target, forceRefresh = false) => {
     const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
-    let json = null;
+    if (!clean) return null;
 
-    // 1. Coba backend server terlebih dahulu
-    try {
+    // Saluran 1: Backend API Gateway
+    const runBackend = async () => {
       const res = await fetch('/api/stalk/tiktok', {
         method: 'POST',
         headers: { 
@@ -101,95 +101,132 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
         body: JSON.stringify({ username: clean, refresh: forceRefresh })
       });
       const ct = res.headers.get('content-type') || '';
-      if (ct.includes('application/json')) {
-        const parsed = await res.json();
-        if (res.ok && parsed.success && parsed.data) {
-          json = parsed;
-        }
+      if (!ct.includes('application/json')) throw new Error('Backend non-json');
+      const text = await res.text();
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
+      if (res.ok && parsed?.success && parsed?.data) return parsed;
+      throw new Error(parsed?.message || 'Backend empty');
+    };
+
+    // Saluran 2: Direct browser TikWM (IP residensial pengguna tidak terkena blokir Cloudflare Vercel)
+    const runTikWM = async () => {
+      const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
+      });
+      const text = await tikRes.text();
+      let tikJson = null;
+      try { tikJson = JSON.parse(text); } catch { throw new Error('TikWM non-json'); }
+      if (tikJson?.data?.user) {
+        const u = tikJson.data.user;
+        const s = tikJson.data.stats || {};
+        return {
+          success: true,
+          data: {
+            username: u.uniqueId || clean,
+            nickname: u.nickname || clean,
+            avatar: u.avatarLarger || u.avatarMedium || u.avatarThumb || '',
+            bio: u.signature || '',
+            bioLink: u.bioLink?.link || null,
+            verified: Boolean(u.verified),
+            privateAccount: Boolean(u.privateAccount),
+            region: u.region || 'Global',
+            id: u.id || '',
+            secUid: u.secUid || '',
+            createTime: null,
+            profileUrl: `https://www.tiktok.com/@${u.uniqueId || clean}`,
+            stats: {
+              followers: s.followerCount || 0,
+              following: s.followingCount || 0,
+              likes: s.heartCount || s.heart || 0,
+              videos: s.videoCount || 0,
+              friends: s.friendCount || 0
+            }
+          }
+        };
       }
-    } catch (_) {}
+      throw new Error('TikWM empty user');
+    };
 
-    // 2. Direct browser fallback via TikWM (mendukung CORS dan tidak terkena blokir IP Vercel)
-    if (!json) {
-      try {
-        const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
-          method: 'POST',
-          headers: { 'Accept': 'application/json' }
-        });
-        const tikText = await tikRes.text();
-        if (tikText.startsWith('{')) {
-          const tikJson = JSON.parse(tikText);
-          if (tikJson?.data?.user) {
-            const u = tikJson.data.user;
-            const s = tikJson.data.stats || {};
-            json = {
-              success: true,
-              data: {
-                username: u.uniqueId || clean,
-                nickname: u.nickname || clean,
-                avatar: u.avatarLarger || u.avatarMedium || u.avatarThumb || '',
-                bio: u.signature || '',
-                bioLink: u.bioLink?.link || null,
-                verified: Boolean(u.verified),
-                privateAccount: Boolean(u.privateAccount),
-                region: u.region || 'Global',
-                id: u.id || '',
-                secUid: u.secUid || '',
-                createTime: null,
-                profileUrl: `https://www.tiktok.com/@${u.uniqueId || clean}`,
-                stats: {
-                  followers: s.followerCount || 0,
-                  following: s.followingCount || 0,
-                  likes: s.heartCount || s.heart || 0,
-                  videos: s.videoCount || 0,
-                  friends: s.friendCount || 0
-                }
-              }
-            };
+    // Saluran 3: Direct browser Siputzx API
+    const runSiputzx = async () => {
+      const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`);
+      const text = await sipRes.text();
+      let sipJson = null;
+      try { sipJson = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
+      const sData = sipJson?.data || sipJson?.result;
+      if (sipJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
+        return {
+          success: true,
+          data: {
+            username: sData.username || sData.uniqueId || clean,
+            nickname: sData.nickname || sData.name || clean,
+            avatar: sData.avatar || sData.avatarLarger || '',
+            bio: sData.bio || sData.description || '',
+            bioLink: sData.bioLink || null,
+            verified: Boolean(sData.verified),
+            privateAccount: Boolean(sData.privateAccount),
+            region: sData.region || 'Global',
+            id: sData.id || '',
+            secUid: '',
+            createTime: null,
+            profileUrl: `https://www.tiktok.com/@${sData.username || clean}`,
+            stats: {
+              followers: sData.followers || sData.followerCount || 0,
+              following: sData.following || sData.followingCount || 0,
+              likes: sData.likes || sData.heartCount || 0,
+              videos: sData.videos || sData.videoCount || 0,
+              friends: 0
+            }
           }
-        }
-      } catch (_) {}
-    }
+        };
+      }
+      throw new Error('Siputzx empty');
+    };
 
-    // 3. Direct browser fallback via Siputzx API
-    if (!json) {
-      try {
-        const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`);
-        const sipText = await sipRes.text();
-        if (sipText.startsWith('{')) {
-          const sipJson = JSON.parse(sipText);
-          const sData = sipJson?.data || sipJson?.result;
-          if (sipJson?.status && sData) {
-            json = {
-              success: true,
-              data: {
-                username: sData.username || sData.uniqueId || clean,
-                nickname: sData.nickname || sData.name || clean,
-                avatar: sData.avatar || sData.avatarLarger || '',
-                bio: sData.bio || sData.description || '',
-                bioLink: sData.bioLink || null,
-                verified: Boolean(sData.verified),
-                privateAccount: Boolean(sData.privateAccount),
-                region: sData.region || 'Global',
-                id: sData.id || '',
-                secUid: '',
-                createTime: null,
-                profileUrl: `https://www.tiktok.com/@${sData.username || clean}`,
-                stats: {
-                  followers: sData.followers || sData.followerCount || 0,
-                  following: sData.following || sData.followingCount || 0,
-                  likes: sData.likes || sData.heartCount || 0,
-                  videos: sData.videos || sData.videoCount || 0,
-                  friends: 0
-                }
-              }
-            };
+    // Saluran 4: AllOrigins CORS Tunnel ke Siputzx
+    const runAllOrigins = async () => {
+      const targetUrl = `https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`;
+      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
+      const text = await aoRes.text();
+      let aoJson = null;
+      try { aoJson = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
+      const sData = aoJson?.data || aoJson?.result;
+      if (aoJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
+        return {
+          success: true,
+          data: {
+            username: sData.username || sData.uniqueId || clean,
+            nickname: sData.nickname || sData.name || clean,
+            avatar: sData.avatar || sData.avatarLarger || '',
+            bio: sData.bio || sData.description || '',
+            bioLink: sData.bioLink || null,
+            verified: Boolean(sData.verified),
+            privateAccount: Boolean(sData.privateAccount),
+            region: sData.region || 'Global',
+            id: sData.id || '',
+            secUid: '',
+            createTime: null,
+            profileUrl: `https://www.tiktok.com/@${sData.username || clean}`,
+            stats: {
+              followers: sData.followers || sData.followerCount || 0,
+              following: sData.following || sData.followingCount || 0,
+              likes: sData.likes || sData.heartCount || 0,
+              videos: sData.videos || sData.videoCount || 0,
+              friends: 0
+            }
           }
-        }
-      } catch (_) {}
-    }
+        };
+      }
+      throw new Error('AllOrigins empty');
+    };
 
-    return json;
+    try {
+      return await Promise.any([runBackend(), runTikWM(), runSiputzx(), runAllOrigins()]);
+    } catch (_) {
+      return null;
+    }
   };
 
   const handleStalk = async (targetUsername) => {
@@ -213,8 +250,18 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       setProfileData(json.data);
       onShowToast?.(isEn ? 'TikTok account intel loaded!' : 'Intel profil TikTok berhasil dimuat!', 'success');
     } catch (err) {
-      setErrorMsg(err.message || t.errorNotFound);
-      onShowToast?.(err.message || t.errorNotFound, 'error');
+      let friendlyMsg = err.message || t.errorNotFound;
+      if (
+        friendlyMsg.includes('JSON') || 
+        friendlyMsg.includes('SyntaxError') || 
+        friendlyMsg.includes('unexpected') || 
+        friendlyMsg.includes('token') ||
+        friendlyMsg.includes('All nodes failed')
+      ) {
+        friendlyMsg = isEn ? 'TikTok profile not found or connection blocked.' : t.errorNotFound;
+      }
+      setErrorMsg(friendlyMsg);
+      onShowToast?.(friendlyMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -237,8 +284,18 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       setProfileData(json.data);
       onShowToast?.(isEn ? 'Profile intel refreshed!' : 'Intel profil berhasil disegarkan!', 'success');
     } catch (err) {
-      setErrorMsg(err.message || t.errorNotFound);
-      onShowToast?.(err.message || t.errorNotFound, 'error');
+      let friendlyMsg = err.message || t.errorNotFound;
+      if (
+        friendlyMsg.includes('JSON') || 
+        friendlyMsg.includes('SyntaxError') || 
+        friendlyMsg.includes('unexpected') || 
+        friendlyMsg.includes('token') ||
+        friendlyMsg.includes('All nodes failed')
+      ) {
+        friendlyMsg = isEn ? 'TikTok profile not found or connection blocked.' : t.errorNotFound;
+      }
+      setErrorMsg(friendlyMsg);
+      onShowToast?.(friendlyMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -471,15 +528,15 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
                 <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border-2 border-black overflow-hidden shadow-[3px_3px_0px_#000000] bg-neutral-100 flex items-center justify-center shrink-0">
                   {profileData.avatar ? (
                     <img 
-                      src={profileData.avatar.startsWith('http') ? `/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}` : profileData.avatar} 
+                      src={profileData.avatar.startsWith('http') ? `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&w=300&h=300&fit=cover` : profileData.avatar} 
                       alt={profileData.nickname || profileData.username} 
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                       crossOrigin="anonymous"
                       onError={(e) => {
-                        if (e.target.dataset.triedWs !== 'true') {
-                          e.target.dataset.triedWs = 'true';
-                          e.target.src = `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&default=404`;
+                        if (e.target.dataset.triedProxy !== 'true') {
+                          e.target.dataset.triedProxy = 'true';
+                          e.target.src = `/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}`;
                         } else if (e.target.dataset.triedDirect !== 'true') {
                           e.target.dataset.triedDirect = 'true';
                           e.target.src = profileData.avatar;
@@ -683,7 +740,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
 
                 {profileData.avatar && (
                   <a
-                    href={`/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}`}
+                    href={profileData.avatar.startsWith('http') ? `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&output=jpg` : profileData.avatar}
                     target="_blank"
                     rel="noopener noreferrer"
                     download={`tiktok_${profileData.username}_avatar.jpg`}

@@ -162,6 +162,47 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         setErrorMessage(res.data?.message || 'Link tujuan tidak ditemukan atau dilindungi proteksi.');
       }
     } catch (err) {
+      // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd)
+      if (target.includes('linktr.ee') || target.includes('heylink.me') || target.includes('carrd.co')) {
+        try {
+          const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`);
+          const html = await aoRes.text();
+          if (html.includes('__NEXT_DATA__')) {
+            const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+            if (match && match[1]) {
+              const parsed = JSON.parse(match[1]);
+              const links = parsed.props?.pageProps?.links || parsed.props?.pageProps?.account?.links || [];
+              const items = [];
+              for (const l of links) {
+                const u = l.url?.trim();
+                if (u && (u.startsWith('http://') || u.startsWith('https://'))) {
+                  items.push({ title: l.title || 'Tautan Eksternal', url: u });
+                }
+              }
+              if (items.length > 0) {
+                clearTimeout(animTimer1);
+                clearTimeout(animTimer2);
+                clearTimeout(animTimer3);
+                const fallbackResult = {
+                  status: 'success',
+                  result_type: 'multiple_links',
+                  category: 'aggregator',
+                  original_url: target,
+                  items,
+                  count: items.length,
+                  engine: 'client-edge-relay',
+                  elapsed_ms: 1200
+                };
+                setActiveStepIndex(4);
+                setResolveResult(fallbackResult);
+                onShowToast?.(`Berhasil mengekstrak ${items.length} tautan via Edge Relay!`);
+                return;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
       clearTimeout(animTimer1);
       clearTimeout(animTimer2);
       clearTimeout(animTimer3);

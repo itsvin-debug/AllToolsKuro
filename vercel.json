@@ -45,36 +45,24 @@
   ],
   "rewrites": [
     {
-      "source": "/api/app/version",
-      "destination": "/api/version"
-    },
-    {
       "source": "/api/stalk/image-proxy",
-      "destination": "/api/proxy-download?stream=true"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
-      "source": "/api/stalk/tiktok",
-      "destination": "/api/media?type=tiktok-stalk"
-    },
-    {
-      "source": "/api/stalk/instagram",
-      "destination": "/api/media?type=instagram-stalk"
-    },
-    {
-      "source": "/api/stalk/twitter",
-      "destination": "/api/media?type=twitter-stalk"
-    },
-    {
-      "source": "/api/stalk/github",
-      "destination": "/api/media?type=github-stalk"
+      "source": "/api/stalk/(.*)",
+      "destination": "/api/media?__route=stalk&platform=$1"
     },
     {
       "source": "/api/tools/tiktok-stalk",
-      "destination": "/api/media?type=tiktok-stalk"
+      "destination": "/api/media?__route=stalk&platform=tiktok"
     },
     {
       "source": "/api/tiktok-stalk",
-      "destination": "/api/media?type=tiktok-stalk"
+      "destination": "/api/media?__route=stalk&platform=tiktok"
+    },
+    {
+      "source": "/api/download",
+      "destination": "/api/media?__route=download"
     },
     {
       "source": "/api/anime/search",
@@ -86,43 +74,79 @@
     },
     {
       "source": "/api/proxy-stream",
-      "destination": "/api/proxy-download?stream=true"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
       "source": "/api/proxy-doc-image",
-      "destination": "/api/proxy-download?stream=true"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
       "source": "/api/tools/image-proxy",
-      "destination": "/api/proxy-download?stream=true"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
       "source": "/api/image-proxy",
-      "destination": "/api/proxy-download?stream=true"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
       "source": "/api/tools/tiktok-avatar",
-      "destination": "/api/proxy-download?stream=true"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
       "source": "/api/tiktok-avatar",
-      "destination": "/api/proxy-download?stream=true"
-    },
-    {
-      "source": "/api/ping",
-      "destination": "/api/locked-tools?action=ping"
+      "destination": "/api/media?__route=proxy-download&stream=true"
     },
     {
       "source": "/api/jj/find",
-      "destination": "/api/jj-finder"
+      "destination": "/api/media?__route=jj-finder"
     },
     {
-      "source": "/api/system-battery",
-      "destination": "/api/version?action=battery"
+      "source": "/api/jj-finder",
+      "destination": "/api/media?__route=jj-finder"
+    },
+    {
+      "source": "/api/resolve",
+      "destination": "/api/tools?__route=resolve"
+    },
+    {
+      "source": "/api/compress-pdf",
+      "destination": "/api/tools?__route=compress-pdf"
+    },
+    {
+      "source": "/api/link-to-doc",
+      "destination": "/api/tools?__route=link-to-doc"
+    },
+    {
+      "source": "/api/ip-check",
+      "destination": "/api/tools?__route=ip-check"
+    },
+    {
+      "source": "/api/locked-tools",
+      "destination": "/api/tools?__route=locked-tools"
     },
     {
       "source": "/api/verify-admin",
-      "destination": "/api/locked-tools"
+      "destination": "/api/tools?__route=locked-tools"
+    },
+    {
+      "source": "/api/ping",
+      "destination": "/api/tools?__route=locked-tools&action=ping"
+    },
+    {
+      "source": "/api/version",
+      "destination": "/api/tools?__route=version"
+    },
+    {
+      "source": "/api/app/version",
+      "destination": "/api/tools?__route=version"
+    },
+    {
+      "source": "/api/system-battery",
+      "destination": "/api/tools?__route=version&action=battery"
+    },
+    {
+      "source": "/api/chat",
+      "destination": "/api/chat"
     },
     {
       "source": "/api/(.*)",

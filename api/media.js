@@ -3,6 +3,9 @@ import { scrapeTiktok } from '../backend/src/scrapers/tiktokScraper.js';
 import { scrapeInstagram } from '../backend/src/scrapers/instagramScraper.js';
 import { scrapeTwitter } from '../backend/src/scrapers/twitterScraper.js';
 import { scrapeGithub } from '../backend/src/scrapers/githubScraper.js';
+import downloadHandler from '../server/handlers/downloadHandler.js';
+import proxyDownloadHandler from '../server/handlers/proxyDownloadHandler.js';
+import jjFinderHandler from '../server/handlers/jjFinderHandler.js';
 
 /**
  * api/media.js - Konsolidasi API Pencarian Anime & Manhwa Real-Time
@@ -170,77 +173,72 @@ export default async function handler(req, res) {
     body = {};
   }
 
+  const route = (req.query?.__route || '').toLowerCase();
   const urlPath = (req.url || '').toLowerCase();
-  const type = (
+
+  // 1. Jalur Media Downloader
+  if (route === 'download' || urlPath.includes('/api/download')) {
+    return downloadHandler(req, res);
+  }
+
+  // 2. Jalur Proxy Stream, Image Proxy & Avatar
+  if (
+    route === 'proxy-download' || 
+    urlPath.includes('/api/proxy-download') || 
+    urlPath.includes('/api/proxy-stream') || 
+    urlPath.includes('image-proxy') ||
+    urlPath.includes('tiktok-avatar')
+  ) {
+    return proxyDownloadHandler(req, res);
+  }
+
+  // 3. Jalur Jedag-Jedug Finder (Alight Motion)
+  if (route === 'jj-finder' || urlPath.includes('/api/jj')) {
+    return jjFinderHandler(req, res);
+  }
+
+  // 4. Deteksi platform Stalker dari req.query, req.body, atau URL path
+  const platform = (
+    req.query?.platform || 
     req.query?.type || 
+    body?.platform || 
     body?.type || 
-    (urlPath.includes('tiktok') ? 'tiktok-stalk' : 
-    (urlPath.includes('instagram') ? 'instagram-stalk' : 
-    (urlPath.includes('twitter') || urlPath.includes('/x') ? 'twitter-stalk' : 
-    (urlPath.includes('github') ? 'github-stalk' : 
-    (urlPath.includes('manhwa') ? 'manhwa' : 'anime')))))
+    (urlPath.includes('tiktok') ? 'tiktok' : 
+    (urlPath.includes('instagram') ? 'instagram' : 
+    (urlPath.includes('twitter') || urlPath.includes('/x') ? 'twitter' : 
+    (urlPath.includes('github') ? 'github' : ''))))
   ).toLowerCase();
 
   const query = (req.query?.q || body?.q || req.query?.query || body?.query || '').trim();
-  const rawGenres = req.query?.genres || body?.genres || '';
-  const page = parseInt(req.query?.page || body?.page || '1', 10) || 1;
+  const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
+  const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
 
-  let genreNames = [];
-  if (Array.isArray(rawGenres)) {
-    genreNames = rawGenres.filter(Boolean);
-  } else if (typeof rawGenres === 'string' && rawGenres.trim()) {
-    genreNames = rawGenres.split(',').map(s => s.trim()).filter(Boolean);
-  }
-
-  const genreIds = [];
-  genreNames.forEach(g => {
-    const lower = String(g).toLowerCase();
-    if (JIKAN_GENRE_MAP[lower]) {
-      genreIds.push(JIKAN_GENRE_MAP[lower]);
-    } else if (!isNaN(parseInt(g, 10))) {
-      genreIds.push(parseInt(g, 10));
+  // ==========================================
+  // JALUR 0: SOCIAL MEDIA STALKER
+  // ==========================================
+  if (route === 'stalk' || platform) {
+    if (platform === 'tiktok' || platform.includes('tiktok')) {
+      const result = await scrapeTiktok(rawTarget, { forceRefresh });
+      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
     }
-  });
 
-  // ==========================================
-  // JALUR 0: TIKTOK PROFILE STALKER
-  // ==========================================
-  if (type === 'tiktok-stalk' || type === 'tiktok_stalk' || type === 'tiktokstalk' || type === 'tiktok') {
-    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
-    const result = await scrapeTiktok(rawTarget, { forceRefresh });
-    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+    if (platform === 'instagram' || platform.includes('instagram')) {
+      const result = await scrapeInstagram(rawTarget, { forceRefresh });
+      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+    }
+
+    if (platform === 'twitter' || platform === 'x' || platform.includes('twitter')) {
+      const result = await scrapeTwitter(rawTarget, { forceRefresh });
+      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+    }
+
+    if (platform === 'github' || platform.includes('github')) {
+      const result = await scrapeGithub(rawTarget, { forceRefresh });
+      return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
+    }
   }
 
-  // ==========================================
-  // JALUR 0.1: INSTAGRAM PROFILE STALKER
-  // ==========================================
-  if (type === 'instagram-stalk' || type === 'instagram_stalk' || type === 'instagram') {
-    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
-    const result = await scrapeInstagram(rawTarget, { forceRefresh });
-    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
-  }
-
-  // ==========================================
-  // JALUR 0.2: X / TWITTER PROFILE STALKER
-  // ==========================================
-  if (type === 'twitter-stalk' || type === 'twitter_stalk' || type === 'twitter' || type === 'x-stalk' || type === 'x') {
-    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
-    const result = await scrapeTwitter(rawTarget, { forceRefresh });
-    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
-  }
-
-  // ==========================================
-  // JALUR 0.3: GITHUB PROFILE STALKER
-  // ==========================================
-  if (type === 'github-stalk' || type === 'github_stalk' || type === 'github') {
-    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
-    const result = await scrapeGithub(rawTarget, { forceRefresh });
-    return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
-  }
+  const type = (req.query?.type || body?.type || (urlPath.includes('manhwa') ? 'manhwa' : 'anime')).toLowerCase();
 
   // ==========================================
   // JALUR 1: MANHWA FINDER

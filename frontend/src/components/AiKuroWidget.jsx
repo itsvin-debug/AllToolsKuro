@@ -178,7 +178,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     lastY: 0
   });
 
-  // Helper kelas CSS untuk posisi 4-kuadran di layar
+  // Helper kelas CSS untuk posisi 4-kuadran di layar (dengan safe clearance untuk mobile bottom nav)
   const getQuadrantClasses = (isPopup = false) => {
     if (isPopup) {
       switch (dockQuadrant) {
@@ -187,10 +187,10 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         case 'top-right':
           return 'top-20 sm:top-20 right-3 sm:right-6';
         case 'bottom-left':
-          return 'bottom-20 sm:bottom-6 left-3 sm:left-6';
+          return 'bottom-28 sm:bottom-6 left-3 sm:left-6';
         case 'bottom-right':
         default:
-          return 'bottom-20 sm:bottom-6 right-3 sm:right-6';
+          return 'bottom-28 sm:bottom-6 right-3 sm:right-6';
       }
     } else {
       switch (dockQuadrant) {
@@ -199,10 +199,10 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         case 'top-right':
           return 'top-20 sm:top-20 right-4 sm:right-6';
         case 'bottom-left':
-          return 'bottom-20 sm:bottom-6 left-4 sm:left-6 flex-row-reverse';
+          return 'bottom-28 sm:bottom-6 left-4 sm:left-6 flex-row-reverse';
         case 'bottom-right':
         default:
-          return 'bottom-20 sm:bottom-6 right-4 sm:right-6';
+          return 'bottom-28 sm:bottom-6 right-4 sm:right-6';
       }
     }
   };

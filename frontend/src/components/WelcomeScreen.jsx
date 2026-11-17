@@ -63,14 +63,6 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
   const t = translations[lang] || translations.id;
   const wt = t.welcome;
 
-  const categories = [
-    { id: 'all', label: wt.catAll, count: 18 },
-    { id: 'downloader', label: wt.catDownloader, count: 2 },
-    { id: 'file', label: wt.catFile, count: 4 },
-    { id: 'creative', label: wt.catCreative, count: 6 },
-    { id: 'utility', label: wt.catUtility, count: 6 }
-  ];
-
   const tools = [
     {
       id: 'downloader',
@@ -225,6 +217,14 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       icon: Globe2,
       onClick: () => onOpenTool('tiktokStalker')
     }
+  ];
+
+  const categories = [
+    { id: 'all', label: wt.catAll, count: tools.length },
+    { id: 'downloader', label: wt.catDownloader, count: tools.filter(t => t.category === 'downloader').length },
+    { id: 'file', label: wt.catFile, count: tools.filter(t => t.category === 'file').length },
+    { id: 'creative', label: wt.catCreative, count: tools.filter(t => t.category === 'creative').length },
+    { id: 'utility', label: wt.catUtility, count: tools.filter(t => t.category === 'utility').length }
   ];
 
   const filteredTools = tools.filter((tool) => {

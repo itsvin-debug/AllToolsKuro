@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { validateRequestSecurity } from './_security.js';
+import { validateRequestSecurity } from '../../api/_security.js';
 
 export default async function handler(req, res) {
   if (!validateRequestSecurity(req, res)) return;

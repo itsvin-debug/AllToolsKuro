@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { applySecurityHeaders, validateRequestSecurity } from './_security.js';
+import { applySecurityHeaders, validateRequestSecurity } from '../../api/_security.js';
 
 function isPrivateIp(ip) {
   if (!ip || typeof ip !== 'string') return true;

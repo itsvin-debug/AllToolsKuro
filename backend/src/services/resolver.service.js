@@ -259,7 +259,38 @@ export async function resolveLink(targetUrl, options = {}) {
     };
   }
 
-  // 2. Tipe A: Evaluasi Multi-Hop Redirect HTTP (301/302) & Status 200 OK
+  // 2. Tipe B: Jalur Cepat Link Aggregator / Bio Link (Linktree, Heylink, Carrd, dll)
+  const isAggregator = AGGREGATOR_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || cleanUrl.includes('linktr.ee');
+  if (isAggregator) {
+    try {
+      const aggRes = await axios.get(cleanUrl, {
+        timeout: 6000,
+        maxContentLength: 10 * 1024 * 1024,
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+        }
+      });
+      if (typeof aggRes.data === 'string') {
+        const aggregatorItems = extractAggregatorItems(aggRes.data, cleanUrl);
+        if (aggregatorItems.length > 0) {
+          return {
+            status: 'success',
+            result_type: 'multiple_links',
+            category: 'aggregator',
+            original_url: cleanUrl,
+            items: aggregatorItems,
+            count: aggregatorItems.length,
+            engine: 'aggregator-scanner',
+            elapsed_ms: Math.max(1, Date.now() - startTime)
+          };
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. Tipe A: Evaluasi Multi-Hop Redirect HTTP (301/302) & Status 200 OK
   const { finalUrl, html } = await followManualRedirects(cleanUrl);
   const finalHost = finalUrl ? new URL(finalUrl).hostname.toLowerCase() : host;
 
@@ -279,8 +310,7 @@ export async function resolveLink(targetUrl, options = {}) {
     }
   }
 
-  // 3. Tipe B: Link Aggregator / Bio Link (Linktree, Heylink, Carrd, dll)
-  const isAggregator = AGGREGATOR_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || cleanUrl.includes('linktr.ee');
+  // 4. Tipe B Fallback: Link Aggregator dari hasil redirect
   if (html && (isAggregator || html.includes('__NEXT_DATA__'))) {
     const aggregatorItems = extractAggregatorItems(html, finalUrl || cleanUrl);
     if (aggregatorItems.length > 0) {

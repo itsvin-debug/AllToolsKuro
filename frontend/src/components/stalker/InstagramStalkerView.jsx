@@ -105,6 +105,98 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     };
   }, [loading]);
 
+  const fetchInstagramData = async (cleanUsername, forceRefresh = false) => {
+    // Saluran 1: Backend API Gateway
+    const runBackend = async () => {
+      const res = await fetch('/api/stalk/instagram', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh })
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) throw new Error('Backend non-json');
+      const text = await res.text();
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
+      if (res.ok && parsed?.success && parsed?.data) return parsed.data;
+      throw new Error(parsed?.message || 'Backend failed');
+    };
+
+    // Saluran 2: Direct Siputzx API dari browser
+    const runSiputzx = async () => {
+      const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`);
+      const text = await res.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
+      const u = json?.data || json?.result || json;
+      if (json?.status && u && (u.username || u.name || u.full_name)) {
+        return {
+          username: u.username || cleanUsername,
+          nickname: u.full_name || u.name || cleanUsername,
+          avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
+          bio: u.bio || u.biography || '',
+          bioLink: u.bio_link || u.external_url || null,
+          verified: Boolean(u.verified || u.is_verified),
+          privateAccount: Boolean(u.is_private || u.private),
+          followers: Number(u.followers || u.follower_count || 0),
+          following: Number(u.following || u.following_count || 0),
+          posts: Number(u.posts || u.media_count || 0),
+          stats: {
+            followers: Number(u.followers || u.follower_count || 0),
+            following: Number(u.following || u.following_count || 0),
+            posts: Number(u.posts || u.media_count || 0)
+          },
+          recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
+          category: u.category || 'Kreator',
+          profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
+        };
+      }
+      throw new Error('Siputzx empty');
+    };
+
+    // Saluran 3: AllOrigins CORS proxy ke Siputzx
+    const runAllOriginsSiputzx = async () => {
+      const targetUrl = `https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`;
+      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`);
+      const text = await aoRes.text();
+      let json = null;
+      try { json = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
+      const u = json?.data || json?.result || json;
+      if (json?.status && u && (u.username || u.name || u.full_name)) {
+        return {
+          username: u.username || cleanUsername,
+          nickname: u.full_name || u.name || cleanUsername,
+          avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
+          bio: u.bio || u.biography || '',
+          bioLink: u.bio_link || u.external_url || null,
+          verified: Boolean(u.verified || u.is_verified),
+          privateAccount: Boolean(u.is_private || u.private),
+          followers: Number(u.followers || u.follower_count || 0),
+          following: Number(u.following || u.following_count || 0),
+          posts: Number(u.posts || u.media_count || 0),
+          stats: {
+            followers: Number(u.followers || u.follower_count || 0),
+            following: Number(u.following || u.following_count || 0),
+            posts: Number(u.posts || u.media_count || 0)
+          },
+          recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
+          category: u.category || 'Kreator',
+          profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
+        };
+      }
+      throw new Error('AllOrigins empty');
+    };
+
+    try {
+      return await Promise.any([runBackend(), runSiputzx(), runAllOriginsSiputzx()]);
+    } catch (_) {
+      return null;
+    }
+  };
+
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
     const cleanUsername = raw
@@ -124,32 +216,26 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     setProfileData(null);
 
     try {
-      const res = await fetch('/api/stalk/instagram', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: cleanUsername })
-      });
+      const data = await fetchInstagramData(cleanUsername, false);
 
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Server did not return valid JSON.' : 'Server tidak merespons JSON.');
+      if (!data) {
+        throw new Error(isEn ? 'Instagram profile not found or connection blocked.' : 'Profil Instagram tidak ditemukan atau koneksi terganggu.');
       }
 
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || (isEn ? 'Instagram profile not found.' : 'Profil Instagram tidak ditemukan.'));
-      }
-
-      setProfileData(normalizeInstagramData(json.data));
+      setProfileData(normalizeInstagramData(data));
       onShowToast?.(isEn ? 'Instagram profile loaded!' : 'Intel profil Instagram berhasil dimuat!', 'success');
     } catch (err) {
-      setErrorMsg(err.message || (isEn ? 'Failed to fetch Instagram profile.' : 'Gagal mengambil data profil Instagram.'));
-      onShowToast?.(err.message || (isEn ? 'Failed to fetch Instagram profile.' : 'Gagal mengambil data profil Instagram.'), 'error');
+      let friendlyMsg = err.message || (isEn ? 'Failed to fetch Instagram profile.' : 'Gagal mengambil data profil Instagram.');
+      if (
+        friendlyMsg.includes('JSON') || 
+        friendlyMsg.includes('SyntaxError') || 
+        friendlyMsg.includes('unexpected') || 
+        friendlyMsg.includes('token')
+      ) {
+        friendlyMsg = isEn ? 'Instagram profile not found.' : 'Profil Instagram tidak ditemukan.';
+      }
+      setErrorMsg(friendlyMsg);
+      onShowToast?.(friendlyMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -163,32 +249,26 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/stalk/instagram', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: target, refresh: true })
-      });
+      const data = await fetchInstagramData(target, true);
 
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Server did not return valid JSON.' : 'Gagal membaca respons server.');
+      if (!data) {
+        throw new Error(isEn ? 'Profile not found.' : 'Profil tidak ditemukan.');
       }
 
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || (isEn ? 'Profile not found.' : 'Profil tidak ditemukan.'));
-      }
-
-      setProfileData(normalizeInstagramData(json.data));
+      setProfileData(normalizeInstagramData(data));
       onShowToast?.(isEn ? 'Instagram profile refreshed!' : 'Profil Instagram berhasil disegarkan!', 'success');
     } catch (err) {
-      setErrorMsg(err.message || (isEn ? 'Failed to refresh profile.' : 'Gagal menyegarkan profil.'));
-      onShowToast?.(err.message, 'error');
+      let friendlyMsg = err.message || (isEn ? 'Failed to refresh profile.' : 'Gagal menyegarkan profil.');
+      if (
+        friendlyMsg.includes('JSON') || 
+        friendlyMsg.includes('SyntaxError') || 
+        friendlyMsg.includes('unexpected') || 
+        friendlyMsg.includes('token')
+      ) {
+        friendlyMsg = isEn ? 'Profile not found.' : 'Profil tidak ditemukan.';
+      }
+      setErrorMsg(friendlyMsg);
+      onShowToast?.(friendlyMsg, 'error');
     } finally {
       setLoading(false);
     }
@@ -427,15 +507,15 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                 <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border-2 border-black overflow-hidden shadow-[3px_3px_0px_#000000] bg-neutral-100 flex items-center justify-center shrink-0">
                   {profileData.avatar ? (
                     <img 
-                      src={profileData.avatar.startsWith('http') ? `/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}` : profileData.avatar} 
+                      src={profileData.avatar.startsWith('http') ? `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&w=300&h=300&fit=cover` : profileData.avatar} 
                       alt={profileData.nickname || profileData.username} 
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"
                       crossOrigin="anonymous"
                       onError={(e) => {
-                        if (e.target.dataset.triedWs !== 'true') {
-                          e.target.dataset.triedWs = 'true';
-                          e.target.src = `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&default=404`;
+                        if (e.target.dataset.triedProxy !== 'true') {
+                          e.target.dataset.triedProxy = 'true';
+                          e.target.src = `/api/stalk/image-proxy?url=${encodeURIComponent(profileData.avatar)}`;
                         } else if (e.target.dataset.triedDirect !== 'true') {
                           e.target.dataset.triedDirect = 'true';
                           e.target.src = profileData.avatar;

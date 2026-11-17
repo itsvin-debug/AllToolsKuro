@@ -146,7 +146,7 @@ function downloadDevMiddleware() {
         const pathname = req.url?.split('?')[0];
         if (pathname === '/api/download') {
           try {
-            const dlModule = await import('../api/download.js');
+            const dlModule = await import('../server/handlers/downloadHandler.js');
             let body = '';
             req.on('data', chunk => { body += chunk; });
             req.on('end', async () => {
@@ -171,21 +171,12 @@ function downloadDevMiddleware() {
           } catch (err) {
             console.warn('downloadDevMiddleware error:', err);
           }
-        } else if (pathname === '/api/proxy-stream') {
+        } else if (pathname === '/api/proxy-stream' || pathname === '/api/proxy-download') {
           try {
-            const streamModule = await import('../api/proxy-stream.js');
+            const proxyDlModule = await import('../server/handlers/proxyDownloadHandler.js');
             const parsedUrl = new URL(req.url, 'http://localhost:5173');
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
-            await streamModule.default(req, res);
-            return;
-          } catch (err) {
-            console.warn('proxyStreamDevMiddleware error:', err);
-          }
-        } else if (pathname === '/api/proxy-download') {
-          try {
-            const proxyDlModule = await import('../api/proxy-download.js');
-            const parsedUrl = new URL(req.url, 'http://localhost:5173');
-            req.query = Object.fromEntries(parsedUrl.searchParams.entries());
+            if (pathname === '/api/proxy-stream') req.query.stream = 'true';
             await proxyDlModule.default(req, res);
             return;
           } catch (err) {
@@ -235,37 +226,58 @@ function apiServicesDevMiddleware() {
 
         let targetModulePath = null;
         let forcedType = null;
-        if (pathname === '/api/capcut/search') {
-          targetModulePath = '../api/capcut/search.js';
-        } else if (pathname === '/api/anime/search') {
-          targetModulePath = '../api/anime/search.js';
+        let forcedRoute = null;
+        let forcedPlatform = null;
+
+        if (pathname === '/api/anime/search') {
+          targetModulePath = '../api/media.js';
+          forcedType = 'anime';
         } else if (pathname === '/api/manhwa/search') {
-          targetModulePath = '../api/manhwa/search.js';
-        } else if (pathname === '/api/version') {
-          targetModulePath = '../api/version.js';
+          targetModulePath = '../api/media.js';
+          forcedType = 'manhwa';
+        } else if (pathname === '/api/version' || pathname === '/api/app/version') {
+          targetModulePath = '../api/tools.js';
+          forcedRoute = 'version';
         } else if (pathname === '/api/resolve') {
-          targetModulePath = '../api/resolve.js';
+          targetModulePath = '../api/tools.js';
+          forcedRoute = 'resolve';
+        } else if (pathname === '/api/compress-pdf') {
+          targetModulePath = '../api/tools.js';
+          forcedRoute = 'compress-pdf';
+        } else if (pathname === '/api/link-to-doc') {
+          targetModulePath = '../api/tools.js';
+          forcedRoute = 'link-to-doc';
+        } else if (pathname === '/api/ip-check') {
+          targetModulePath = '../api/tools.js';
+          forcedRoute = 'ip-check';
+        } else if (pathname === '/api/jj/find' || pathname === '/api/jj-finder') {
+          targetModulePath = '../api/media.js';
+          forcedRoute = 'jj-finder';
         } else if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk' || pathname === '/api/stalk/tiktok') {
           targetModulePath = '../api/media.js';
-          forcedType = 'tiktok-stalk';
+          forcedRoute = 'stalk';
+          forcedPlatform = 'tiktok';
         } else if (pathname === '/api/stalk/instagram') {
           targetModulePath = '../api/media.js';
-          forcedType = 'instagram-stalk';
+          forcedRoute = 'stalk';
+          forcedPlatform = 'instagram';
         } else if (pathname === '/api/stalk/twitter') {
           targetModulePath = '../api/media.js';
-          forcedType = 'twitter-stalk';
+          forcedRoute = 'stalk';
+          forcedPlatform = 'twitter';
         } else if (pathname === '/api/stalk/github') {
           targetModulePath = '../api/media.js';
-          forcedType = 'github-stalk';
+          forcedRoute = 'stalk';
+          forcedPlatform = 'github';
         }
 
         if (targetModulePath) {
           try {
             const apiMod = await import(targetModulePath);
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
-            if (forcedType) {
-              req.query.type = forcedType;
-            }
+            if (forcedType) req.query.type = forcedType;
+            if (forcedRoute) req.query.__route = forcedRoute;
+            if (forcedPlatform) req.query.platform = forcedPlatform;
 
             const mockRes = {
               setHeader: (k, v) => res.setHeader(k, v),

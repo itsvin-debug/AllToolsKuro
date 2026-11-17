@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { checkEnvGuard, enforceAdminGuard } from './_envGuard.js';
+import { checkEnvGuard, enforceAdminGuard } from '../../api/_envGuard.js';
 
 let inMemoryLockedTools = [];
 let inMemoryUpdatedAt = 0;
