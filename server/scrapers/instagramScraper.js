@@ -291,6 +291,97 @@ async function fetchEngineCrawlerOpenGraph(username) {
   throw new Error('Jalur 2 Crawler did not yield valid profile data');
 }
 
+// Jalur 3: Google Edge Relay (Bypass blokir IP Datacenter/AWS Vercel)
+async function fetchEngineGoogleRelay(username) {
+  try {
+    const target = `https://www.instagram.com/${encodeURIComponent(username)}/`;
+    const gtUrl = `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(target)}`;
+    const res = await axios.get(gtUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      timeout: 8000,
+      validateStatus: (s) => s < 500
+    });
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    if (!html || res.status === 404) {
+      throw new Error('Google Relay empty response');
+    }
+
+    const descMatch = html.match(/property="og:description" content="([^"]+)"/) || 
+                      html.match(/content="([^"]+)" property="og:description"/) ||
+                      html.match(/name="description" content="([^"]+)"/) ||
+                      html.match(/content="([^"]+)" name="description"/);
+    const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
+    const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
+
+    if (descMatch && descMatch[1]) {
+      const rawDesc = decodeHtmlEntities(descMatch[1]);
+      const statsExtracted = extractInstagramStatsFromText(rawDesc);
+      const rawTitle = titleMatch ? decodeHtmlEntities(titleMatch[1]) : '';
+      const nameExtracted = rawTitle ? rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim() : username;
+      const isPrivate = html.includes('"is_private":true') || html.includes('"isPrivate":true') || !html.includes('"edge_owner_to_timeline_media"');
+      const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+
+      let bio = '';
+      const bioMetaMatch = html.match(/name="description" content="[^"]*on Instagram: &quot;([^&"]+)&quot;"/) ||
+                           html.match(/content="[^"]*on Instagram: &quot;([^&"]+)&quot;" name="description"/);
+      if (bioMetaMatch && bioMetaMatch[1]) {
+        bio = decodeHtmlEntities(bioMetaMatch[1]);
+      }
+      if (!bio) {
+        const bioJsonMatch = html.match(/"biography":"([^"]+)"/) || html.match(/"bio":"([^"]+)"/);
+        if (bioJsonMatch && bioJsonMatch[1]) {
+          try {
+            bio = JSON.parse(`"${bioJsonMatch[1]}"`);
+          } catch {
+            bio = bioJsonMatch[1];
+          }
+        }
+      }
+      if (!bio && rawDesc.includes(' - ')) {
+        const afterDash = rawDesc.split(' - ')[1]?.trim();
+        if (afterDash && !afterDash.startsWith('See Instagram photos') && !afterDash.startsWith('Lihat foto')) {
+          bio = afterDash;
+        }
+      }
+
+      const extracted = {
+        username,
+        fullName: nameExtracted || username,
+        nickname: nameExtracted || username,
+        avatar: rawImg,
+        bio: bio || '',
+        bioLink: null,
+        isPrivate,
+        privateAccount: isPrivate,
+        isVerified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
+        verified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
+        followers: statsExtracted.followers,
+        following: statsExtracted.following,
+        posts: statsExtracted.posts,
+        stats: {
+          followers: statsExtracted.followers,
+          following: statsExtracted.following,
+          posts: statsExtracted.posts
+        },
+        recentMedia: [],
+        category: 'Kreator',
+        profileUrl: `https://www.instagram.com/${username}`
+      };
+
+      if (isValidInstagramData(extracted)) {
+        return {
+          source: 'google_edge_relay',
+          data: extracted
+        };
+      }
+    }
+  } catch (_) {}
+  throw new Error('Google Relay did not yield valid profile data');
+}
+
 // Fallback Direct Web Profile API
 async function fetchEngineWebProfileApi(username) {
   try {
@@ -442,18 +533,27 @@ export async function scrapeInstagram(rawInput, options = {}) {
 
   let resultCrawler = null;
   let resultEmbed = null;
+  let resultRelay = null;
 
-  // Eksekusi paralel Jalur 1 (Embed) dan Jalur 2 (Crawler OpenGraph)
+  // 1. Eksekusi Crawler OpenGraph langsung
   try {
     resultCrawler = await fetchEngineCrawlerOpenGraph(username);
   } catch (_) {}
 
+  // 2. Jika crawler langsung gagal (misal diblokir IP datacenter AWS di Vercel), jalankan Google Edge Relay
+  if (!resultCrawler) {
+    try {
+      resultRelay = await fetchEngineGoogleRelay(username);
+    } catch (_) {}
+  }
+
+  // 3. Eksekusi Embed Profil
   try {
     resultEmbed = await fetchEngineEmbedProfile(username);
   } catch (_) {}
 
-  // Deep merge properti dari Jalur 1 dan Jalur 2
-  let mergedData = deepMergeInstagramData(resultCrawler?.data, resultEmbed?.data);
+  // Deep merge properti dari Jalur 1, Jalur 2, dan Jalur 3
+  let mergedData = deepMergeInstagramData(resultCrawler?.data || resultRelay?.data, resultEmbed?.data);
 
   // Jika belum valid, coba fallback direct Web Profile API
   if (!isValidInstagramData(mergedData)) {
@@ -478,10 +578,14 @@ export async function scrapeInstagram(rawInput, options = {}) {
     data: mergedData
   });
 
+  const finalSource = resultCrawler 
+    ? (resultEmbed ? 'native_hybrid_merged' : 'crawler_link_preview')
+    : (resultRelay ? 'google_edge_relay' : 'instagram_embed');
+
   return {
     success: true,
     platform: 'instagram',
-    source: resultCrawler ? (resultEmbed ? 'native_hybrid_merged' : 'crawler_link_preview') : 'instagram_embed',
+    source: finalSource,
     cached: false,
     data: mergedData
   };

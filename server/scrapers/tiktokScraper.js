@@ -29,6 +29,33 @@ export function extractCleanHandle(raw) {
   return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
 }
 
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return str
+    .replace(/&#064;/g, '@')
+    .replace(/&#x2022;/g, '•')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function parseMetricString(str) {
+  if (!str) return 0;
+  const clean = str.replace(/,/g, '').trim().toLowerCase();
+  if (clean.endsWith('jt') || clean.endsWith('m')) {
+    return Math.round(parseFloat(clean.replace(/(?:jt|m)$/, '')) * 1000000);
+  }
+  if (clean.endsWith('rb') || clean.endsWith('k')) {
+    return Math.round(parseFloat(clean.replace(/(?:rb|k)$/, '')) * 1000);
+  }
+  if (clean.endsWith('b')) {
+    return Math.round(parseFloat(clean.replace(/b$/, '')) * 1000000000);
+  }
+  return parseInt(clean.replace(/[^0-9]/g, ''), 10) || 0;
+}
+
 // Pengurai cerdas tautan & shortlink TikTok (vt/vm) menjadi username murni
 export async function resolveTiktokUsername(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return '';
@@ -162,6 +189,75 @@ async function extractLayer1Hydration(username) {
   }
 
   throw new Error('Layer 1 did not find valid TikTok user data in HTML');
+}
+
+// Layer 2: Crawler Bot OpenGraph Extractor (Bypass SlardarWAF)
+async function extractLayerCrawlerOpenGraph(username) {
+  const profileUrl = `https://www.tiktok.com/@${username}`;
+  const crawlers = [
+    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    'Twitterbot/1.0'
+  ];
+
+  for (const ua of crawlers) {
+    try {
+      const res = await axios.get(profileUrl, {
+        timeout: 5000,
+        validateStatus: (status) => status < 500,
+        headers: {
+          'User-Agent': ua,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        }
+      });
+
+      if (res.status === 404) return { notFound: true };
+      const html = typeof res.data === 'string' ? res.data : '';
+      if (!html || html.length < 500) continue;
+
+      const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/name="twitter:title" content="([^"]+)"/);
+      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/name="twitter:description" content="([^"]+)"/);
+      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/name="twitter:image" content="([^"]+)"/);
+      const idMatch = html.match(/user\/profile\/(\d+)/);
+
+      if (descMatch && descMatch[1]) {
+        const desc = decodeHtmlEntities(descMatch[1]);
+        const fMatch = desc.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*Followers/i);
+        const foMatch = desc.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*Following/i);
+        const lMatch = desc.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*Likes/i);
+
+        const rawTitle = titleMatch ? decodeHtmlEntities(titleMatch[1]) : '';
+        const nickname = rawTitle.replace(/\s*on TikTok.*/i, '').trim() || username;
+        const avatar = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+        const id = idMatch ? idMatch[1] : '';
+
+        return {
+          source: 'layer_crawler_opengraph',
+          user: {
+            uniqueId: username,
+            nickname,
+            avatarLarger: avatar,
+            avatarMedium: avatar,
+            avatarThumb: avatar,
+            signature: '',
+            verified: false,
+            privateAccount: false,
+            region: 'Global',
+            id
+          },
+          stats: {
+            followerCount: fMatch ? parseMetricString(fMatch[1]) : 0,
+            followingCount: foMatch ? parseMetricString(foMatch[1]) : 0,
+            heartCount: lMatch ? parseMetricString(lMatch[1]) : 0,
+            videoCount: 0,
+            friendCount: 0
+          },
+          statsV2: {}
+        };
+      }
+    } catch (_) {}
+  }
+
+  throw new Error('Crawler bot did not find valid TikTok user data');
 }
 
 // Engine 2A: TikWM JSON Cloud API
@@ -393,16 +489,20 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  // Prioritaskan Layer 1 Direct Hydration untuk data & statistik asli 100% akurat
+  // Prioritaskan Layer 1 Direct Hydration, lalu fallback ke Crawler OpenGraph (anti-WAF)
   try {
     extractedResult = await extractLayer1Hydration(username);
   } catch (_) {
     try {
-      extractedResult = await extractTikWM(username);
+      extractedResult = await extractLayerCrawlerOpenGraph(username);
     } catch (__) {
       try {
-        extractedResult = await extractSiputzx(username);
-      } catch (___) {}
+        extractedResult = await extractTikWM(username);
+      } catch (___) {
+        try {
+          extractedResult = await extractSiputzx(username);
+        } catch (____) {}
+      }
     }
   }
 
