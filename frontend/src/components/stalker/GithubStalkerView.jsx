@@ -177,9 +177,8 @@ export default function GithubStalkerView({ onBack, onChangePlatform, onShowToas
     const raw = (targetUsername || inputVal).trim();
     const cleanUsername = raw
       .replace(/^https?:\/\/(?:www\.)?github\.com\//i, '')
-      .replace(/^@+/, '')
-      .split('/')[0]
-      .split('?')[0]
+      .replace(/^@+\s*/, '')
+      .split(/[\/\?\s]/)[0]
       .trim();
 
     if (!cleanUsername) {

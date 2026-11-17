@@ -2,7 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -266,7 +266,8 @@ function apiServicesDevMiddleware() {
 
         if (targetModulePath) {
           try {
-            const apiMod = await import(targetModulePath);
+            const resolvedModuleUrl = pathToFileURL(path.resolve(__dirname, targetModulePath)).href;
+            const apiMod = await import(resolvedModuleUrl);
             req.query = Object.fromEntries(parsedUrl.searchParams.entries());
             if (forcedType) req.query.type = forcedType;
             if (forcedRoute) req.query.__route = forcedRoute;

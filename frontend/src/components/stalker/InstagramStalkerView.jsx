@@ -208,9 +208,8 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     const raw = (targetUsername || inputVal).trim();
     const cleanUsername = raw
       .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, '')
-      .replace(/^@+/, '')
-      .split('/')[0]
-      .split('?')[0]
+      .replace(/^@+\s*/, '')
+      .split(/[\/\?\s]/)[0]
       .trim();
 
     if (!cleanUsername) {

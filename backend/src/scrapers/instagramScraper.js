@@ -198,7 +198,7 @@ async function fetchEngineEmbed(username) {
 async function fetchEngine2OpenGraph(username) {
   try {
     const ogRes = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-      timeout: 3500,
+      timeout: 6000,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',

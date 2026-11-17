@@ -87,7 +87,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
   }, [loading]);
 
   const fetchTikTokData = async (target, forceRefresh = false) => {
-    const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
+    const clean = target.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
     if (!clean) return null;
 
     // Normalizer profil TikTok universal untuk semua sumber API

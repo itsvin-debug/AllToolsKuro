@@ -1,7 +1,7 @@
-import { scrapeTiktok } from '../backend/src/scrapers/tiktokScraper.js';
-import { scrapeInstagram } from '../backend/src/scrapers/instagramScraper.js';
-import { scrapeTwitter } from '../backend/src/scrapers/twitterScraper.js';
-import { scrapeGithub } from '../backend/src/scrapers/githubScraper.js';
+import { scrapeTiktok } from '../server/scrapers/tiktokScraper.js';
+import { scrapeInstagram } from '../server/scrapers/instagramScraper.js';
+import { scrapeTwitter } from '../server/scrapers/twitterScraper.js';
+import { scrapeGithub } from '../server/scrapers/githubScraper.js';
 
 async function verifyAllStalkers() {
   console.log('🚀 Starting Multi-Platform OSINT Stalker Verification...\n');
@@ -62,9 +62,9 @@ async function verifyAllStalkers() {
   }
 
   // 4. Instagram Stalker Test
-  console.log('\n--- 4. Testing Instagram Scraper (@instagram) ---');
+  console.log('\n--- 4. Testing Instagram Scraper (@nasa) ---');
   try {
-    const igRes = await scrapeInstagram('instagram');
+    const igRes = await scrapeInstagram('nasa');
     console.log('Status:', igRes.success ? 'SUCCESS' : 'FAIL');
     console.log('Name:', igRes.data?.nickname);
     console.log('Username:', igRes.data?.username);

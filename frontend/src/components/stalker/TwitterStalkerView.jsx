@@ -85,7 +85,7 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
   }, [loading]);
 
   const fetchTwitterData = async (target, forceRefresh = false) => {
-    const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
+    const clean = target.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
     if (!clean) return null;
 
     // 1. Direct browser fetch ke api.fxtwitter.com (Sangat cepat, bebas blokir IP, batas 3.5s)

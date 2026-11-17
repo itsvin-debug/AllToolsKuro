@@ -1,8 +1,8 @@
 import axios from 'axios';
-import { scrapeTiktok } from '../backend/src/scrapers/tiktokScraper.js';
-import { scrapeInstagram } from '../backend/src/scrapers/instagramScraper.js';
-import { scrapeTwitter } from '../backend/src/scrapers/twitterScraper.js';
-import { scrapeGithub } from '../backend/src/scrapers/githubScraper.js';
+import { scrapeTiktok } from '../server/scrapers/tiktokScraper.js';
+import { scrapeInstagram } from '../server/scrapers/instagramScraper.js';
+import { scrapeTwitter } from '../server/scrapers/twitterScraper.js';
+import { scrapeGithub } from '../server/scrapers/githubScraper.js';
 import downloadHandler from '../server/handlers/downloadHandler.js';
 import proxyDownloadHandler from '../server/handlers/proxyDownloadHandler.js';
 import jjFinderHandler from '../server/handlers/jjFinderHandler.js';
