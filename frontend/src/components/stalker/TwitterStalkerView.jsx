@@ -85,7 +85,13 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
   }, [loading]);
 
   const fetchTwitterData = async (target, forceRefresh = false) => {
-    const clean = target.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
+    let clean = (target || '').trim();
+    const urlMatch = clean.match(/(?:twitter|x)\.com\/([a-zA-Z0-9_]+)/i);
+    if (urlMatch && urlMatch[1]) {
+      clean = urlMatch[1].replace(/\/.*$/, '').trim();
+    } else {
+      clean = clean.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_]/g, '').trim();
+    }
     if (!clean) return null;
 
     // 1. Direct browser fetch ke api.fxtwitter.com (Sangat cepat, bebas blokir IP, batas 3.5s)
@@ -102,6 +108,10 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
         try { fxJson = JSON.parse(fxText); } catch { throw new Error('FxTwitter non-json'); }
         if (fxJson?.code === 200 && fxJson.user) {
           const u = fxJson.user;
+          const followers = Number(u.followers ?? u.followers_count ?? 0);
+          const following = Number(u.following ?? u.following_count ?? 0);
+          const tweets = Number(u.tweets ?? u.tweets_count ?? 0);
+          const likes = Number(u.likes ?? u.likes_count ?? 0);
           return {
             success: true,
             data: {
@@ -116,10 +126,15 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
               joinedDate: u.joined ? new Date(u.joined).toLocaleDateString(isEn ? 'en-US' : 'id-ID', { month: 'short', year: 'numeric' }) : null,
               location: u.location || '',
               profileUrl: `https://x.com/${u.screen_name || clean}`,
+              followers,
+              following,
+              tweets,
+              likes,
               stats: {
-                followers: u.followers || 0,
-                following: u.following || 0,
-                tweets: u.tweets || 0
+                followers,
+                following,
+                tweets,
+                likes
               }
             }
           };
@@ -170,25 +185,37 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
         const vxText = await vxRes.text();
         let vxJson = null;
         try { vxJson = JSON.parse(vxText); } catch { throw new Error('VxTwitter non-json'); }
-        if (vxJson?.user_screen_name || vxJson?.user_name) {
+        const sName = vxJson?.screen_name || vxJson?.user_screen_name;
+        if (sName || vxJson?.name || vxJson?.user_name) {
+          const rawAvatar = vxJson.profile_image_url || vxJson.user_profile_image_url || '';
+          const avatarHd = rawAvatar ? rawAvatar.replace(/_normal(\.[a-zA-Z0-9]+)$/, '_400x400$1') : '';
+          const followers = Number(vxJson.followers_count ?? vxJson.user_followers_count ?? 0);
+          const following = Number(vxJson.following_count ?? vxJson.user_following_count ?? 0);
+          const tweets = Number(vxJson.tweet_count ?? vxJson.user_statuses_count ?? 0);
+          const likes = Number(vxJson.favourites_count ?? vxJson.user_favourites_count ?? 0);
           return {
             success: true,
             data: {
-              username: vxJson.user_screen_name || clean,
-              nickname: vxJson.user_name || clean,
-              avatar: vxJson.user_profile_image_url || '',
-              banner: '',
-              bio: vxJson.text || '',
+              username: sName || clean,
+              nickname: vxJson.name || vxJson.user_name || sName || clean,
+              avatar: avatarHd,
+              banner: vxJson.banner_url || vxJson.user_banner_url || '',
+              bio: vxJson.description || vxJson.user_description || vxJson.text || '',
               bioLink: null,
-              verified: false,
-              privateAccount: false,
-              joinedDate: null,
-              location: '',
-              profileUrl: `https://x.com/${vxJson.user_screen_name || clean}`,
+              verified: Boolean(vxJson.verified || vxJson.user_verified),
+              privateAccount: Boolean(vxJson.protected),
+              joinedDate: vxJson.created_at ? new Date(vxJson.created_at).toLocaleDateString(isEn ? 'en-US' : 'id-ID', { month: 'short', year: 'numeric' }) : null,
+              location: vxJson.location || '',
+              profileUrl: `https://x.com/${sName || clean}`,
+              followers,
+              following,
+              tweets,
+              likes,
               stats: {
-                followers: vxJson.likes || 0,
-                following: 0,
-                tweets: 0
+                followers,
+                following,
+                tweets,
+                likes
               }
             }
           };
@@ -286,9 +313,9 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
       `Username: @${profileData.username}`,
       `Nama: ${profileData.nickname}`,
       `Status: ${profileData.verified ? 'Terverifikasi' : 'Reguler'} | ${profileData.privateAccount ? 'Privat' : 'Publik'}`,
-      `Pengikut: ${stats.followers?.toLocaleString() || 0}`,
-      `Mengikuti: ${stats.following?.toLocaleString() || 0}`,
-      `Total Tweet: ${stats.tweets?.toLocaleString() || 0}`,
+      `Pengikut: ${(stats.followers ?? profileData.followers ?? 0).toLocaleString()}`,
+      `Mengikuti: ${(stats.following ?? profileData.following ?? 0).toLocaleString()}`,
+      `Total Tweet: ${(stats.tweets ?? profileData.tweets ?? 0).toLocaleString()}`,
       `Bergabung: ${profileData.joinedDate || '-'}`,
       `Lokasi: ${profileData.location || '-'}`,
       `Bio: ${profileData.bio || '-'}`,

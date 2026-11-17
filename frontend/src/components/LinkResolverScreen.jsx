@@ -120,7 +120,7 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
 
     try {
       const res = await axios.post('/api/resolve', { url: target }, {
-        timeout: 10000
+        timeout: 16000
       });
 
       clearTimeout(animTimer1);

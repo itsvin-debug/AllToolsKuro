@@ -87,7 +87,13 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
   }, [loading]);
 
   const fetchTikTokData = async (target, forceRefresh = false) => {
-    const clean = target.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
+    let clean = (target || '').trim();
+    const urlMatch = clean.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
+    if (urlMatch && urlMatch[1]) {
+      clean = urlMatch[1].replace(/\/.*$/, '').trim();
+    } else {
+      clean = clean.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_.]/g, '').trim();
+    }
     if (!clean) return null;
 
     // Normalizer profil TikTok universal untuk semua sumber API
@@ -147,7 +153,51 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 2: Direct browser TikWM (IP residensial bebas blokir, batas 3.5s)
+    // Saluran 2: TikTok Official Public oEmbed Endpoint (CORS terbuka bebas blokir, batas 3.5s)
+    const runOEmbed = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const oembedUrl = `https://www.tiktok.com/oembed?url=https://www.tiktok.com/@${encodeURIComponent(clean)}`;
+        const oRes = await fetch(oembedUrl, {
+          signal: ctrl.signal
+        });
+        if (!oRes.ok) throw new Error('OEmbed failed');
+        const oJson = await oRes.json();
+        if (oJson?.author_name) {
+          return {
+            success: true,
+            source: 'client_oembed',
+            data: {
+              username: clean,
+              nickname: oJson.author_name || clean,
+              avatar: '',
+              bio: '',
+              bioLink: null,
+              verified: false,
+              privateAccount: false,
+              region: 'Global',
+              id: '',
+              secUid: '',
+              createTime: null,
+              profileUrl: `https://www.tiktok.com/@${clean}`,
+              stats: {
+                followers: 0,
+                following: 0,
+                likes: 0,
+                videos: 0,
+                friends: 0
+              }
+            }
+          };
+        }
+        throw new Error('OEmbed empty');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 3: Direct browser TikWM (IP residensial bebas blokir, batas 3.5s)
     const runTikWM = async () => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 3500);
@@ -169,7 +219,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 3: Direct browser Siputzx API (batas 3.5s)
+    // Saluran 4: Direct browser Siputzx API (batas 3.5s)
     const runSiputzx = async () => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 3500);
@@ -191,30 +241,8 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 4: AllOrigins CORS Tunnel (batas 3.5s)
-    const runAllOrigins = async () => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
-      try {
-        const targetUrl = `https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`;
-        const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
-          signal: ctrl.signal
-        });
-        const text = await aoRes.text();
-        let aoJson = null;
-        try { aoJson = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
-        const sData = aoJson?.data || aoJson?.result;
-        if (aoJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
-          return normalizeTikTok(sData, 'client_allorigins');
-        }
-        throw new Error('AllOrigins empty');
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
     try {
-      return await Promise.any([runBackend(), runTikWM(), runSiputzx(), runAllOrigins()]);
+      return await Promise.any([runBackend(), runOEmbed(), runTikWM(), runSiputzx()]);
     } catch (_) {
       return null;
     }

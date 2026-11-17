@@ -10,7 +10,7 @@ function resolveInstagramUsername(raw) {
   if (urlMatch && urlMatch[1]) {
     return urlMatch[1].replace(/\/.*$/, '').trim();
   }
-  return str.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
+  return str.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
 }
 
 function decodeHtmlEntities(str) {
@@ -42,11 +42,9 @@ function parseMetricString(str) {
 
 function extractInstagramStatsFromText(text) {
   if (!text) return { followers: 0, following: 0, posts: 0 };
-  
   const followersMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Followers|Pengikut)/i);
   const followingMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Following|Mengikuti)/i);
   const postsMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Posts|Postingan|Kiriman)/i);
-
   return {
     followers: followersMatch ? parseMetricString(followersMatch[1]) : 0,
     following: followingMatch ? parseMetricString(followingMatch[1]) : 0,
@@ -54,31 +52,173 @@ function extractInstagramStatsFromText(text) {
   };
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 3500) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-    return res;
-  } finally {
-    clearTimeout(timer);
+// Engine 1: Crawler Bot Link-Preview Bypass (Facebook External Hit & TelegramBot)
+async function fetchEngineCrawlerOpenGraph(username) {
+  const crawlers = [
+    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    'WhatsApp/2.23.20.0',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    'TelegramBot (like TwitterBot)'
+  ];
+
+  for (const ua of crawlers) {
+    try {
+      const res = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
+        timeout: 4500,
+        validateStatus: (status) => status < 500,
+        headers: {
+          'User-Agent': ua,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9,id;q=0.8'
+        }
+      });
+
+      if (res.status === 404) {
+        const err = new Error(`Akun Instagram @${username} tidak ditemukan.`);
+        err.isNotFound = true;
+        throw err;
+      }
+
+      const html = typeof res.data === 'string' ? res.data : '';
+      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:description"/);
+      const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
+      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
+
+      if (descMatch && descMatch[1]) {
+        const rawDesc = decodeHtmlEntities(descMatch[1]);
+        const statsExtracted = extractInstagramStatsFromText(rawDesc);
+        const rawTitle = titleMatch ? decodeHtmlEntities(titleMatch[1]) : '';
+        const nameExtracted = rawTitle ? rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim() : username;
+        const isPrivate = html.includes('"is_private":true') || html.includes('"isPrivate":true');
+        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+
+        let bio = '';
+        const bioJsonMatch = html.match(/"biography":"([^"]+)"/) || html.match(/"bio":"([^"]+)"/);
+        if (bioJsonMatch && bioJsonMatch[1]) {
+          try {
+            bio = JSON.parse(`"${bioJsonMatch[1]}"`);
+          } catch {
+            bio = bioJsonMatch[1];
+          }
+        }
+        if (!bio && rawDesc.includes(' - ')) {
+          const afterDash = rawDesc.split(' - ')[1]?.trim();
+          if (afterDash && !afterDash.startsWith('See Instagram photos') && !afterDash.startsWith('Lihat foto')) {
+            bio = afterDash;
+          }
+        }
+
+        return {
+          source: 'crawler_link_preview',
+          data: {
+            username,
+            nickname: nameExtracted || username,
+            avatar: rawImg,
+            bio: bio || '',
+            bioLink: null,
+            verified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
+            privateAccount: isPrivate,
+            followers: statsExtracted.followers,
+            following: statsExtracted.following,
+            posts: statsExtracted.posts,
+            stats: {
+              followers: statsExtracted.followers,
+              following: statsExtracted.following,
+              posts: statsExtracted.posts
+            },
+            recentMedia: [],
+            category: 'Kreator',
+            profileUrl: `https://www.instagram.com/${username}`
+          }
+        };
+      }
+    } catch (e) {
+      if (e.isNotFound) throw e;
+    }
   }
+
+  throw new Error('Crawler engine did not yield valid profile data');
 }
 
-async function fetchEngine1DirectApi(username) {
+// Engine 2: Instagram Embed Extractor (/embed/)
+async function fetchEngineEmbed(username) {
+  try {
+    const res = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/embed/`, {
+      timeout: 4500,
+      validateStatus: (status) => status < 500,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
+
+    if (res.status === 404) {
+      const err = new Error(`Akun Instagram @${username} tidak ditemukan.`);
+      err.isNotFound = true;
+      throw err;
+    }
+
+    const html = typeof res.data === 'string' ? res.data : '';
+    if (html) {
+      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:description"/);
+      const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
+      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
+
+      if (descMatch && descMatch[1]) {
+        const rawDesc = decodeHtmlEntities(descMatch[1]);
+        const statsExtracted = extractInstagramStatsFromText(rawDesc);
+        let name = username;
+        if (titleMatch && titleMatch[1]) {
+          name = decodeHtmlEntities(titleMatch[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
+        }
+
+        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+        return {
+          source: 'instagram_embed',
+          data: {
+            username,
+            nickname: name || username,
+            avatar: rawImg,
+            bio: rawDesc.includes(' - ') ? rawDesc.split(' - ')[1]?.trim() || '' : '',
+            bioLink: null,
+            verified: rawDesc.toLowerCase().includes('verified'),
+            privateAccount: html.includes('"is_private":true') || html.includes('This Account is Private'),
+            followers: statsExtracted.followers,
+            following: statsExtracted.following,
+            posts: statsExtracted.posts,
+            stats: {
+              followers: statsExtracted.followers,
+              following: statsExtracted.following,
+              posts: statsExtracted.posts
+            },
+            recentMedia: [],
+            category: 'Kreator',
+            profileUrl: `https://www.instagram.com/${username}`
+          }
+        };
+      }
+    }
+  } catch (err) {
+    if (err.isNotFound) throw err;
+  }
+  throw new Error('Engine Embed did not yield valid profile data');
+}
+
+// Engine 3: Web Profile Info API
+async function fetchEngineWebProfileApi(username) {
   try {
     const webRes = await axios.get(`https://i.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
-      timeout: 3500,
+      timeout: 4500,
       validateStatus: (status) => status < 500,
       headers: {
         'x-ig-app-id': '936619743392459',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'x-asbd-id': '129477',
+        'x-ig-www-claim': '0',
+        'x-requested-with': 'XMLHttpRequest',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9,id;q=0.8',
-        'Referer': 'https://www.instagram.com/'
+        'Referer': `https://www.instagram.com/${username}/`
       }
     });
 
@@ -109,6 +249,7 @@ async function fetchEngine1DirectApi(username) {
       });
 
       return {
+        source: 'instagram_direct_api',
         data: {
           username: u.username || username,
           nickname: u.full_name || u.username || username,
@@ -124,166 +265,20 @@ async function fetchEngine1DirectApi(username) {
           recentMedia,
           category: u.category_name || 'Kreator',
           profileUrl: `https://www.instagram.com/${u.username || username}`
-        },
-        source: 'instagram_direct_api'
+        }
       };
     }
   } catch (err) {
     if (err.isNotFound) throw err;
   }
-  throw new Error('Engine 1 Direct API did not yield valid profile data');
+  throw new Error('Engine 3 Web Profile API did not yield valid profile data');
 }
 
-async function fetchEngineEmbed(username) {
-  try {
-    const res = await fetchWithTimeout(`https://www.instagram.com/${encodeURIComponent(username)}/embed/`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      }
-    }, 3500);
-
-    const html = await res.text();
-    if (res.status === 404) {
-      const err = new Error(`Akun Instagram @${username} tidak ditemukan.`);
-      err.isNotFound = true;
-      throw err;
-    }
-
-    if (html) {
-      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:description"/);
-      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
-      const titleMatch = html.match(/<title>([^<]+)<\/title>/);
-
-      if (descMatch && descMatch[1]) {
-        const rawDesc = decodeHtmlEntities(descMatch[1]);
-        const statsExtracted = extractInstagramStatsFromText(rawDesc);
-        let name = username;
-        if (titleMatch && titleMatch[1]) {
-          name = decodeHtmlEntities(titleMatch[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
-        }
-
-        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
-        return {
-          data: {
-            username,
-            nickname: name || username,
-            avatar: rawImg,
-            bio: rawDesc.includes(' - ') ? rawDesc.split(' - ')[1]?.trim() || '' : '',
-            bioLink: null,
-            verified: rawDesc.toLowerCase().includes('verified'),
-            privateAccount: false,
-            followers: statsExtracted.followers,
-            following: statsExtracted.following,
-            posts: statsExtracted.posts,
-            stats: {
-              followers: statsExtracted.followers,
-              following: statsExtracted.following,
-              posts: statsExtracted.posts
-            },
-            recentMedia: [],
-            category: 'Kreator',
-            profileUrl: `https://www.instagram.com/${username}`
-          },
-          source: 'instagram_embed'
-        };
-      }
-    }
-  } catch (err) {
-    if (err.isNotFound) throw err;
-  }
-  throw new Error('Engine Embed did not yield valid profile data');
-}
-
-async function fetchEngine2OpenGraph(username) {
-  try {
-    const ogRes = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-      timeout: 6000,
-      validateStatus: (status) => status < 500,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9,id;q=0.8'
-      }
-    });
-
-    if (ogRes.status === 404) {
-      const err = new Error(`Akun Instagram @${username} tidak ditemukan.`);
-      err.isNotFound = true;
-      throw err;
-    }
-
-    if (ogRes.status === 200 && ogRes.data) {
-      const html = typeof ogRes.data === 'string' ? ogRes.data : '';
-      const descMatch = html.match(/<meta property="og:description" content="([^"]+)"/);
-      const imgMatch = html.match(/<meta property="og:image" content="([^"]+)"/);
-      const titleMatch = html.match(/<meta property="og:title" content="([^"]+)"/);
-
-      if (descMatch && descMatch[1]) {
-        const rawDesc = decodeHtmlEntities(descMatch[1]);
-        const statsExtracted = extractInstagramStatsFromText(rawDesc);
-
-        let name = username;
-        if (titleMatch && titleMatch[1]) {
-          const rawTitle = decodeHtmlEntities(titleMatch[1]);
-          name = rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').trim();
-        }
-
-        let bio = '';
-        const bioJsonMatch = html.match(/"biography":"([^"]+)"/) || html.match(/"bio":"([^"]+)"/);
-        if (bioJsonMatch && bioJsonMatch[1]) {
-          try {
-            bio = JSON.parse(`"${bioJsonMatch[1]}"`);
-          } catch {
-            bio = bioJsonMatch[1];
-          }
-        }
-
-        if (!bio && rawDesc.includes(' - ')) {
-          const afterDash = rawDesc.split(' - ')[1]?.trim();
-          if (afterDash && !afterDash.startsWith('See Instagram photos') && !afterDash.startsWith('Lihat foto')) {
-            bio = afterDash;
-          }
-        }
-
-        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
-        const isPrivate = html.includes('"is_private":true') || html.includes('"isPrivate":true');
-
-        return {
-          data: {
-            username,
-            nickname: name || username,
-            avatar: rawImg,
-            bio: bio || '',
-            bioLink: null,
-            verified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
-            privateAccount: isPrivate,
-            followers: statsExtracted.followers,
-            following: statsExtracted.following,
-            posts: statsExtracted.posts,
-            stats: {
-              followers: statsExtracted.followers,
-              following: statsExtracted.following,
-              posts: statsExtracted.posts
-            },
-            recentMedia: [],
-            category: 'Kreator',
-            profileUrl: `https://www.instagram.com/${username}`
-          },
-          source: 'instagram_opengraph_mobile'
-        };
-      }
-    }
-  } catch (err) {
-    if (err.isNotFound) throw err;
-  }
-  throw new Error('Engine 2 OpenGraph did not yield valid profile data');
-}
-
-async function fetchEngine3Mirror(username) {
+// Engine 4: Siputzx Public Mirror API
+async function fetchEngineMirror(username) {
   try {
     const mirrorRes = await axios.get(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(username)}`, {
-      timeout: 3500,
+      timeout: 4000,
       validateStatus: () => true,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
     });
@@ -298,6 +293,7 @@ async function fetchEngine3Mirror(username) {
         const posts = Number(u.posts || u.media_count || 0);
 
         return {
+          source: 'siputzx_mirror',
           data: {
             username: uName,
             nickname: u.full_name || u.name || uName,
@@ -313,13 +309,12 @@ async function fetchEngine3Mirror(username) {
             recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
             category: u.category || 'Kreator',
             profileUrl: `https://www.instagram.com/${uName}`
-          },
-          source: 'siputzx_mirror'
+          }
         };
       }
     }
   } catch (_) {}
-  throw new Error('Engine 3 Mirror did not yield valid profile data');
+  throw new Error('Engine 4 Mirror did not yield valid profile data');
 }
 
 export async function scrapeInstagram(rawInput, options = {}) {
@@ -348,18 +343,28 @@ export async function scrapeInstagram(rawInput, options = {}) {
   }
 
   let mappedData = null;
-  let sourceEngine = 'web_profile_info';
+  let sourceEngine = 'crawler_link_preview';
 
   try {
-    // Jalankan seluruh engine Instagram secara paralel menggunakan Promise.any (< 3.5s)
-    const winner = await Promise.any([
-      fetchEngine1DirectApi(username),
-      fetchEngineEmbed(username),
-      fetchEngine2OpenGraph(username),
-      fetchEngine3Mirror(username)
-    ]);
-    mappedData = winner.data;
-    sourceEngine = winner.source;
+    // Jalankan Engine 1 (Crawler Link-Preview) terlebih dahulu agar tidak memicu WAF anti-bot Instagram
+    try {
+      const crawlerResult = await fetchEngineCrawlerOpenGraph(username);
+      if (crawlerResult?.data?.username) {
+        mappedData = crawlerResult.data;
+        sourceEngine = crawlerResult.source;
+      }
+    } catch (_) {}
+
+    // Jika Engine 1 belum berhasil, jalankan fallback Engine Embed, Web API, dan Mirror secara paralel
+    if (!mappedData) {
+      const winner = await Promise.any([
+        fetchEngineEmbed(username),
+        fetchEngineWebProfileApi(username),
+        fetchEngineMirror(username)
+      ]);
+      mappedData = winner.data;
+      sourceEngine = winner.source;
+    }
   } catch (err) {
     return {
       success: false,
@@ -369,7 +374,7 @@ export async function scrapeInstagram(rawInput, options = {}) {
     };
   }
 
-  if (!mappedData) {
+  if (!mappedData || !mappedData.username) {
     return {
       success: false,
       statusCode: 404,

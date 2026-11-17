@@ -146,7 +146,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
         const text = await res.text();
         let parsed = null;
         try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
-        if (res.ok && parsed?.success && parsed?.data) return parsed.data;
+        if (res.ok && parsed && (parsed.data || parsed.success)) return parsed.data || parsed;
         throw new Error(parsed?.message || 'Backend failed');
       } finally {
         clearTimeout(bTimer);
@@ -206,10 +206,11 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
 
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
-    const cleanUsername = raw
+    let cleanUsername = raw
       .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, '')
       .replace(/^@+\s*/, '')
       .split(/[\/\?\s]/)[0]
+      .replace(/[^a-zA-Z0-9_.]/g, '')
       .trim();
 
     if (!cleanUsername) {
