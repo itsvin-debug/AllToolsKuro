@@ -377,10 +377,15 @@ async function fetchEngineGoogleRelay(username) {
           source: 'google_edge_relay',
           data: extracted
         };
+      } else {
+        throw new Error(`Google Relay extracted invalid: name=${extracted.fullName} av=${Boolean(extracted.avatar)} bio=${extracted.bio} stat=${extracted.followers}`);
       }
+    } else {
+      throw new Error(`Google Relay no descMatch: status=${res.status} len=${html.length} hasTitle=${Boolean(titleMatch)}`);
     }
-  } catch (_) {}
-  throw new Error('Google Relay did not yield valid profile data');
+  } catch (err) {
+    throw new Error(`Google Relay error: ${err.message}`);
+  }
 }
 
 // Fallback Direct Web Profile API
