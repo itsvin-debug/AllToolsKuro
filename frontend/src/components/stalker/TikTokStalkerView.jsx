@@ -138,10 +138,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       };
     };
 
-    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 15s
-    const runBackend = async () => {
+    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 16s + 1 retry otomatis
+    const runBackend = async (isRetry = false) => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 15000);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 16000);
       try {
         const res = await fetch('/api/stalk/tiktok', {
           method: 'POST',
@@ -159,6 +159,12 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
         try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
         if (res.ok && parsed?.success && parsed?.data) return parsed;
         throw new Error(parsed?.message || 'Backend empty');
+      } catch (err) {
+        if (!isRetry) {
+          await new Promise(r => setTimeout(r, 800));
+          return runBackend(true);
+        }
+        throw err;
       } finally {
         clearTimeout(bTimer);
       }
@@ -186,28 +192,6 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 3: Direct browser Siputzx API (batas 4s)
-    const runSiputzx = async () => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4000);
-      try {
-        const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`, {
-          headers: { 'Accept': 'application/json' },
-          signal: ctrl.signal
-        });
-        const text = await sipRes.text();
-        let sipJson = null;
-        try { sipJson = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
-        const sData = sipJson?.data || sipJson?.result;
-        if (sipJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
-          return normalizeTikTok(sData, 'client_siputzx');
-        }
-        throw new Error('Siputzx empty');
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
     // Prioritaskan backend gateway untuk ekstraksi data lengkap 100% akurat
     try {
       const bData = await runBackend();
@@ -216,7 +200,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     } catch (_) {
       try {
-        return await Promise.any([runTikWM(), runSiputzx()]);
+        return await runTikWM();
       } catch (__) {
         return null;
       }

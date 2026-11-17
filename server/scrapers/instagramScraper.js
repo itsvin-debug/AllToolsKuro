@@ -65,13 +65,134 @@ function extractInstagramStatsFromText(text) {
   };
 }
 
-// Engine 1: Crawler Bot Link-Preview Bypass (Facebook External Hit & TelegramBot)
+export function isValidInstagramData(d) {
+  if (!d || !d.username) return false;
+  const uName = String(d.username).trim().toLowerCase();
+  const rawName = String(d.fullName || d.nickname || '').trim();
+  const hasRealName = rawName !== '' && rawName.toLowerCase() !== uName;
+  const rawAvatar = String(d.avatar || '');
+  const hasValidAvatar = rawAvatar.startsWith('http') && !rawAvatar.includes('default') && !rawAvatar.includes('dumpor-logo');
+  const hasBio = Boolean(d.bio && String(d.bio).trim() !== '');
+  const followers = Number(d.stats?.followers ?? d.followers ?? 0);
+  const following = Number(d.stats?.following ?? d.following ?? 0);
+  const posts = Number(d.stats?.posts ?? d.posts ?? 0);
+  const hasStats = (followers > 0 || following > 0 || posts > 0);
+  const isPrivate = Boolean(d.isPrivate || d.privateAccount || d.is_private);
+
+  return Boolean(hasRealName || hasValidAvatar || hasBio || hasStats || isPrivate);
+}
+
+// Jalur 1: Instagram Embed Captioned & Profile JSON Extractor
+async function fetchEngineEmbedProfile(username) {
+  const urls = [
+    `https://www.instagram.com/${encodeURIComponent(username)}/embed/captioned/`,
+    `https://www.instagram.com/${encodeURIComponent(username)}/embed/`
+  ];
+
+  for (const url of urls) {
+    try {
+      const res = await axios.get(url, {
+        timeout: 5000,
+        validateStatus: (s) => s < 500,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
+        }
+      });
+
+      if (res.status === 404) continue;
+      const html = typeof res.data === 'string' ? res.data : '';
+      if (!html) continue;
+
+      let fullName = '';
+      let avatar = '';
+      let bio = '';
+      let followers = 0;
+      let following = 0;
+      let posts = 0;
+      let isPrivate = html.includes('"is_private":true') || html.includes('This Account is Private') || html.includes('Akun Ini Privat');
+
+      // 1. Ekstraksi JSON terstruktur dari script
+      const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+      for (const s of scripts) {
+        if (!fullName) {
+          const fnMatch = s.match(/"full_name":"([^"]+)"/);
+          if (fnMatch) {
+            try { fullName = JSON.parse(`"${fnMatch[1]}"`); } catch { fullName = fnMatch[1]; }
+          }
+        }
+        if (!avatar) {
+          const avMatch = s.match(/"profile_pic_url_hd":"([^"]+)"/) || s.match(/"profile_pic_url":"([^"]+)"/);
+          if (avMatch) {
+            avatar = avMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+          }
+        }
+        if (!bio) {
+          const bioMatch = s.match(/"biography":"([^"]+)"/);
+          if (bioMatch) {
+            try { bio = JSON.parse(`"${bioMatch[1]}"`); } catch { bio = bioMatch[1]; }
+          }
+        }
+        if (!followers) {
+          const fMatch = s.match(/"edge_followed_by":\s*\{\s*"count":\s*(\d+)/) || s.match(/"follower_count":\s*(\d+)/);
+          if (fMatch) followers = Number(fMatch[1]);
+        }
+        if (!following) {
+          const foMatch = s.match(/"edge_follow":\s*\{\s*"count":\s*(\d+)/) || s.match(/"following_count":\s*(\d+)/);
+          if (foMatch) following = Number(foMatch[1]);
+        }
+        if (!posts) {
+          const pMatch = s.match(/"edge_owner_to_timeline_media":\s*\{\s*"count":\s*(\d+)/) || s.match(/"media_count":\s*(\d+)/);
+          if (pMatch) posts = Number(pMatch[1]);
+        }
+      }
+
+      // 2. Ekstraksi meta tag jika script belum lengkap
+      if (!avatar) {
+        const ogImg = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
+        if (ogImg) avatar = decodeHtmlEntities(ogImg[1]);
+      }
+      if (!fullName) {
+        const ogTitle = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
+        if (ogTitle) {
+          fullName = decodeHtmlEntities(ogTitle[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
+        }
+      }
+
+      const extracted = {
+        username,
+        fullName: fullName || username,
+        nickname: fullName || username,
+        avatar,
+        bio,
+        bioLink: null,
+        isPrivate,
+        privateAccount: isPrivate,
+        isVerified: html.includes('"is_verified":true'),
+        verified: html.includes('"is_verified":true'),
+        followers,
+        following,
+        posts,
+        stats: { followers, following, posts },
+        recentMedia: [],
+        category: 'Kreator',
+        profileUrl: `https://www.instagram.com/${username}`
+      };
+
+      if (isValidInstagramData(extracted)) {
+        return { source: 'instagram_embed', data: extracted };
+      }
+    } catch (_) {}
+  }
+
+  throw new Error('Jalur 1 Embed did not yield valid profile data');
+}
+
+// Jalur 2: Social Link-Preview Meta Parser (Multi-Crawler User-Agent)
 async function fetchEngineCrawlerOpenGraph(username) {
   const crawlers = [
     'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-    'WhatsApp/2.23.20.0',
-    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-    'TelegramBot (like TwitterBot)'
+    'WhatsApp/2.23.20.0'
   ];
 
   for (const ua of crawlers) {
@@ -131,103 +252,46 @@ async function fetchEngineCrawlerOpenGraph(username) {
           }
         }
 
-        return {
-          source: 'crawler_link_preview',
-          data: {
-            username,
-            nickname: nameExtracted || username,
-            avatar: rawImg,
-            bio: bio || '',
-            bioLink: null,
-            verified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
-            privateAccount: isPrivate,
+        const extracted = {
+          username,
+          fullName: nameExtracted || username,
+          nickname: nameExtracted || username,
+          avatar: rawImg,
+          bio: bio || '',
+          bioLink: null,
+          isPrivate,
+          privateAccount: isPrivate,
+          isVerified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
+          verified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
+          followers: statsExtracted.followers,
+          following: statsExtracted.following,
+          posts: statsExtracted.posts,
+          stats: {
             followers: statsExtracted.followers,
             following: statsExtracted.following,
-            posts: statsExtracted.posts,
-            stats: {
-              followers: statsExtracted.followers,
-              following: statsExtracted.following,
-              posts: statsExtracted.posts
-            },
-            recentMedia: [],
-            category: 'Kreator',
-            profileUrl: `https://www.instagram.com/${username}`
-          }
+            posts: statsExtracted.posts
+          },
+          recentMedia: [],
+          category: 'Kreator',
+          profileUrl: `https://www.instagram.com/${username}`
         };
+
+        if (isValidInstagramData(extracted)) {
+          return {
+            source: 'crawler_link_preview',
+            data: extracted
+          };
+        }
       }
     } catch (e) {
       if (e.isNotFound) throw e;
     }
   }
 
-  throw new Error('Crawler engine did not yield valid profile data');
+  throw new Error('Jalur 2 Crawler did not yield valid profile data');
 }
 
-// Engine 2: Instagram Embed Extractor (/embed/)
-async function fetchEngineEmbed(username) {
-  try {
-    const res = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/embed/`, {
-      timeout: 4500,
-      validateStatus: (status) => status < 500,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      }
-    });
-
-    if (res.status === 404) {
-      const err = new Error(`Akun Instagram @${username} tidak ditemukan.`);
-      err.isNotFound = true;
-      throw err;
-    }
-
-    const html = typeof res.data === 'string' ? res.data : '';
-    if (html) {
-      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:description"/);
-      const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
-      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
-
-      if (descMatch && descMatch[1]) {
-        const rawDesc = decodeHtmlEntities(descMatch[1]);
-        const statsExtracted = extractInstagramStatsFromText(rawDesc);
-        let name = username;
-        if (titleMatch && titleMatch[1]) {
-          name = decodeHtmlEntities(titleMatch[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
-        }
-
-        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
-        return {
-          source: 'instagram_embed',
-          data: {
-            username,
-            nickname: name || username,
-            avatar: rawImg,
-            bio: rawDesc.includes(' - ') ? rawDesc.split(' - ')[1]?.trim() || '' : '',
-            bioLink: null,
-            verified: rawDesc.toLowerCase().includes('verified'),
-            privateAccount: html.includes('"is_private":true') || html.includes('This Account is Private'),
-            followers: statsExtracted.followers,
-            following: statsExtracted.following,
-            posts: statsExtracted.posts,
-            stats: {
-              followers: statsExtracted.followers,
-              following: statsExtracted.following,
-              posts: statsExtracted.posts
-            },
-            recentMedia: [],
-            category: 'Kreator',
-            profileUrl: `https://www.instagram.com/${username}`
-          }
-        };
-      }
-    }
-  } catch (err) {
-    if (err.isNotFound) throw err;
-  }
-  throw new Error('Engine Embed did not yield valid profile data');
-}
-
-// Engine 3: Web Profile Info API
+// Fallback Direct Web Profile API
 async function fetchEngineWebProfileApi(username) {
   try {
     const webRes = await axios.get(`https://i.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
@@ -271,73 +335,84 @@ async function fetchEngineWebProfileApi(username) {
         };
       });
 
-      return {
-        source: 'instagram_direct_api',
-        data: {
-          username: u.username || username,
-          nickname: u.full_name || u.username || username,
-          avatar: u.profile_pic_url_hd || u.profile_pic_url || '',
-          bio: u.biography || '',
-          bioLink: u.external_url || null,
-          verified: Boolean(u.is_verified),
-          privateAccount: Boolean(u.is_private),
-          followers,
-          following,
-          posts,
-          stats: { followers, following, posts },
-          recentMedia,
-          category: u.category_name || 'Kreator',
-          profileUrl: `https://www.instagram.com/${u.username || username}`
-        }
+      const extracted = {
+        username: u.username || username,
+        fullName: u.full_name || u.username || username,
+        nickname: u.full_name || u.username || username,
+        avatar: u.profile_pic_url_hd || u.profile_pic_url || '',
+        bio: u.biography || '',
+        bioLink: u.external_url || null,
+        isPrivate: Boolean(u.is_private),
+        privateAccount: Boolean(u.is_private),
+        isVerified: Boolean(u.is_verified),
+        verified: Boolean(u.is_verified),
+        followers,
+        following,
+        posts,
+        stats: { followers, following, posts },
+        recentMedia,
+        category: u.category_name || 'Kreator',
+        profileUrl: `https://www.instagram.com/${u.username || username}`
       };
+
+      if (isValidInstagramData(extracted)) {
+        return {
+          source: 'instagram_direct_api',
+          data: extracted
+        };
+      }
     }
   } catch (err) {
     if (err.isNotFound) throw err;
   }
-  throw new Error('Engine 3 Web Profile API did not yield valid profile data');
+  throw new Error('Jalur Web Profile API did not yield valid profile data');
 }
 
-// Engine 4: Siputzx Public Mirror API
-async function fetchEngineMirror(username) {
-  try {
-    const mirrorRes = await axios.get(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(username)}`, {
-      timeout: 4000,
-      validateStatus: () => true,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
-    const cType = mirrorRes.headers?.['content-type'] || '';
-    if (mirrorRes.status === 200 && cType.toLowerCase().includes('application/json')) {
-      const body = mirrorRes.data;
-      const u = body?.data || body?.result || body;
-      if (u && (u.username || u.name || u.full_name)) {
-        const uName = u.username || username;
-        const followers = Number(u.followers || u.follower_count || 0);
-        const following = Number(u.following || u.following_count || 0);
-        const posts = Number(u.posts || u.media_count || 0);
+// Deep Merge Engine penggabung metadata parsial dari berbagai jalur
+function deepMergeInstagramData(primary, secondary) {
+  if (!primary) return secondary || null;
+  if (!secondary) return primary || null;
 
-        return {
-          source: 'siputzx_mirror',
-          data: {
-            username: uName,
-            nickname: u.full_name || u.name || uName,
-            avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
-            bio: u.bio || u.biography || '',
-            bioLink: u.bio_link || u.external_url || null,
-            verified: Boolean(u.verified || u.is_verified),
-            privateAccount: Boolean(u.is_private || u.private),
-            followers,
-            following,
-            posts,
-            stats: { followers, following, posts },
-            recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
-            category: u.category || 'Kreator',
-            profileUrl: `https://www.instagram.com/${uName}`
-          }
-        };
-      }
-    }
-  } catch (_) {}
-  throw new Error('Engine 4 Mirror did not yield valid profile data');
+  const username = primary.username || secondary.username;
+  const fullName = (primary.fullName && primary.fullName.toLowerCase() !== username.toLowerCase())
+    ? primary.fullName
+    : (secondary.fullName || primary.fullName || username);
+
+  const avatar = (primary.avatar && primary.avatar.startsWith('http') && !primary.avatar.includes('default'))
+    ? primary.avatar
+    : (secondary.avatar || primary.avatar || '');
+
+  const bio = primary.bio || secondary.bio || '';
+  const isPrivate = Boolean(primary.isPrivate || secondary.isPrivate || primary.privateAccount || secondary.privateAccount);
+  const isVerified = Boolean(primary.isVerified || secondary.isVerified || primary.verified || secondary.verified);
+
+  const followers = Math.max(Number(primary.followers || primary.stats?.followers || 0), Number(secondary.followers || secondary.stats?.followers || 0));
+  const following = Math.max(Number(primary.following || primary.stats?.following || 0), Number(secondary.following || secondary.stats?.following || 0));
+  const posts = Math.max(Number(primary.posts || primary.stats?.posts || 0), Number(secondary.posts || secondary.stats?.posts || 0));
+
+  const recentMedia = (Array.isArray(primary.recentMedia) && primary.recentMedia.length > 0)
+    ? primary.recentMedia
+    : (Array.isArray(secondary.recentMedia) ? secondary.recentMedia : []);
+
+  return {
+    username,
+    fullName,
+    nickname: fullName,
+    avatar,
+    bio,
+    bioLink: primary.bioLink || secondary.bioLink || null,
+    isPrivate,
+    privateAccount: isPrivate,
+    isVerified,
+    verified: isVerified,
+    followers,
+    following,
+    posts,
+    stats: { followers, following, posts },
+    recentMedia,
+    category: primary.category || secondary.category || 'Kreator',
+    profileUrl: `https://www.instagram.com/${username}`
+  };
 }
 
 export async function scrapeInstagram(rawInput, options = {}) {
@@ -365,39 +440,31 @@ export async function scrapeInstagram(rawInput, options = {}) {
     };
   }
 
-  let mappedData = null;
-  let sourceEngine = 'crawler_link_preview';
+  let resultCrawler = null;
+  let resultEmbed = null;
+
+  // Eksekusi paralel Jalur 1 (Embed) dan Jalur 2 (Crawler OpenGraph)
+  try {
+    resultCrawler = await fetchEngineCrawlerOpenGraph(username);
+  } catch (_) {}
 
   try {
-    // Jalankan Engine 1 (Crawler Link-Preview) terlebih dahulu agar tidak memicu WAF anti-bot Instagram
-    try {
-      const crawlerResult = await fetchEngineCrawlerOpenGraph(username);
-      if (crawlerResult?.data?.username) {
-        mappedData = crawlerResult.data;
-        sourceEngine = crawlerResult.source;
-      }
-    } catch (_) {}
+    resultEmbed = await fetchEngineEmbedProfile(username);
+  } catch (_) {}
 
-    // Jika Engine 1 belum berhasil, jalankan fallback Engine Embed, Web API, dan Mirror secara paralel
-    if (!mappedData) {
-      const winner = await Promise.any([
-        fetchEngineEmbed(username),
-        fetchEngineWebProfileApi(username),
-        fetchEngineMirror(username)
-      ]);
-      mappedData = winner.data;
-      sourceEngine = winner.source;
-    }
-  } catch (err) {
-    return {
-      success: false,
-      statusCode: 404,
-      error: 'user_not_found',
-      message: `Akun Instagram @${username} tidak ditemukan atau data publik tidak dapat diakses.`
-    };
+  // Deep merge properti dari Jalur 1 dan Jalur 2
+  let mergedData = deepMergeInstagramData(resultCrawler?.data, resultEmbed?.data);
+
+  // Jika belum valid, coba fallback direct Web Profile API
+  if (!isValidInstagramData(mergedData)) {
+    try {
+      const apiRes = await fetchEngineWebProfileApi(username);
+      mergedData = deepMergeInstagramData(mergedData, apiRes?.data);
+    } catch (_) {}
   }
 
-  if (!mappedData || !mappedData.username) {
+  // JANGAN PERNAH kembalikan objek palsu serba 0 jika tidak ada bukti data nyata
+  if (!isValidInstagramData(mergedData)) {
     return {
       success: false,
       statusCode: 404,
@@ -408,15 +475,15 @@ export async function scrapeInstagram(rawInput, options = {}) {
 
   profileCache.set(cacheKey, {
     timestamp: Date.now(),
-    data: mappedData
+    data: mergedData
   });
 
   return {
     success: true,
     platform: 'instagram',
-    source: sourceEngine,
+    source: resultCrawler ? (resultEmbed ? 'native_hybrid_merged' : 'crawler_link_preview') : 'instagram_embed',
     cached: false,
-    data: mappedData
+    data: mergedData
   };
 }
 

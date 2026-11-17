@@ -120,7 +120,7 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
 
     try {
       const res = await axios.post('/api/resolve', { url: target }, {
-        timeout: 16000
+        timeout: 24000
       });
 
       clearTimeout(animTimer1);
@@ -162,16 +162,30 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
         setErrorMessage(res.data?.message || 'Link tujuan tidak ditemukan atau dilindungi proteksi.');
       }
     } catch (err) {
-      // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd) dengan timeout 3.5s
+      // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd) dengan multi-proxy
       if (target.includes('linktr.ee') || target.includes('heylink.me') || target.includes('carrd.co')) {
         try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 3500);
-          const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`, {
-            signal: controller.signal
-          }).finally(() => clearTimeout(timer));
-          const html = await aoRes.text();
-          if (html.includes('__NEXT_DATA__')) {
+          const proxyUrls = [
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`
+          ];
+          let html = '';
+          for (const pUrl of proxyUrls) {
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 6000);
+              const aoRes = await fetch(pUrl, { signal: controller.signal }).finally(() => clearTimeout(timer));
+              if (aoRes.ok) {
+                const text = await aoRes.text();
+                if (text && (text.includes('__NEXT_DATA__') || text.includes('href='))) {
+                  html = text;
+                  break;
+                }
+              }
+            } catch (_) {}
+          }
+
+          if (html && html.includes('__NEXT_DATA__')) {
             const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
             if (match && match[1]) {
               const parsed = JSON.parse(match[1]);

@@ -278,12 +278,13 @@ export default async function handler(req, res) {
     for (const ua of uas) {
       try {
         const aggRes = await axios.get(cleanUrl, {
-          timeout: 4500,
-          maxContentLength: 5 * 1024 * 1024,
+          timeout: 6000,
+          maxContentLength: 8 * 1024 * 1024,
           headers: {
             'User-Agent': ua,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7'
+            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Cache-Control': 'no-cache'
           }
         });
         if (typeof aggRes.data === 'string') {
@@ -302,6 +303,16 @@ export default async function handler(req, res) {
           }
         }
       } catch (_) {}
+    }
+
+    // Jika domain murni aggregator seperti linktr.ee namun kosong, hentikan agar tidak memicu timeout 14s
+    if (host.includes('linktr.ee') || host.includes('heylink.me') || host.includes('carrd.co')) {
+      return res.status(200).json({
+        status: 'error',
+        message: 'Halaman bio aggregator tidak memuat tautan publik atau dilindungi captcha/sandi.',
+        engine: 'aggregator-scanner',
+        elapsed_ms: Date.now() - startTime
+      });
     }
   }
 

@@ -51,6 +51,25 @@ function formatMetric(num) {
   return val.toLocaleString('id-ID');
 }
 
+export function isValidInstagramData(d) {
+  if (!d) return false;
+  const target = d.data || d;
+  if (!target || !target.username) return false;
+  const uName = String(target.username).trim().toLowerCase();
+  const rawName = String(target.fullName || target.nickname || '').trim();
+  const hasRealName = rawName !== '' && rawName.toLowerCase() !== uName;
+  const rawAvatar = String(target.avatar || '');
+  const hasValidAvatar = rawAvatar.startsWith('http') && !rawAvatar.includes('default') && !rawAvatar.includes('dumpor-logo');
+  const hasBio = Boolean(target.bio && String(target.bio).trim() !== '');
+  const followers = Number(target.stats?.followers ?? target.followers ?? 0);
+  const following = Number(target.stats?.following ?? target.following ?? 0);
+  const posts = Number(target.stats?.posts ?? target.posts ?? 0);
+  const hasStats = (followers > 0 || following > 0 || posts > 0);
+  const isPrivate = Boolean(target.isPrivate || target.privateAccount || target.is_private);
+
+  return Boolean(hasRealName || hasValidAvatar || hasBio || hasStats || isPrivate);
+}
+
 function normalizeInstagramData(u) {
   if (!u) return null;
   const followers = Number(u.stats?.followers ?? u.followers ?? 0);
@@ -123,31 +142,44 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
   }, [loading]);
 
   const fetchInstagramData = async (cleanUsername, forceRefresh = false) => {
-    const normalizeInstagram = (u) => ({
-      username: u.username || cleanUsername,
-      nickname: u.full_name || u.name || cleanUsername,
-      avatar: u.avatar || u.profile_pic_url_hd || u.photo_profile || '',
-      bio: u.bio || u.biography || '',
-      bioLink: u.bio_link || u.external_url || null,
-      verified: Boolean(u.verified || u.is_verified),
-      privateAccount: Boolean(u.is_private || u.private),
-      followers: Number(u.followers || u.follower_count || 0),
-      following: Number(u.following || u.following_count || 0),
-      posts: Number(u.posts || u.media_count || 0),
-      stats: {
-        followers: Number(u.followers || u.follower_count || 0),
-        following: Number(u.following || u.following_count || 0),
-        posts: Number(u.posts || u.media_count || 0)
-      },
-      recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
-      category: u.category || 'Kreator',
-      profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
-    });
+    const normalizeInstagram = (u) => {
+      const target = u.data || u;
+      const nick = target.fullName || target.full_name || target.nickname || target.name || cleanUsername;
+      const followers = Number(target.followers ?? target.follower_count ?? target.stats?.followers ?? 0);
+      const following = Number(target.following ?? target.following_count ?? target.stats?.following ?? 0);
+      const posts = Number(target.posts ?? target.media_count ?? target.stats?.posts ?? 0);
+      const isPriv = Boolean(target.isPrivate || target.privateAccount || target.is_private || target.private);
+      const isVerif = Boolean(target.isVerified || target.verified || target.is_verified);
 
-    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas waktu 15s
-    const runBackend = async () => {
+      return {
+        username: target.username || cleanUsername,
+        fullName: nick,
+        nickname: nick,
+        avatar: target.avatar || target.profile_pic_url_hd || target.photo_profile || '',
+        bio: target.bio || target.biography || '',
+        bioLink: target.bioLink || target.bio_link || target.external_url || null,
+        verified: isVerif,
+        isVerified: isVerif,
+        privateAccount: isPriv,
+        isPrivate: isPriv,
+        followers,
+        following,
+        posts,
+        stats: {
+          followers,
+          following,
+          posts
+        },
+        recentMedia: Array.isArray(target.recentMedia || target.posts_data) ? (target.recentMedia || target.posts_data) : [],
+        category: target.category || target.category_name || 'Kreator',
+        profileUrl: `https://www.instagram.com/${target.username || cleanUsername}`
+      };
+    };
+
+    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas waktu 16s + 1 retry otomatis
+    const runBackend = async (isRetry = false) => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 15000);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 16000);
       try {
         const res = await fetch('/api/stalk/instagram', {
           method: 'POST',
@@ -163,69 +195,30 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
         const text = await res.text();
         let parsed = null;
         try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
-        if (res.ok && parsed && (parsed.data || parsed.success)) return parsed.data || parsed;
-        throw new Error(parsed?.message || 'Backend failed');
+        if (res.ok && parsed && (parsed.data || parsed.success)) {
+          const rawPayload = parsed.data || parsed;
+          if (isValidInstagramData(rawPayload)) {
+            return normalizeInstagram(rawPayload);
+          }
+        }
+        throw new Error(parsed?.message || 'Backend empty');
+      } catch (err) {
+        if (!isRetry) {
+          await new Promise(r => setTimeout(r, 800));
+          return runBackend(true);
+        }
+        throw err;
       } finally {
         clearTimeout(bTimer);
       }
     };
 
-    // Saluran 2: Direct Siputzx API dari browser (batas 4s)
-    const runSiputzx = async () => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4000);
-      try {
-        const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`, {
-          headers: { 'Accept': 'application/json' },
-          signal: ctrl.signal
-        });
-        const text = await res.text();
-        let json = null;
-        try { json = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
-        const u = json?.data || json?.result || json;
-        if (json?.status && u && (u.username || u.name || u.full_name)) {
-          return normalizeInstagram(u);
-        }
-        throw new Error('Siputzx empty');
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
-    // Saluran 3: AllOrigins CORS proxy ke Siputzx (batas 4s)
-    const runAllOriginsSiputzx = async () => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 4000);
-      try {
-        const targetUrl = `https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`;
-        const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
-          signal: ctrl.signal
-        });
-        const text = await aoRes.text();
-        let json = null;
-        try { json = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
-        const u = json?.data || json?.result || json;
-        if (json?.status && u && (u.username || u.name || u.full_name)) {
-          return normalizeInstagram(u);
-        }
-        throw new Error('AllOrigins empty');
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
     try {
       const bData = await runBackend();
-      if (bData && (bData.data || bData.success || bData.username)) {
-        return bData.data || bData;
+      if (bData && isValidInstagramData(bData)) {
+        return bData;
       }
-    } catch (_) {
-      try {
-        return await Promise.any([runSiputzx(), runAllOriginsSiputzx()]);
-      } catch (__) {
-        return null;
-      }
-    }
+    } catch (_) {}
 
     return null;
   };
@@ -585,7 +578,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                       {isEn ? 'Verified' : 'Terverifikasi'}
                     </span>
                   )}
-                  {profileData.privateAccount ? (
+                  {(profileData.privateAccount || profileData.isPrivate) ? (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-neutral-800 text-white text-[10px] font-black uppercase border border-black rounded shadow-[1px_1px_0px_#000000]">
                       <Lock className="w-3 h-3" />
                       {isEn ? 'Private' : 'Privat'}
@@ -692,7 +685,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
             </div>
 
             {/* Private Account Notice Banner (Di Bawah Bio) */}
-            {profileData.privateAccount && (
+            {(profileData.privateAccount || profileData.isPrivate) && (
               <div className="bg-amber-50 border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] flex items-start gap-3">
                 <div className="p-2 bg-[#facc15] text-black border-2 border-black rounded-lg shrink-0">
                   <Lock className="w-4 h-4 stroke-[2.5]" />
@@ -711,7 +704,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
             )}
 
             {/* Recent Public Posts Grid */}
-            {!profileData.privateAccount && profileData.recentMedia && profileData.recentMedia.length > 0 && (
+            {!(profileData.privateAccount || profileData.isPrivate) && profileData.recentMedia && profileData.recentMedia.length > 0 && (
               <div className="bg-white border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
