@@ -21,7 +21,8 @@ import {
   RefreshCw,
   Layers,
   Download,
-  Sparkles
+  Sparkles,
+  MessageCircle
 } from 'lucide-react';
 
 function formatMetric(num) {
@@ -31,6 +32,27 @@ function formatMetric(num) {
   if (val >= 1000000) return (val / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
   if (val >= 1000) return (val / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
   return val.toLocaleString('id-ID');
+}
+
+function normalizeInstagramData(u) {
+  if (!u) return null;
+  const followers = Number(u.stats?.followers ?? u.followers ?? 0);
+  const following = Number(u.stats?.following ?? u.following ?? 0);
+  const posts = Number(u.stats?.posts ?? u.posts ?? 0);
+  const recentMedia = Array.isArray(u.recentMedia) ? u.recentMedia : [];
+
+  return {
+    ...u,
+    followers,
+    following,
+    posts,
+    stats: {
+      followers,
+      following,
+      posts
+    },
+    recentMedia
+  };
 }
 
 function renderBioWithLinks(text) {
@@ -85,7 +107,14 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
 
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
-    if (!raw) {
+    const cleanUsername = raw
+      .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, '')
+      .replace(/^@+/, '')
+      .split('/')[0]
+      .split('?')[0]
+      .trim();
+
+    if (!cleanUsername) {
       onShowToast?.(isEn ? 'Please enter an Instagram username or URL.' : 'Masukkan username atau tautan Instagram.', 'warning');
       return;
     }
@@ -101,7 +130,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
-        body: JSON.stringify({ username: raw })
+        body: JSON.stringify({ username: cleanUsername })
       });
 
       const rawText = await res.text();
@@ -116,7 +145,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
         throw new Error(json.message || (isEn ? 'Instagram profile not found.' : 'Profil Instagram tidak ditemukan.'));
       }
 
-      setProfileData(json.data);
+      setProfileData(normalizeInstagramData(json.data));
       onShowToast?.(isEn ? 'Instagram profile loaded!' : 'Intel profil Instagram berhasil dimuat!', 'success');
     } catch (err) {
       setErrorMsg(err.message || (isEn ? 'Failed to fetch Instagram profile.' : 'Gagal mengambil data profil Instagram.'));
@@ -155,7 +184,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
         throw new Error(json.message || (isEn ? 'Profile not found.' : 'Profil tidak ditemukan.'));
       }
 
-      setProfileData(json.data);
+      setProfileData(normalizeInstagramData(json.data));
       onShowToast?.(isEn ? 'Instagram profile refreshed!' : 'Profil Instagram berhasil disegarkan!', 'success');
     } catch (err) {
       setErrorMsg(err.message || (isEn ? 'Failed to refresh profile.' : 'Gagal menyegarkan profil.'));
@@ -188,14 +217,18 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
   const handleCopyAllIntel = () => {
     if (!profileData) return;
     const stats = profileData.stats || {};
+    const followers = stats.followers ?? profileData.followers ?? 0;
+    const following = stats.following ?? profileData.following ?? 0;
+    const posts = stats.posts ?? profileData.posts ?? 0;
+
     const text = [
       `📸 INSTAGRAM INTEL REPORT (KURO STUDIO)`,
       `Username: @${profileData.username}`,
       `Nama: ${profileData.nickname}`,
       `Status: ${profileData.verified ? 'Terverifikasi' : 'Reguler'} | ${profileData.privateAccount ? 'Privat' : 'Publik'}`,
-      `Pengikut: ${stats.followers?.toLocaleString() || 0}`,
-      `Mengikuti: ${stats.following?.toLocaleString() || 0}`,
-      `Total Post: ${stats.posts?.toLocaleString() || 0}`,
+      `Pengikut: ${followers.toLocaleString('id-ID')}`,
+      `Mengikuti: ${following.toLocaleString('id-ID')}`,
+      `Total Post: ${posts.toLocaleString('id-ID')}`,
       `Bio: ${profileData.bio || '-'}`,
       `Tautan: ${profileData.profileUrl}`
     ].join('\n');
@@ -483,7 +516,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                   <Users className="w-4 h-4" />
                 </div>
                 <div className="text-lg sm:text-xl font-black text-black">
-                  {formatMetric(profileData.stats?.followers)}
+                  {formatMetric(profileData.stats?.followers ?? profileData.followers)}
                 </div>
                 <div className="text-[11px] font-extrabold uppercase text-neutral-600">
                   {isEn ? 'Followers' : 'Pengikut'}
@@ -495,7 +528,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                   <UserPlus className="w-4 h-4" />
                 </div>
                 <div className="text-lg sm:text-xl font-black text-black">
-                  {formatMetric(profileData.stats?.following)}
+                  {formatMetric(profileData.stats?.following ?? profileData.following)}
                 </div>
                 <div className="text-[11px] font-extrabold uppercase text-neutral-600">
                   {isEn ? 'Following' : 'Mengikuti'}
@@ -507,13 +540,32 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                   <Image className="w-4 h-4" />
                 </div>
                 <div className="text-lg sm:text-xl font-black text-black">
-                  {formatMetric(profileData.stats?.posts)}
+                  {formatMetric(profileData.stats?.posts ?? profileData.posts)}
                 </div>
                 <div className="text-[11px] font-extrabold uppercase text-neutral-600">
                   {isEn ? 'Posts' : 'Postingan'}
                 </div>
               </div>
             </div>
+
+            {/* Private Account Notice Banner */}
+            {profileData.privateAccount && (
+              <div className="bg-amber-50 border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] flex items-start gap-3">
+                <div className="p-2 bg-[#facc15] text-black border-2 border-black rounded-lg shrink-0">
+                  <Lock className="w-4 h-4 stroke-[2.5]" />
+                </div>
+                <div className="space-y-0.5">
+                  <h4 className="font-black text-black text-xs sm:text-sm uppercase tracking-wide">
+                    {isEn ? 'Private Instagram Account' : 'Akun Instagram Bersifat Privat'}
+                  </h4>
+                  <p className="text-xs font-semibold text-neutral-600 leading-relaxed">
+                    {isEn 
+                      ? 'Follower, following, and post metrics are verified. Photos and media are locked by account privacy.'
+                      : 'Metrik pengikut, mengikuti, dan total postingan berhasil diverifikasi. Foto dan media dikunci oleh setelan privasi pemilik akun.'}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Bio Section */}
             <div className="bg-neutral-50 border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] space-y-2">
@@ -541,6 +593,65 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                 </div>
               )}
             </div>
+
+            {/* Recent Public Posts Grid */}
+            {!profileData.privateAccount && profileData.recentMedia && profileData.recentMedia.length > 0 && (
+              <div className="bg-white border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-[#d946ef] text-white border-2 border-black rounded-lg">
+                      <Image className="w-4 h-4 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-black uppercase text-black tracking-wide">
+                        {isEn ? 'Recent Media Posts' : 'Isi Postingan Terbaru'}
+                      </h3>
+                      <p className="text-[11px] font-bold text-neutral-500">
+                        {isEn ? 'Latest public photos & reels' : 'Pratinjau foto & reels publik'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 bg-neutral-100 border-2 border-black rounded-lg text-[10px] sm:text-xs font-black text-black">
+                    {profileData.recentMedia.length} {isEn ? 'Posts' : 'Postingan'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
+                  {profileData.recentMedia.map((m, idx) => (
+                    <a
+                      key={m.id || idx}
+                      href={m.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="group relative bg-neutral-100 border-2 border-black rounded-xl overflow-hidden shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all aspect-square block cursor-pointer"
+                    >
+                      <img
+                        src={m.displayUrl ? `/api/stalk/image-proxy?url=${encodeURIComponent(m.displayUrl)}` : ''}
+                        alt={m.caption || `Post ${idx + 1}`}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                        loading="lazy"
+                        onError={(e) => {
+                          if (m.displayUrl && e.target.dataset.triedDirect !== 'true') {
+                            e.target.dataset.triedDirect = 'true';
+                            e.target.src = m.displayUrl;
+                          }
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3 text-white font-black text-xs p-2">
+                        <div className="flex items-center gap-1">
+                          <Heart className="w-3.5 h-3.5 fill-current text-rose-400" />
+                          <span>{formatMetric(m.likes)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <MessageCircle className="w-3.5 h-3.5 fill-current text-neutral-200" />
+                          <span>{formatMetric(m.comments)}</span>
+                        </div>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Refresh and Copy Intel Controls */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">

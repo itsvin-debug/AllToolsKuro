@@ -27,14 +27,31 @@ function decodeHtmlEntities(str) {
 
 function parseMetricString(str) {
   if (!str) return 0;
-  const clean = str.replace(/,/g, '').trim().toUpperCase();
-  if (clean.endsWith('M')) {
-    return Math.round(parseFloat(clean) * 1000000);
+  const clean = str.replace(/,/g, '').trim().toLowerCase();
+  if (clean.endsWith('jt') || clean.endsWith('m')) {
+    return Math.round(parseFloat(clean.replace(/(?:jt|m)$/, '')) * 1000000);
   }
-  if (clean.endsWith('K')) {
-    return Math.round(parseFloat(clean) * 1000);
+  if (clean.endsWith('rb') || clean.endsWith('k')) {
+    return Math.round(parseFloat(clean.replace(/(?:rb|k)$/, '')) * 1000);
+  }
+  if (clean.endsWith('b')) {
+    return Math.round(parseFloat(clean.replace(/b$/, '')) * 1000000000);
   }
   return parseInt(clean.replace(/[^0-9]/g, ''), 10) || 0;
+}
+
+function extractInstagramStatsFromText(text) {
+  if (!text) return { followers: 0, following: 0, posts: 0 };
+  
+  const followersMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Followers|Pengikut)/i);
+  const followingMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Following|Mengikuti)/i);
+  const postsMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Posts|Postingan|Kiriman)/i);
+
+  return {
+    followers: followersMatch ? parseMetricString(followersMatch[1]) : 0,
+    following: followingMatch ? parseMetricString(followingMatch[1]) : 0,
+    posts: postsMatch ? parseMetricString(postsMatch[1]) : 0
+  };
 }
 
 export async function scrapeInstagram(rawInput, options = {}) {
@@ -90,6 +107,25 @@ export async function scrapeInstagram(rawInput, options = {}) {
 
     if (webRes.status === 200 && webRes.data?.data?.user) {
       const u = webRes.data.data.user;
+      const followers = Number(u.edge_followed_by?.count || 0);
+      const following = Number(u.edge_follow?.count || 0);
+      const posts = Number(u.edge_owner_to_timeline_media?.count || 0);
+
+      // Ekstraksi 6 postingan publik terbaru jika akun tidak diprivat
+      const recentMedia = (u.edge_owner_to_timeline_media?.edges || []).slice(0, 6).map(edge => {
+        const node = edge.node || {};
+        return {
+          id: node.id,
+          shortcode: node.shortcode,
+          url: `https://www.instagram.com/p/${node.shortcode}/`,
+          displayUrl: node.display_url || node.thumbnail_src || '',
+          likes: Number(node.edge_liked_by?.count || node.edge_media_preview_like?.count || 0),
+          comments: Number(node.edge_media_to_comment?.count || 0),
+          caption: node.edge_media_to_caption?.edges?.[0]?.node?.text || '',
+          isVideo: Boolean(node.is_video)
+        };
+      });
+
       mappedData = {
         username: u.username || username,
         nickname: u.full_name || u.username || username,
@@ -98,9 +134,15 @@ export async function scrapeInstagram(rawInput, options = {}) {
         bioLink: u.external_url || null,
         verified: Boolean(u.is_verified),
         privateAccount: Boolean(u.is_private),
-        followers: Number(u.edge_followed_by?.count || 0),
-        following: Number(u.edge_follow?.count || 0),
-        posts: Number(u.edge_owner_to_timeline_media?.count || 0),
+        followers,
+        following,
+        posts,
+        stats: {
+          followers,
+          following,
+          posts
+        },
+        recentMedia,
         category: u.category_name || 'Kreator',
         profileUrl: `https://www.instagram.com/${u.username || username}`
       };
@@ -147,8 +189,7 @@ export async function scrapeInstagram(rawInput, options = {}) {
 
         if (descMatch && descMatch[1]) {
           const rawDesc = decodeHtmlEntities(descMatch[1]);
-          const statRegex = /([0-9.,KMBkmb]+)\s+Followers,\s+([0-9.,KMBkmb]+)\s+Following,\s+([0-9.,KMBkmb]+)\s+Posts/i;
-          const statsParsed = rawDesc.match(statRegex);
+          const statsExtracted = extractInstagramStatsFromText(rawDesc);
 
           let name = username;
           if (titleMatch && titleMatch[1]) {
@@ -156,19 +197,44 @@ export async function scrapeInstagram(rawInput, options = {}) {
             name = rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').trim();
           }
 
+          // Coba ekstraksi bio dari deskripsi atau JSON embedded
+          let bio = '';
+          const bioJsonMatch = html.match(/"biography":"([^"]+)"/) || html.match(/"bio":"([^"]+)"/);
+          if (bioJsonMatch && bioJsonMatch[1]) {
+            try {
+              bio = JSON.parse(`"${bioJsonMatch[1]}"`);
+            } catch {
+              bio = bioJsonMatch[1];
+            }
+          }
+
+          if (!bio && rawDesc.includes(' - ')) {
+            const afterDash = rawDesc.split(' - ')[1]?.trim();
+            if (afterDash && !afterDash.startsWith('See Instagram photos') && !afterDash.startsWith('Lihat foto')) {
+              bio = afterDash;
+            }
+          }
+
           const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+          const isPrivate = html.includes('"is_private":true') || html.includes('"isPrivate":true');
 
           mappedData = {
             username,
             nickname: name || username,
             avatar: rawImg,
-            bio: '',
+            bio: bio || '',
             bioLink: null,
             verified: rawDesc.toLowerCase().includes('verified') || html.includes('"is_verified":true'),
-            privateAccount: html.includes('"is_private":true'),
-            followers: statsParsed ? parseMetricString(statsParsed[1]) : 0,
-            following: statsParsed ? parseMetricString(statsParsed[2]) : 0,
-            posts: statsParsed ? parseMetricString(statsParsed[3]) : 0,
+            privateAccount: isPrivate,
+            followers: statsExtracted.followers,
+            following: statsExtracted.following,
+            posts: statsExtracted.posts,
+            stats: {
+              followers: statsExtracted.followers,
+              following: statsExtracted.following,
+              posts: statsExtracted.posts
+            },
+            recentMedia: [],
             category: 'Kreator',
             profileUrl: `https://www.instagram.com/${username}`
           };
@@ -192,6 +258,9 @@ export async function scrapeInstagram(rawInput, options = {}) {
         const u = body?.data || body?.result || body;
         if (u && (u.username || u.name || u.full_name)) {
           const uName = u.username || username;
+          const followers = Number(u.followers || u.follower_count || 0);
+          const following = Number(u.following || u.following_count || 0);
+          const posts = Number(u.posts || u.media_count || 0);
           mappedData = {
             username: uName,
             nickname: u.full_name || u.name || uName,
@@ -200,9 +269,15 @@ export async function scrapeInstagram(rawInput, options = {}) {
             bioLink: u.bio_link || u.external_url || null,
             verified: Boolean(u.verified || u.is_verified),
             privateAccount: Boolean(u.is_private || u.private),
-            followers: Number(u.followers || u.follower_count || 0),
-            following: Number(u.following || u.following_count || 0),
-            posts: Number(u.posts || u.media_count || 0),
+            followers,
+            following,
+            posts,
+            stats: {
+              followers,
+              following,
+              posts
+            },
+            recentMedia: Array.isArray(u.recentMedia || u.posts_data) ? (u.recentMedia || u.posts_data) : [],
             category: u.category || 'Kreator',
             profileUrl: `https://www.instagram.com/${uName}`
           };

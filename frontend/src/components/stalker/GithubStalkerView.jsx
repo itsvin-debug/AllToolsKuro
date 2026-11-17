@@ -23,8 +23,36 @@ import {
   Calendar,
   MapPin,
   Building,
-  Briefcase
+  Briefcase,
+  GitBranch,
+  GitFork
 } from 'lucide-react';
+
+const LANGUAGE_COLORS = {
+  JavaScript: '#f1e05a',
+  TypeScript: '#3178c6',
+  HTML: '#e34c26',
+  CSS: '#563d7c',
+  Python: '#3572A5',
+  Java: '#b07219',
+  Go: '#00ADD8',
+  Rust: '#dea584',
+  C: '#555555',
+  'C++': '#f34b7d',
+  'C#': '#178600',
+  PHP: '#4F5D95',
+  Ruby: '#701516',
+  Dart: '#00B4AB',
+  Kotlin: '#A97BFF',
+  Swift: '#F05138',
+  Shell: '#89e051',
+  Vue: '#41b883',
+  Svelte: '#ff3e00'
+};
+
+function getLanguageColor(lang) {
+  return LANGUAGE_COLORS[lang] || '#8b949e';
+}
 
 function formatMetric(num) {
   if (num === null || num === undefined || isNaN(num)) return '0';
@@ -33,6 +61,66 @@ function formatMetric(num) {
   if (val >= 1000000) return (val / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
   if (val >= 1000) return (val / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
   return val.toLocaleString('id-ID');
+}
+
+function formatDate(isoString) {
+  if (!isoString) return null;
+  try {
+    const d = new Date(isoString);
+    return d.toLocaleDateString('id-ID', { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch {
+    return null;
+  }
+}
+
+function normalizeGithubData(u, repos = []) {
+  if (!u) return null;
+  const followers = Number(u.stats?.followers ?? u.followers ?? 0);
+  const following = Number(u.stats?.following ?? u.following ?? 0);
+  const publicRepos = Number(u.stats?.publicRepos ?? u.public_repos ?? u.publicRepos ?? 0);
+  const totalStars = Number(u.stats?.totalStars ?? u.totalStars ?? (Array.isArray(repos) ? repos.reduce((acc, r) => acc + (r.stargazers_count || r.stars || 0), 0) : 0));
+  const publicGists = Number(u.stats?.publicGists ?? u.public_gists ?? u.publicGists ?? 0);
+
+  const reposList = Array.isArray(u.reposList) && u.reposList.length > 0 
+    ? u.reposList 
+    : (Array.isArray(repos) ? repos.slice(0, 12).map(r => ({
+        name: r.name,
+        description: r.description || '',
+        language: r.language || '',
+        stars: Number(r.stargazers_count || r.stars || 0),
+        forks: Number(r.forks_count || r.forks || 0),
+        url: r.html_url || r.url || `https://github.com/${u.login || u.username}/${r.name}`,
+        isFork: Boolean(r.fork || r.isFork)
+      })) : []);
+
+  const created = u.createdAt || u.createTime || formatDate(u.created_at);
+
+  return {
+    username: u.login || u.username,
+    nickname: u.name || u.nickname || u.login || u.username,
+    avatar: u.avatar_url || u.avatar || '',
+    bio: u.bio || '',
+    status: u.hireable ? 'Hireable' : (u.status || 'Public Developer'),
+    followers,
+    following,
+    publicRepos,
+    totalStars,
+    publicGists,
+    stats: {
+      followers,
+      following,
+      publicRepos,
+      totalStars,
+      publicGists
+    },
+    reposList,
+    location: u.location || '',
+    company: u.company || '',
+    blog: u.blog ? (u.blog.startsWith('http') ? u.blog : `https://${u.blog}`) : '',
+    createdAt: created,
+    createTime: created,
+    profileUrl: u.html_url || u.profileUrl || `https://github.com/${u.login || u.username}`
+  };
 }
 
 function renderBioWithLinks(text) {
@@ -87,7 +175,14 @@ export default function GithubStalkerView({ onBack, onChangePlatform, onShowToas
 
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
-    if (!raw) {
+    const cleanUsername = raw
+      .replace(/^https?:\/\/(?:www\.)?github\.com\//i, '')
+      .replace(/^@+/, '')
+      .split('/')[0]
+      .split('?')[0]
+      .trim();
+
+    if (!cleanUsername) {
       onShowToast?.(isEn ? 'Please enter a GitHub username or link.' : 'Masukkan username atau tautan GitHub.', 'warning');
       return;
     }
@@ -97,28 +192,69 @@ export default function GithubStalkerView({ onBack, onChangePlatform, onShowToas
     setProfileData(null);
 
     try {
-      const res = await fetch('/api/stalk/github', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: raw })
-      });
+      let resolvedData = null;
 
-      const rawText = await res.text();
-      let json = null;
+      // 1. Prioritas: Direct Client-Side Fetch (Membypass rate limit Vercel IP pool)
       try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Server did not return valid JSON.' : 'Server tidak merespons JSON.');
+        const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}`, {
+          headers: { 'Accept': 'application/vnd.github.v3+json' }
+        });
+
+        if (userRes.status === 404) {
+          throw new Error(isEn ? `GitHub user @${cleanUsername} not found.` : `Akun GitHub @${cleanUsername} tidak ditemukan.`);
+        }
+
+        if (userRes.ok) {
+          const userData = await userRes.json();
+          let reposData = [];
+          try {
+            const reposRes = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}/repos?per_page=100&sort=pushed`, {
+              headers: { 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (reposRes.ok) {
+              reposData = await reposRes.json();
+            }
+          } catch (_) {}
+
+          resolvedData = normalizeGithubData(userData, reposData);
+        }
+      } catch (clientErr) {
+        if (clientErr.message?.includes('not found') || clientErr.message?.includes('tidak ditemukan')) {
+          throw clientErr;
+        }
       }
 
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || (isEn ? 'GitHub developer profile not found.' : 'Profil developer GitHub tidak ditemukan.'));
+      // 2. Fallback: Backend Scraper API jika direct fetch terkendala
+      if (!resolvedData) {
+        const res = await fetch('/api/stalk/github', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ username: cleanUsername })
+        });
+
+        const rawText = await res.text();
+        let json = null;
+        try {
+          json = JSON.parse(rawText);
+        } catch {
+          throw new Error(isEn ? 'Server did not return valid JSON.' : 'Server tidak merespons JSON.');
+        }
+
+        if (!res.ok || json.status === 'error' || json.success === false) {
+          throw new Error(json.message || (isEn ? 'GitHub developer profile not found.' : 'Profil developer GitHub tidak ditemukan.'));
+        }
+
+        resolvedData = normalizeGithubData(json.data);
       }
 
-      setProfileData(json.data);
+      if (!resolvedData) {
+        throw new Error(isEn ? 'Could not load profile data.' : 'Data profil tidak dapat dimuat.');
+      }
+
+      setProfileData(resolvedData);
       onShowToast?.(isEn ? 'GitHub profile loaded!' : 'Intel profil GitHub berhasil dimuat!', 'success');
     } catch (err) {
       setErrorMsg(err.message || (isEn ? 'Failed to fetch GitHub profile.' : 'Gagal mengambil data profil GitHub.'));
@@ -131,40 +267,7 @@ export default function GithubStalkerView({ onBack, onChangePlatform, onShowToas
   const handleRefresh = async () => {
     const target = profileData?.username || inputVal.trim();
     if (!target) return;
-
-    setLoading(true);
-    setErrorMsg(null);
-
-    try {
-      const res = await fetch('/api/stalk/github', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: target, refresh: true })
-      });
-
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Server did not return valid JSON.' : 'Gagal membaca respons server.');
-      }
-
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || (isEn ? 'Profile not found.' : 'Profil tidak ditemukan.'));
-      }
-
-      setProfileData(json.data);
-      onShowToast?.(isEn ? 'GitHub profile refreshed!' : 'Profil GitHub berhasil disegarkan!', 'success');
-    } catch (err) {
-      setErrorMsg(err.message || (isEn ? 'Failed to refresh profile.' : 'Gagal menyegarkan profil.'));
-      onShowToast?.(err.message, 'error');
-    } finally {
-      setLoading(false);
-    }
+    await handleStalk(target);
   };
 
   const handlePaste = async () => {
@@ -559,6 +662,82 @@ export default function GithubStalkerView({ onBack, onChangePlatform, onShowToas
                 </div>
               )}
             </div>
+
+            {/* Public Repositories Section */}
+            {profileData.reposList && profileData.reposList.length > 0 && (
+              <div className="bg-white border-2 border-black rounded-xl p-4 shadow-[2px_2px_0px_#000000] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-[#10b981] text-black border-2 border-black rounded-lg">
+                      <GitBranch className="w-4 h-4 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs sm:text-sm font-black uppercase text-black tracking-wide">
+                        {isEn ? 'Public Repositories' : 'Isi Akun & Repositori Publik Terbaru'}
+                      </h3>
+                      <p className="text-[11px] font-bold text-neutral-500">
+                        {isEn ? 'Latest updated repositories' : 'Daftar repositori aktif terbaru'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 bg-neutral-100 border-2 border-black rounded-lg text-[10px] sm:text-xs font-black text-black">
+                    {profileData.reposList.length} {isEn ? 'Repos' : 'Repo'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                  {profileData.reposList.map((repo, idx) => (
+                    <a
+                      key={repo.name || idx}
+                      href={repo.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-3 bg-neutral-50 hover:bg-[#f0fdf4] border-2 border-black rounded-xl shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex flex-col justify-between gap-2.5 group cursor-pointer"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-black text-sm text-black group-hover:text-[#059669] truncate">
+                            {repo.name}
+                          </span>
+                          <ExternalLink className="w-3.5 h-3.5 text-neutral-400 group-hover:text-black shrink-0" />
+                        </div>
+                        {repo.description ? (
+                          <p className="text-xs font-medium text-neutral-600 line-clamp-2 leading-relaxed">
+                            {repo.description}
+                          </p>
+                        ) : (
+                          <p className="text-xs italic text-neutral-400">
+                            {isEn ? 'No description provided' : 'Tanpa deskripsi'}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3 text-xs font-bold text-neutral-600 pt-1.5 border-t border-neutral-200">
+                        {repo.language && (
+                          <span className="inline-flex items-center gap-1.5">
+                            <span 
+                              className="w-2.5 h-2.5 rounded-full border border-black/40 shrink-0"
+                              style={{ backgroundColor: getLanguageColor(repo.language) }}
+                            />
+                            <span className="text-neutral-700 font-extrabold">{repo.language}</span>
+                          </span>
+                        )}
+                        <span className="inline-flex items-center gap-1 text-neutral-700">
+                          <Star className="w-3 h-3 text-[#eab308] fill-current" />
+                          <span>{repo.stars}</span>
+                        </span>
+                        {repo.forks > 0 && (
+                          <span className="inline-flex items-center gap-1 text-neutral-700">
+                            <GitFork className="w-3 h-3 text-neutral-500" />
+                            <span>{repo.forks}</span>
+                          </span>
+                        )}
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Refresh and Copy Intel Controls */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2">

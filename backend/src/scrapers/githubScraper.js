@@ -75,8 +75,9 @@ export async function scrapeGithub(rawInput, options = {}) {
     if (userRes.status === 200 && userRes.data?.login) {
       const u = userRes.data;
 
-      // Hitung total stars dari repositori publik
+      // Hitung total stars dan ambil daftar repositori terbaru
       let totalStars = 0;
+      let reposList = [];
       try {
         const reposRes = await axios.get(`https://api.github.com/users/${encodeURIComponent(username)}/repos?per_page=100&sort=pushed`, {
           timeout: 6000,
@@ -84,8 +85,22 @@ export async function scrapeGithub(rawInput, options = {}) {
         });
         if (Array.isArray(reposRes.data)) {
           totalStars = reposRes.data.reduce((acc, r) => acc + (r.stargazers_count || 0), 0);
+          reposList = reposRes.data.slice(0, 12).map(r => ({
+            name: r.name,
+            description: r.description || '',
+            language: r.language || '',
+            stars: Number(r.stargazers_count || 0),
+            forks: Number(r.forks_count || 0),
+            url: r.html_url,
+            isFork: Boolean(r.fork)
+          }));
         }
       } catch (_) {}
+
+      const followers = Number(u.followers || 0);
+      const following = Number(u.following || 0);
+      const publicRepos = Number(u.public_repos || 0);
+      const publicGists = Number(u.public_gists || 0);
 
       mappedData = {
         username: u.login,
@@ -93,11 +108,19 @@ export async function scrapeGithub(rawInput, options = {}) {
         avatar: u.avatar_url || '',
         bio: u.bio || '',
         status: u.hireable ? 'Hireable' : 'Public Developer',
-        followers: Number(u.followers || 0),
-        following: Number(u.following || 0),
-        publicRepos: Number(u.public_repos || 0),
+        followers,
+        following,
+        publicRepos,
         totalStars,
-        publicGists: Number(u.public_gists || 0),
+        publicGists,
+        stats: {
+          followers,
+          following,
+          publicRepos,
+          totalStars,
+          publicGists
+        },
+        reposList,
         location: u.location || '',
         company: u.company || '',
         blog: u.blog ? (u.blog.startsWith('http') ? u.blog : `https://${u.blog}`) : '',
@@ -173,6 +196,14 @@ export async function scrapeGithub(rawInput, options = {}) {
           publicRepos,
           totalStars: 0,
           publicGists: 0,
+          stats: {
+            followers,
+            following,
+            publicRepos,
+            totalStars: 0,
+            publicGists: 0
+          },
+          reposList: [],
           location,
           company,
           blog,
