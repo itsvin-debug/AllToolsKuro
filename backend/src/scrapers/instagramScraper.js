@@ -298,7 +298,8 @@ async function fetchEngineGoogleRelay(username) {
     const gtUrl = `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(target)}`;
     const res = await axios.get(gtUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Cookie': 'CONSENT=YES+; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzEaAmVuIAEaBgiA_LmnBg'
       },
       timeout: 8000,
       validateStatus: (s) => s < 500
@@ -306,7 +307,7 @@ async function fetchEngineGoogleRelay(username) {
 
     const html = typeof res.data === 'string' ? res.data : '';
     if (!html || res.status === 404) {
-      throw new Error('Google Relay empty response');
+      throw new Error(`Google Relay empty or status ${res.status}`);
     }
 
     const descMatch = html.match(/property="og:description" content="([^"]+)"/) || 
@@ -534,23 +535,30 @@ export async function scrapeInstagram(rawInput, options = {}) {
   let resultCrawler = null;
   let resultEmbed = null;
   let resultRelay = null;
+  const debugErrors = {};
 
   // 1. Eksekusi Crawler OpenGraph langsung
   try {
     resultCrawler = await fetchEngineCrawlerOpenGraph(username);
-  } catch (_) {}
+  } catch (err) {
+    debugErrors.crawler = err.message;
+  }
 
   // 2. Jika crawler langsung gagal (misal diblokir IP datacenter AWS di Vercel), jalankan Google Edge Relay
   if (!resultCrawler) {
     try {
       resultRelay = await fetchEngineGoogleRelay(username);
-    } catch (_) {}
+    } catch (err) {
+      debugErrors.relay = err.message;
+    }
   }
 
   // 3. Eksekusi Embed Profil
   try {
     resultEmbed = await fetchEngineEmbedProfile(username);
-  } catch (_) {}
+  } catch (err) {
+    debugErrors.embed = err.message;
+  }
 
   // Deep merge properti dari Jalur 1, Jalur 2, dan Jalur 3
   let mergedData = deepMergeInstagramData(resultCrawler?.data || resultRelay?.data, resultEmbed?.data);
@@ -560,7 +568,9 @@ export async function scrapeInstagram(rawInput, options = {}) {
     try {
       const apiRes = await fetchEngineWebProfileApi(username);
       mergedData = deepMergeInstagramData(mergedData, apiRes?.data);
-    } catch (_) {}
+    } catch (err) {
+      debugErrors.webApi = err.message;
+    }
   }
 
   // JANGAN PERNAH kembalikan objek palsu serba 0 jika tidak ada bukti data nyata
@@ -569,7 +579,8 @@ export async function scrapeInstagram(rawInput, options = {}) {
       success: false,
       statusCode: 404,
       error: 'user_not_found',
-      message: `Akun Instagram @${username} tidak ditemukan atau data publik tidak dapat diakses.`
+      message: `Akun Instagram @${username} tidak ditemukan atau data publik tidak dapat diakses.`,
+      debugErrors
     };
   }
 
