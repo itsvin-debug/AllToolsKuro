@@ -106,9 +106,6 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
   }, [loading]);
 
   const fetchInstagramData = async (cleanUsername, forceRefresh = false) => {
-    const controller = new AbortController();
-    const timeoutTimer = setTimeout(() => controller.abort(), 3500);
-
     const normalizeInstagram = (u) => ({
       username: u.username || cleanUsername,
       nickname: u.full_name || u.name || cleanUsername,
@@ -130,66 +127,80 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
     });
 
-    // Saluran 1: Backend API Gateway
+    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas aman 8.5s
     const runBackend = async () => {
-      const res = await fetch('/api/stalk/instagram', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh }),
-        signal: controller.signal
-      });
-      const ct = res.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) throw new Error('Backend non-json');
-      const text = await res.text();
-      let parsed = null;
-      try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
-      if (res.ok && parsed?.success && parsed?.data) return parsed.data;
-      throw new Error(parsed?.message || 'Backend failed');
+      const backendCtrl = new AbortController();
+      const bTimer = setTimeout(() => backendCtrl.abort(), 8500);
+      try {
+        const res = await fetch('/api/stalk/instagram', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh }),
+          signal: backendCtrl.signal
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) throw new Error('Backend non-json');
+        const text = await res.text();
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
+        if (res.ok && parsed?.success && parsed?.data) return parsed.data;
+        throw new Error(parsed?.message || 'Backend failed');
+      } finally {
+        clearTimeout(bTimer);
+      }
     };
 
-    // Saluran 2: Direct Siputzx API dari browser
+    // Saluran 2: Direct Siputzx API dari browser (batas 3.5s)
     const runSiputzx = async () => {
-      const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`, {
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal
-      });
-      const text = await res.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
-      const u = json?.data || json?.result || json;
-      if (json?.status && u && (u.username || u.name || u.full_name)) {
-        return normalizeInstagram(u);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`, {
+          headers: { 'Accept': 'application/json' },
+          signal: ctrl.signal
+        });
+        const text = await res.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
+        const u = json?.data || json?.result || json;
+        if (json?.status && u && (u.username || u.name || u.full_name)) {
+          return normalizeInstagram(u);
+        }
+        throw new Error('Siputzx empty');
+      } finally {
+        clearTimeout(timer);
       }
-      throw new Error('Siputzx empty');
     };
 
-    // Saluran 3: AllOrigins CORS proxy ke Siputzx
+    // Saluran 3: AllOrigins CORS proxy ke Siputzx (batas 3.5s)
     const runAllOriginsSiputzx = async () => {
-      const targetUrl = `https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`;
-      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
-        signal: controller.signal
-      });
-      const text = await aoRes.text();
-      let json = null;
-      try { json = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
-      const u = json?.data || json?.result || json;
-      if (json?.status && u && (u.username || u.name || u.full_name)) {
-        return normalizeInstagram(u);
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const targetUrl = `https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`;
+        const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
+          signal: ctrl.signal
+        });
+        const text = await aoRes.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
+        const u = json?.data || json?.result || json;
+        if (json?.status && u && (u.username || u.name || u.full_name)) {
+          return normalizeInstagram(u);
+        }
+        throw new Error('AllOrigins empty');
+      } finally {
+        clearTimeout(timer);
       }
-      throw new Error('AllOrigins empty');
     };
 
     try {
-      const winner = await Promise.any([runBackend(), runSiputzx(), runAllOriginsSiputzx()]);
-      controller.abort();
-      return winner;
+      return await Promise.any([runBackend(), runSiputzx(), runAllOriginsSiputzx()]);
     } catch (_) {
       return null;
-    } finally {
-      clearTimeout(timeoutTimer);
     }
   };
 

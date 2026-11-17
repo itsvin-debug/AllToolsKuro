@@ -90,9 +90,6 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
     const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
     if (!clean) return null;
 
-    const controller = new AbortController();
-    const timeoutTimer = setTimeout(() => controller.abort(), 3500);
-
     // Normalizer profil TikTok universal untuk semua sumber API
     const normalizeTikTok = (d, source) => {
       const u = d.user || d;
@@ -124,82 +121,102 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       };
     };
 
-    // Saluran 1: Backend API Gateway (/api/stalk/tiktok)
+    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas aman 8.5s
     const runBackend = async () => {
-      const res = await fetch('/api/stalk/tiktok', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: clean, refresh: forceRefresh }),
-        signal: controller.signal
-      });
-      const ct = res.headers.get('content-type') || '';
-      if (!ct.includes('application/json')) throw new Error('Backend non-json');
-      const text = await res.text();
-      let parsed = null;
-      try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
-      if (res.ok && parsed?.success && parsed?.data) return parsed;
-      throw new Error(parsed?.message || 'Backend empty');
+      const backendCtrl = new AbortController();
+      const bTimer = setTimeout(() => backendCtrl.abort(), 8500);
+      try {
+        const res = await fetch('/api/stalk/tiktok', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ username: clean, refresh: forceRefresh }),
+          signal: backendCtrl.signal
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (!ct.includes('application/json')) throw new Error('Backend non-json');
+        const text = await res.text();
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
+        if (res.ok && parsed?.success && parsed?.data) return parsed;
+        throw new Error(parsed?.message || 'Backend empty');
+      } finally {
+        clearTimeout(bTimer);
+      }
     };
 
-    // Saluran 2: Direct browser TikWM (IP residensial bebas blokir)
+    // Saluran 2: Direct browser TikWM (IP residensial bebas blokir, batas 3.5s)
     const runTikWM = async () => {
-      const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
-        method: 'POST',
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal
-      });
-      const text = await tikRes.text();
-      let tikJson = null;
-      try { tikJson = JSON.parse(text); } catch { throw new Error('TikWM non-json'); }
-      if (tikJson?.data?.user) {
-        return normalizeTikTok(tikJson.data, 'client_tikwm');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+          signal: ctrl.signal
+        });
+        const text = await tikRes.text();
+        let tikJson = null;
+        try { tikJson = JSON.parse(text); } catch { throw new Error('TikWM non-json'); }
+        if (tikJson?.data?.user) {
+          return normalizeTikTok(tikJson.data, 'client_tikwm');
+        }
+        throw new Error('TikWM empty user');
+      } finally {
+        clearTimeout(timer);
       }
-      throw new Error('TikWM empty user');
     };
 
-    // Saluran 3: Direct browser Siputzx API
+    // Saluran 3: Direct browser Siputzx API (batas 3.5s)
     const runSiputzx = async () => {
-      const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`, {
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal
-      });
-      const text = await sipRes.text();
-      let sipJson = null;
-      try { sipJson = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
-      const sData = sipJson?.data || sipJson?.result;
-      if (sipJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
-        return normalizeTikTok(sData, 'client_siputzx');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`, {
+          headers: { 'Accept': 'application/json' },
+          signal: ctrl.signal
+        });
+        const text = await sipRes.text();
+        let sipJson = null;
+        try { sipJson = JSON.parse(text); } catch { throw new Error('Siputzx non-json'); }
+        const sData = sipJson?.data || sipJson?.result;
+        if (sipJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
+          return normalizeTikTok(sData, 'client_siputzx');
+        }
+        throw new Error('Siputzx empty');
+      } finally {
+        clearTimeout(timer);
       }
-      throw new Error('Siputzx empty');
     };
 
-    // Saluran 4: AllOrigins CORS Tunnel
+    // Saluran 4: AllOrigins CORS Tunnel (batas 3.5s)
     const runAllOrigins = async () => {
-      const targetUrl = `https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`;
-      const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
-        signal: controller.signal
-      });
-      const text = await aoRes.text();
-      let aoJson = null;
-      try { aoJson = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
-      const sData = aoJson?.data || aoJson?.result;
-      if (aoJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
-        return normalizeTikTok(sData, 'client_allorigins');
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 3500);
+      try {
+        const targetUrl = `https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`;
+        const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
+          signal: ctrl.signal
+        });
+        const text = await aoRes.text();
+        let aoJson = null;
+        try { aoJson = JSON.parse(text); } catch { throw new Error('AllOrigins non-json'); }
+        const sData = aoJson?.data || aoJson?.result;
+        if (aoJson?.status && sData && (sData.username || sData.uniqueId || sData.nickname)) {
+          return normalizeTikTok(sData, 'client_allorigins');
+        }
+        throw new Error('AllOrigins empty');
+      } finally {
+        clearTimeout(timer);
       }
-      throw new Error('AllOrigins empty');
     };
 
     try {
-      const winner = await Promise.any([runBackend(), runTikWM(), runSiputzx(), runAllOrigins()]);
-      controller.abort();
-      return winner;
+      return await Promise.any([runBackend(), runTikWM(), runSiputzx(), runAllOrigins()]);
     } catch (_) {
       return null;
-    } finally {
-      clearTimeout(timeoutTimer);
     }
   };
 

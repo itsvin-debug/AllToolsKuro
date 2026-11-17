@@ -253,22 +253,15 @@ function apiServicesDevMiddleware() {
         } else if (pathname === '/api/jj/find' || pathname === '/api/jj-finder') {
           targetModulePath = '../api/media.js';
           forcedRoute = 'jj-finder';
-        } else if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk' || pathname === '/api/stalk/tiktok') {
+        } else if (pathname.startsWith('/api/stalk/')) {
+          const stalkMatch = pathname.match(/^\/api\/stalk\/([a-zA-Z0-9_-]+)/);
+          targetModulePath = '../api/media.js';
+          forcedRoute = 'stalk';
+          forcedPlatform = stalkMatch ? stalkMatch[1] : 'tiktok';
+        } else if (pathname === '/api/tools/tiktok-stalk' || pathname === '/api/tiktok-stalk') {
           targetModulePath = '../api/media.js';
           forcedRoute = 'stalk';
           forcedPlatform = 'tiktok';
-        } else if (pathname === '/api/stalk/instagram') {
-          targetModulePath = '../api/media.js';
-          forcedRoute = 'stalk';
-          forcedPlatform = 'instagram';
-        } else if (pathname === '/api/stalk/twitter') {
-          targetModulePath = '../api/media.js';
-          forcedRoute = 'stalk';
-          forcedPlatform = 'twitter';
-        } else if (pathname === '/api/stalk/github') {
-          targetModulePath = '../api/media.js';
-          forcedRoute = 'stalk';
-          forcedPlatform = 'github';
         }
 
         if (targetModulePath) {

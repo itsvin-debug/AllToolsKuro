@@ -197,9 +197,13 @@ export default async function handler(req, res) {
     return jjFinderHandler(req, res);
   }
 
-  // 4. Deteksi platform Stalker dari req.query, req.body, atau URL path
+  // 4. Deteksi platform & target Stalker secara universal (URL Rewrite, Query, & Body)
+  const fullUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const pathMatch = fullUrl.pathname.match(/\/api\/stalk\/([a-zA-Z0-9_-]+)/);
   const platform = (
     req.query?.platform || 
+    fullUrl.searchParams.get('platform') || 
+    (pathMatch && pathMatch[1]) || 
     req.query?.type || 
     body?.platform || 
     body?.type || 
@@ -209,9 +213,29 @@ export default async function handler(req, res) {
     (urlPath.includes('github') ? 'github' : ''))))
   ).toLowerCase();
 
-  const query = (req.query?.q || body?.q || req.query?.query || body?.query || '').trim();
-  const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
-  const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+  const rawInput = (
+    req.query?.username || 
+    req.query?.query || 
+    req.query?.q || 
+    body?.username || 
+    body?.query || 
+    body?.q || 
+    body?.url || 
+    req.query?.url || 
+    fullUrl.searchParams.get('username') || 
+    fullUrl.searchParams.get('query') || 
+    fullUrl.searchParams.get('q') || 
+    ''
+  ).trim();
+
+  const rawTarget = rawInput;
+  const forceRefresh = Boolean(
+    body?.refresh || 
+    body?.forceRefresh || 
+    req.query?.refresh || 
+    req.query?.forceRefresh || 
+    fullUrl.searchParams.get('refresh')
+  );
 
   // ==========================================
   // JALUR 0: SOCIAL MEDIA STALKER
