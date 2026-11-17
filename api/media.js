@@ -158,10 +158,32 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const type = (req.query?.type || req.body?.type || (req.url && req.url.includes('manhwa') ? 'manhwa' : 'anime')).toLowerCase();
-  const query = (req.query?.q || req.body?.q || req.query?.query || req.body?.query || '').trim();
-  const rawGenres = req.query?.genres || req.body?.genres || '';
-  const page = parseInt(req.query?.page || req.body?.page || '1', 10) || 1;
+  // Parse body secara defensif jika berupa JSON string mentah
+  let body = req.body;
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      body = {};
+    }
+  } else if (!body || typeof body !== 'object') {
+    body = {};
+  }
+
+  const urlPath = (req.url || '').toLowerCase();
+  const type = (
+    req.query?.type || 
+    body?.type || 
+    (urlPath.includes('tiktok') ? 'tiktok-stalk' : 
+    (urlPath.includes('instagram') ? 'instagram-stalk' : 
+    (urlPath.includes('twitter') || urlPath.includes('/x') ? 'twitter-stalk' : 
+    (urlPath.includes('github') ? 'github-stalk' : 
+    (urlPath.includes('manhwa') ? 'manhwa' : 'anime')))))
+  ).toLowerCase();
+
+  const query = (req.query?.q || body?.q || req.query?.query || body?.query || '').trim();
+  const rawGenres = req.query?.genres || body?.genres || '';
+  const page = parseInt(req.query?.page || body?.page || '1', 10) || 1;
 
   let genreNames = [];
   if (Array.isArray(rawGenres)) {
@@ -184,8 +206,8 @@ export default async function handler(req, res) {
   // JALUR 0: TIKTOK PROFILE STALKER
   // ==========================================
   if (type === 'tiktok-stalk' || type === 'tiktok_stalk' || type === 'tiktokstalk' || type === 'tiktok') {
-    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
     const result = await scrapeTiktok(rawTarget, { forceRefresh });
     return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
   }
@@ -194,8 +216,8 @@ export default async function handler(req, res) {
   // JALUR 0.1: INSTAGRAM PROFILE STALKER
   // ==========================================
   if (type === 'instagram-stalk' || type === 'instagram_stalk' || type === 'instagram') {
-    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
     const result = await scrapeInstagram(rawTarget, { forceRefresh });
     return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
   }
@@ -204,8 +226,8 @@ export default async function handler(req, res) {
   // JALUR 0.2: X / TWITTER PROFILE STALKER
   // ==========================================
   if (type === 'twitter-stalk' || type === 'twitter_stalk' || type === 'twitter' || type === 'x-stalk' || type === 'x') {
-    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
     const result = await scrapeTwitter(rawTarget, { forceRefresh });
     return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
   }
@@ -214,8 +236,8 @@ export default async function handler(req, res) {
   // JALUR 0.3: GITHUB PROFILE STALKER
   // ==========================================
   if (type === 'github-stalk' || type === 'github_stalk' || type === 'github') {
-    const rawTarget = req.body?.username || req.body?.url || req.query?.username || req.query?.url || query;
-    const forceRefresh = Boolean(req.body?.refresh || req.body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
+    const rawTarget = body?.username || body?.url || req.query?.username || req.query?.url || query;
+    const forceRefresh = Boolean(body?.refresh || body?.forceRefresh || req.query?.refresh || req.query?.forceRefresh);
     const result = await scrapeGithub(rawTarget, { forceRefresh });
     return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
   }

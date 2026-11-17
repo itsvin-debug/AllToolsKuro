@@ -71,7 +71,7 @@ async function extractLayer1Hydration(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const res = await axios.get(profileUrl, {
-      timeout: 8000,
+      timeout: 3500,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': USER_AGENTS[0],
@@ -387,12 +387,38 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  // 1. Layer 1: Node.js Direct Hydration Extractor (Mobile Engine)
-  extractedResult = await extractLayer1Hydration(username);
+  if (process.env.VERCEL === '1') {
+    // Jalur cepat Vercel: jalankan Layer 1 dan Layer 2 secara paralel untuk atasi pemblokiran IP datacenter AWS
+    const layer1Promise = extractLayer1Hydration(username).catch(() => null);
+    const layer2Promise = extractLayer2CloudFallback(username).catch(() => null);
 
-  // 2. Layer 2: Cloud Fallback API (TikWM & Siputzx)
-  if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
-    extractedResult = await extractLayer2CloudFallback(username);
+    const winner = await Promise.race([
+      layer1Promise.then(r => (r && r.user ? r : new Promise(() => {}))),
+      layer2Promise.then(r => (r && r.user ? r : new Promise(() => {}))),
+      new Promise(resolve => setTimeout(() => resolve(null), 3600))
+    ]);
+
+    if (winner && winner.user) {
+      extractedResult = winner;
+    } else {
+      const l1 = await layer1Promise;
+      if (l1 && (l1.user || l1.notFound)) {
+        extractedResult = l1;
+      } else {
+        const l2 = await layer2Promise;
+        if (l2 && (l2.user || l2.notFound)) {
+          extractedResult = l2;
+        }
+      }
+    }
+  } else {
+    // 1. Layer 1: Node.js Direct Hydration Extractor (Mobile Engine)
+    extractedResult = await extractLayer1Hydration(username);
+
+    // 2. Layer 2: Cloud Fallback API (TikWM & Siputzx)
+    if (!extractedResult || (!extractedResult.user && !extractedResult.notFound)) {
+      extractedResult = await extractLayer2CloudFallback(username);
+    }
   }
 
   // 3. Layer 3: Python Anti-Bot Worker (jika di environment lokal)

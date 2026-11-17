@@ -49,6 +49,10 @@
       "destination": "/api/version"
     },
     {
+      "source": "/api/stalk/image-proxy",
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
       "source": "/api/stalk/tiktok",
       "destination": "/api/media?type=tiktok-stalk"
     },
@@ -63,10 +67,6 @@
     {
       "source": "/api/stalk/github",
       "destination": "/api/media?type=github-stalk"
-    },
-    {
-      "source": "/api/stalk/image-proxy",
-      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/tools/tiktok-stalk",
@@ -123,6 +123,10 @@
     {
       "source": "/api/verify-admin",
       "destination": "/api/locked-tools"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
     },
     {
       "source": "/((?!api/|version\\.json|.*\\.apk|assets/).*)",

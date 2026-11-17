@@ -86,6 +86,112 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
     };
   }, [loading]);
 
+  const fetchTikTokData = async (target, forceRefresh = false) => {
+    const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
+    let json = null;
+
+    // 1. Coba backend server terlebih dahulu
+    try {
+      const res = await fetch('/api/stalk/tiktok', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ username: clean, refresh: forceRefresh })
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const parsed = await res.json();
+        if (res.ok && parsed.success && parsed.data) {
+          json = parsed;
+        }
+      }
+    } catch (_) {}
+
+    // 2. Direct browser fallback via TikWM (mendukung CORS dan tidak terkena blokir IP Vercel)
+    if (!json) {
+      try {
+        const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' }
+        });
+        const tikText = await tikRes.text();
+        if (tikText.startsWith('{')) {
+          const tikJson = JSON.parse(tikText);
+          if (tikJson?.data?.user) {
+            const u = tikJson.data.user;
+            const s = tikJson.data.stats || {};
+            json = {
+              success: true,
+              data: {
+                username: u.uniqueId || clean,
+                nickname: u.nickname || clean,
+                avatar: u.avatarLarger || u.avatarMedium || u.avatarThumb || '',
+                bio: u.signature || '',
+                bioLink: u.bioLink?.link || null,
+                verified: Boolean(u.verified),
+                privateAccount: Boolean(u.privateAccount),
+                region: u.region || 'Global',
+                id: u.id || '',
+                secUid: u.secUid || '',
+                createTime: null,
+                profileUrl: `https://www.tiktok.com/@${u.uniqueId || clean}`,
+                stats: {
+                  followers: s.followerCount || 0,
+                  following: s.followingCount || 0,
+                  likes: s.heartCount || s.heart || 0,
+                  videos: s.videoCount || 0,
+                  friends: s.friendCount || 0
+                }
+              }
+            };
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Direct browser fallback via Siputzx API
+    if (!json) {
+      try {
+        const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`);
+        const sipText = await sipRes.text();
+        if (sipText.startsWith('{')) {
+          const sipJson = JSON.parse(sipText);
+          const sData = sipJson?.data || sipJson?.result;
+          if (sipJson?.status && sData) {
+            json = {
+              success: true,
+              data: {
+                username: sData.username || sData.uniqueId || clean,
+                nickname: sData.nickname || sData.name || clean,
+                avatar: sData.avatar || sData.avatarLarger || '',
+                bio: sData.bio || sData.description || '',
+                bioLink: sData.bioLink || null,
+                verified: Boolean(sData.verified),
+                privateAccount: Boolean(sData.privateAccount),
+                region: sData.region || 'Global',
+                id: sData.id || '',
+                secUid: '',
+                createTime: null,
+                profileUrl: `https://www.tiktok.com/@${sData.username || clean}`,
+                stats: {
+                  followers: sData.followers || sData.followerCount || 0,
+                  following: sData.following || sData.followingCount || 0,
+                  likes: sData.likes || sData.heartCount || 0,
+                  videos: sData.videos || sData.videoCount || 0,
+                  friends: 0
+                }
+              }
+            };
+          }
+        }
+      } catch (_) {}
+    }
+
+    return json;
+  };
+
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
     if (!raw) {
@@ -98,25 +204,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
     setProfileData(null);
 
     try {
-      const res = await fetch('/api/stalk/tiktok', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: raw })
-      });
+      const json = await fetchTikTokData(raw, false);
 
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Backend server did not return valid JSON.' : 'Server backend tidak merespons format JSON.');
-      }
-
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || t.errorNotFound);
+      if (!json || !json.data) {
+        throw new Error(isEn ? 'TikTok profile not found or connection blocked.' : t.errorNotFound);
       }
 
       setProfileData(json.data);
@@ -137,25 +228,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/stalk/tiktok', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: target, refresh: true })
-      });
+      const json = await fetchTikTokData(target, true);
 
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Failed to parse server response.' : 'Gagal membaca respons server.');
-      }
-
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || t.errorNotFound);
+      if (!json || !json.data) {
+        throw new Error(isEn ? 'Failed to refresh TikTok profile intel.' : t.errorNotFound);
       }
 
       setProfileData(json.data);
@@ -249,15 +325,20 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
 
       {/* Main Title Banner */}
       <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] relative overflow-hidden">
-        <div className="flex items-start gap-3 sm:gap-4">
-          <div className="p-2.5 sm:p-3.5 bg-black border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0">
-            <TikTokLogo className="w-6 h-6 sm:w-7 sm:h-7" />
-          </div>
-          <div className="space-y-1">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
+        <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+          <div className="flex items-center gap-3 sm:block">
+            <div className="w-11 h-11 sm:w-14 sm:h-14 bg-black border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0 flex items-center justify-center">
+              <TikTokLogo className="w-6 h-6 sm:w-7 sm:h-7" />
+            </div>
+            <h1 className="text-lg sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight sm:hidden leading-tight">
               {t.title}
             </h1>
-            <p className="text-sm md:text-base font-semibold text-neutral-600">
+          </div>
+          <div className="space-y-1">
+            <h1 className="hidden sm:block text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
+              {t.title}
+            </h1>
+            <p className="text-xs sm:text-sm md:text-base font-semibold text-neutral-600 leading-relaxed">
               {t.subtitle}
             </p>
           </div>
@@ -265,9 +346,9 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       </div>
 
       {/* Search & Input Card */}
-      <div className="bg-white border-2 border-black rounded-2xl p-5 md:p-6 shadow-[4px_4px_0px_#000000] space-y-4">
+      <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] space-y-4">
         <form onSubmit={(e) => { e.preventDefault(); handleStalk(); }} className="space-y-3">
-          <label className="block text-xs font-black tracking-wider uppercase text-neutral-800">
+          <label className="block text-[11px] sm:text-xs font-black tracking-wider uppercase text-neutral-800">
             {isEn ? 'Target TikTok Username or Profile URL' : 'Target Username atau Tautan Profil TikTok'}
           </label>
 
@@ -314,8 +395,8 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
         </form>
 
         {/* Quick Target Chips */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-bold text-neutral-600">
-          <span className="text-neutral-400">{isEn ? 'Quick try:' : 'Coba cepat:'}</span>
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs font-bold text-neutral-600">
+          <span className="text-neutral-400 mr-0.5">{isEn ? 'Quick try:' : 'Coba cepat:'}</span>
           {['@tiktok', '@khaby.lame', '@mrbeast', '@zachking'].map(username => (
             <button
               key={username}
@@ -396,7 +477,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
                       referrerPolicy="no-referrer"
                       crossOrigin="anonymous"
                       onError={(e) => {
-                        if (e.target.dataset.triedDirect !== 'true') {
+                        if (e.target.dataset.triedWs !== 'true') {
+                          e.target.dataset.triedWs = 'true';
+                          e.target.src = `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&default=404`;
+                        } else if (e.target.dataset.triedDirect !== 'true') {
                           e.target.dataset.triedDirect = 'true';
                           e.target.src = profileData.avatar;
                         } else {
@@ -476,12 +560,12 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
               </div>
 
               {/* Quick Profile External Link */}
-              <div className="flex sm:flex-col gap-2 w-full sm:w-auto">
+              <div className="grid grid-cols-2 gap-2 w-full mt-3 sm:mt-0 sm:w-auto sm:flex sm:flex-col">
                 <a
                   href={profileData.profileUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex-1 sm:flex-none px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>{t.openTiktok}</span>
@@ -489,7 +573,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
                 <button
                   type="button"
                   onClick={handleCopyProfileUrl}
-                  className="flex-1 sm:flex-none px-4 py-2 bg-white hover:bg-neutral-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 bg-white hover:bg-neutral-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
                 >
                   {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedLink ? (isEn ? 'Copied!' : 'Tersalin!') : t.copyProfileUrl}</span>
@@ -498,7 +582,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
             </div>
 
             {/* 5-Column Stats Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 pt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 pt-2">
               <div className="bg-[#f0fdf4] border-2 border-black rounded-xl p-3.5 shadow-[2px_2px_0px_#000000] text-center space-y-1">
                 <div className="flex items-center justify-center text-emerald-600 mb-1">
                   <Users className="w-4 h-4" />

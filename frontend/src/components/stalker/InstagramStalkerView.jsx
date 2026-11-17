@@ -282,12 +282,17 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
 
       {/* Main Title Banner */}
       <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] relative overflow-hidden">
-        <div className="flex items-start gap-3 sm:gap-4">
-          <div className="p-2 sm:p-2.5 bg-neutral-900 border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0">
-            <InstagramLogo className="w-7 h-7 sm:w-8 sm:h-8" />
+        <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+          <div className="flex items-center gap-3 sm:block">
+            <div className="w-11 h-11 sm:w-14 sm:h-14 bg-neutral-900 border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0 flex items-center justify-center">
+              <InstagramLogo className="w-6 h-6 sm:w-7 sm:h-7" />
+            </div>
+            <h1 className="text-lg sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight sm:hidden leading-tight">
+              Instagram Profile Stalker
+            </h1>
           </div>
           <div className="space-y-1">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
+            <h1 className="hidden sm:block text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
               Instagram Profile Stalker
             </h1>
             <p className="text-xs sm:text-sm md:text-base font-semibold text-neutral-600 leading-relaxed">
@@ -300,7 +305,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       {/* Search & Input Card */}
       <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] space-y-4">
         <form onSubmit={(e) => { e.preventDefault(); handleStalk(); }} className="space-y-3">
-          <label className="block text-xs font-black tracking-wider uppercase text-neutral-800">
+          <label className="block text-[11px] sm:text-xs font-black tracking-wider uppercase text-neutral-800">
             {isEn ? 'Target Instagram Username or Profile URL' : 'Target Username atau Tautan Profil Instagram'}
           </label>
 
@@ -347,8 +352,8 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
         </form>
 
         {/* Quick Target Chips */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-bold text-neutral-600">
-          <span className="text-neutral-400">{isEn ? 'Quick try:' : 'Coba cepat:'}</span>
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs font-bold text-neutral-600">
+          <span className="text-neutral-400 mr-0.5">{isEn ? 'Quick try:' : 'Coba cepat:'}</span>
           {['@instagram', '@cristiano', '@leomessi', '@nasa'].map(username => (
             <button
               key={username}
@@ -428,7 +433,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                       referrerPolicy="no-referrer"
                       crossOrigin="anonymous"
                       onError={(e) => {
-                        if (e.target.dataset.triedDirect !== 'true') {
+                        if (e.target.dataset.triedWs !== 'true') {
+                          e.target.dataset.triedWs = 'true';
+                          e.target.src = `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&default=404`;
+                        } else if (e.target.dataset.triedDirect !== 'true') {
                           e.target.dataset.triedDirect = 'true';
                           e.target.src = profileData.avatar;
                         } else {
@@ -488,12 +496,12 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
               </div>
 
               {/* Quick Actions */}
-              <div className="flex sm:flex-col gap-2 w-full sm:w-auto">
+              <div className="grid grid-cols-2 gap-2 w-full mt-3 sm:mt-0 sm:w-auto sm:flex sm:flex-col">
                 <a
                   href={profileData.profileUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex-1 sm:flex-none px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>{isEn ? 'Open Profile' : 'Buka Profil Instagram'}</span>
@@ -501,7 +509,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
                 <button
                   type="button"
                   onClick={handleCopyProfileUrl}
-                  className="flex-1 sm:flex-none px-4 py-2 bg-white hover:bg-neutral-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 bg-white hover:bg-neutral-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
                 >
                   {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedLink ? (isEn ? 'Copied!' : 'Tersalin!') : (isEn ? 'Copy URL' : 'Salin Tautan')}</span>
@@ -510,7 +518,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
             </div>
 
             {/* Stats Grid */}
-            <div className="grid grid-cols-3 gap-3 pt-2">
+            <div className="grid grid-cols-3 gap-2.5 pt-2">
               <div className="bg-[#fdf4ff] border-2 border-black rounded-xl p-3.5 shadow-[2px_2px_0px_#000000] text-center space-y-1">
                 <div className="flex items-center justify-center text-[#d946ef] mb-1">
                   <Users className="w-4 h-4" />

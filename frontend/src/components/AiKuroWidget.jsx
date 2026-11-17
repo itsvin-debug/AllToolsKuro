@@ -929,20 +929,20 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 handleOpenWidget();
               }
             }}
-            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-white border-2 border-black ${
+            className={`w-11 h-11 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl bg-white border-2 border-black ${
               isButtonDragging 
-                ? 'shadow-[5px_5px_0px_#000000] scale-105 cursor-grabbing' 
-                : 'shadow-[3px_3px_0px_#000000] hover:shadow-[5px_5px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none cursor-grab'
-            } transition-all flex items-center justify-center relative select-none touch-none overflow-hidden p-1`}
+                ? 'shadow-[4px_4px_0px_#000000] scale-105 cursor-grabbing' 
+                : 'shadow-[3px_3px_0px_#000000] hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none cursor-grab'
+            } transition-all flex items-center justify-center relative select-none touch-none overflow-hidden p-0.5 sm:p-1`}
             title="Tarik ke 4 sudut layar (atas/bawah/kiri/kanan) untuk atur posisi, atau klik untuk buka chat"
             aria-label="Buka Asisten KuroBot (Tarik ke 4 sudut untuk atur posisi)"
           >
             {/* Karakter Vektor SVG Elaina */}
-            <KuroCharacter state="wave" size={54} />
+            <KuroCharacter state="wave" size={typeof window !== 'undefined' && window.innerWidth < 640 ? 38 : 48} />
             
             {/* Badge Status Aktif / Ngambek */}
             <span 
-              className={`absolute top-1.5 right-1.5 w-3 h-3 rounded-full border border-black ${
+              className={`absolute top-1 right-1 sm:top-1.5 sm:right-1.5 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border border-black ${
                 angerState.isAngry ? 'bg-rose-500 animate-ping' : 'bg-blue-600 animate-pulse'
               }`} 
             />

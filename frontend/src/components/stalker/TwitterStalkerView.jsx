@@ -84,6 +84,105 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
     };
   }, [loading]);
 
+  const fetchTwitterData = async (target, forceRefresh = false) => {
+    const clean = target.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
+    let json = null;
+
+    // 1. Direct browser fetch ke api.fxtwitter.com (Sangat cepat, bebas blokir IP)
+    try {
+      const fxRes = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(clean)}`, {
+        headers: { 'Accept': 'application/json' }
+      });
+      const fxText = await fxRes.text();
+      if (fxText.startsWith('{')) {
+        const fxJson = JSON.parse(fxText);
+        if (fxJson?.code === 200 && fxJson.user) {
+          const u = fxJson.user;
+          json = {
+            success: true,
+            data: {
+              username: u.screen_name || clean,
+              nickname: u.name || clean,
+              avatar: u.avatar_url ? u.avatar_url.replace('_normal.', '.') : '',
+              banner: u.banner_url || '',
+              bio: u.description || '',
+              bioLink: u.website || null,
+              verified: Boolean(u.verification?.verified || u.verified),
+              privateAccount: Boolean(u.protected),
+              joinedDate: u.joined ? new Date(u.joined).toLocaleDateString(isEn ? 'en-US' : 'id-ID', { month: 'short', year: 'numeric' }) : null,
+              location: u.location || '',
+              profileUrl: `https://x.com/${u.screen_name || clean}`,
+              stats: {
+                followers: u.followers || 0,
+                following: u.following || 0,
+                tweets: u.tweets || 0
+              }
+            }
+          };
+        }
+      }
+    } catch (_) {}
+
+    // 2. Fallback backend server
+    if (!json) {
+      try {
+        const res = await fetch('/api/stalk/twitter', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ username: clean, refresh: forceRefresh })
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const parsed = await res.json();
+          if (res.ok && parsed.success && parsed.data) {
+            json = parsed;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3. Fallback vxtwitter
+    if (!json) {
+      try {
+        const vxRes = await fetch(`https://api.vxtwitter.com/${encodeURIComponent(clean)}`, {
+          headers: { 'Accept': 'application/json' }
+        });
+        const vxText = await vxRes.text();
+        if (vxText.startsWith('{')) {
+          const vxJson = JSON.parse(vxText);
+          if (vxJson?.user_screen_name || vxJson?.user_name) {
+            json = {
+              success: true,
+              data: {
+                username: vxJson.user_screen_name || clean,
+                nickname: vxJson.user_name || clean,
+                avatar: vxJson.user_profile_image_url || '',
+                banner: '',
+                bio: vxJson.text || '',
+                bioLink: null,
+                verified: false,
+                privateAccount: false,
+                joinedDate: null,
+                location: '',
+                profileUrl: `https://x.com/${vxJson.user_screen_name || clean}`,
+                stats: {
+                  followers: vxJson.likes || 0,
+                  following: 0,
+                  tweets: 0
+                }
+              }
+            };
+          }
+        }
+      } catch (_) {}
+    }
+
+    return json;
+  };
+
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
     if (!raw) {
@@ -96,25 +195,10 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
     setProfileData(null);
 
     try {
-      const res = await fetch('/api/stalk/twitter', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: raw })
-      });
+      const json = await fetchTwitterData(raw, false);
 
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Server did not return valid JSON.' : 'Server tidak merespons JSON.');
-      }
-
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || (isEn ? 'X (Twitter) profile not found.' : 'Profil X (Twitter) tidak ditemukan.'));
+      if (!json || !json.data) {
+        throw new Error(isEn ? 'X (Twitter) profile not found.' : 'Profil X (Twitter) tidak ditemukan.');
       }
 
       setProfileData(json.data);
@@ -135,25 +219,10 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/stalk/twitter', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ username: target, refresh: true })
-      });
+      const json = await fetchTwitterData(target, true);
 
-      const rawText = await res.text();
-      let json = null;
-      try {
-        json = JSON.parse(rawText);
-      } catch {
-        throw new Error(isEn ? 'Server did not return valid JSON.' : 'Gagal membaca respons server.');
-      }
-
-      if (!res.ok || json.status === 'error' || json.success === false) {
-        throw new Error(json.message || (isEn ? 'Profile not found.' : 'Profil tidak ditemukan.'));
+      if (!json || !json.data) {
+        throw new Error(isEn ? 'Failed to refresh profile.' : 'Gagal menyegarkan profil.');
       }
 
       setProfileData(json.data);
@@ -252,12 +321,17 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
 
       {/* Main Title Banner */}
       <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] relative overflow-hidden">
-        <div className="flex items-start gap-3 sm:gap-4">
-          <div className="p-2.5 sm:p-3.5 bg-black border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0">
-            <TwitterXLogo className="w-6 h-6 sm:w-7 sm:h-7" />
+        <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+          <div className="flex items-center gap-3 sm:block">
+            <div className="w-11 h-11 sm:w-14 sm:h-14 bg-black border-2 border-black rounded-xl shadow-[3px_3px_0px_#000000] text-white shrink-0 flex items-center justify-center">
+              <TwitterXLogo className="w-6 h-6 sm:w-7 sm:h-7" />
+            </div>
+            <h1 className="text-lg sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight sm:hidden leading-tight">
+              X Profile Stalker
+            </h1>
           </div>
           <div className="space-y-1">
-            <h1 className="text-xl sm:text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
+            <h1 className="hidden sm:block text-2xl md:text-3xl font-black text-black uppercase tracking-tight">
               X / Twitter Profile Stalker
             </h1>
             <p className="text-xs sm:text-sm md:text-base font-semibold text-neutral-600 leading-relaxed">
@@ -270,7 +344,7 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
       {/* Search & Input Card */}
       <div className="bg-white border-2 border-black rounded-2xl p-4 sm:p-6 shadow-[4px_4px_0px_#000000] space-y-4">
         <form onSubmit={(e) => { e.preventDefault(); handleStalk(); }} className="space-y-3">
-          <label className="block text-xs font-black tracking-wider uppercase text-neutral-800">
+          <label className="block text-[11px] sm:text-xs font-black tracking-wider uppercase text-neutral-800">
             {isEn ? 'Target X / Twitter Username or URL' : 'Target Username atau Tautan Akun X (Twitter)'}
           </label>
 
@@ -317,8 +391,8 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
         </form>
 
         {/* Quick Target Chips */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-bold text-neutral-600">
-          <span className="text-neutral-400">{isEn ? 'Quick try:' : 'Coba cepat:'}</span>
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs font-bold text-neutral-600">
+          <span className="text-neutral-400 mr-0.5">{isEn ? 'Quick try:' : 'Coba cepat:'}</span>
           {['@elonmusk', '@nasa', '@playstation', '@openai'].map(username => (
             <button
               key={username}
@@ -415,7 +489,10 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
                         referrerPolicy="no-referrer"
                         crossOrigin="anonymous"
                         onError={(e) => {
-                          if (e.target.dataset.triedDirect !== 'true') {
+                          if (e.target.dataset.triedWs !== 'true') {
+                            e.target.dataset.triedWs = 'true';
+                            e.target.src = `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&default=404`;
+                          } else if (e.target.dataset.triedDirect !== 'true') {
                             e.target.dataset.triedDirect = 'true';
                             e.target.src = profileData.avatar;
                           } else {
@@ -491,12 +568,12 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
                 </div>
 
                 {/* Quick Actions */}
-                <div className="flex sm:flex-col gap-2 w-full sm:w-auto">
+                <div className="grid grid-cols-2 gap-2 w-full mt-3 sm:mt-0 sm:w-auto sm:flex sm:flex-col">
                   <a
                     href={profileData.profileUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex-1 sm:flex-none px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                     <span>{isEn ? 'Open Profile' : 'Buka Profil X'}</span>
@@ -504,7 +581,7 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
                   <button
                     type="button"
                     onClick={handleCopyProfileUrl}
-                    className="flex-1 sm:flex-none px-4 py-2 bg-white hover:bg-neutral-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="px-4 py-2 bg-white hover:bg-neutral-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
                   >
                     {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedLink ? (isEn ? 'Copied!' : 'Tersalin!') : (isEn ? 'Copy URL' : 'Salin Tautan')}</span>
@@ -513,13 +590,13 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-3 gap-3 pt-2">
+              <div className="grid grid-cols-3 gap-2.5 pt-2">
                 <div className="bg-[#f0f9ff] border-2 border-black rounded-xl p-3.5 shadow-[2px_2px_0px_#000000] text-center space-y-1">
                   <div className="flex items-center justify-center text-[#0ea5e9] mb-1">
                     <Users className="w-4 h-4" />
                   </div>
                   <div className="text-lg sm:text-xl font-black text-black">
-                    {formatMetric(profileData.stats?.followers)}
+                    {formatMetric(profileData.stats?.followers ?? profileData.followers)}
                   </div>
                   <div className="text-[11px] font-extrabold uppercase text-neutral-600">
                     {isEn ? 'Followers' : 'Pengikut'}
@@ -531,7 +608,7 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
                     <UserPlus className="w-4 h-4" />
                   </div>
                   <div className="text-lg sm:text-xl font-black text-black">
-                    {formatMetric(profileData.stats?.following)}
+                    {formatMetric(profileData.stats?.following ?? profileData.following)}
                   </div>
                   <div className="text-[11px] font-extrabold uppercase text-neutral-600">
                     {isEn ? 'Following' : 'Mengikuti'}
@@ -543,7 +620,7 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
                     <MessageSquare className="w-4 h-4" />
                   </div>
                   <div className="text-lg sm:text-xl font-black text-black">
-                    {formatMetric(profileData.stats?.tweets)}
+                    {formatMetric(profileData.stats?.tweets ?? profileData.tweets)}
                   </div>
                   <div className="text-[11px] font-extrabold uppercase text-neutral-600">
                     {isEn ? 'Tweets' : 'Postingan'}
