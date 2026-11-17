@@ -17,12 +17,14 @@ export default function StalkerHub({ onBack, onShowToast, lang = 'id' }) {
   const isEn = lang === 'en';
   const [selectedPlatform, setSelectedPlatform] = useState(null);
 
+  const handlePlatformBack = () => setSelectedPlatform(null);
+
   // Jika platform sudah dipilih, render sub-view platform tersebut secara terisolasi
   if (selectedPlatform === 'tiktok') {
     return (
       <TikTokStalkerView 
-        onBack={onBack} 
-        onChangePlatform={() => setSelectedPlatform(null)} 
+        onBack={handlePlatformBack} 
+        onChangePlatform={handlePlatformBack} 
         onShowToast={onShowToast} 
         lang={lang} 
       />
@@ -32,8 +34,8 @@ export default function StalkerHub({ onBack, onShowToast, lang = 'id' }) {
   if (selectedPlatform === 'instagram') {
     return (
       <InstagramStalkerView 
-        onBack={onBack} 
-        onChangePlatform={() => setSelectedPlatform(null)} 
+        onBack={handlePlatformBack} 
+        onChangePlatform={handlePlatformBack} 
         onShowToast={onShowToast} 
         lang={lang} 
       />
@@ -43,8 +45,8 @@ export default function StalkerHub({ onBack, onShowToast, lang = 'id' }) {
   if (selectedPlatform === 'twitter') {
     return (
       <TwitterStalkerView 
-        onBack={onBack} 
-        onChangePlatform={() => setSelectedPlatform(null)} 
+        onBack={handlePlatformBack} 
+        onChangePlatform={handlePlatformBack} 
         onShowToast={onShowToast} 
         lang={lang} 
       />
@@ -54,8 +56,8 @@ export default function StalkerHub({ onBack, onShowToast, lang = 'id' }) {
   if (selectedPlatform === 'github') {
     return (
       <GithubStalkerView 
-        onBack={onBack} 
-        onChangePlatform={() => setSelectedPlatform(null)} 
+        onBack={handlePlatformBack} 
+        onChangePlatform={handlePlatformBack} 
         onShowToast={onShowToast} 
         lang={lang} 
       />

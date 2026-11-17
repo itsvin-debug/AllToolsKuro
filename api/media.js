@@ -117,6 +117,27 @@ function formatUnixTimestamp(unix) {
   }
 }
 
+function extractCleanHandle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+
+  // Bersihkan format URL lengkap atau path sub-halaman
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
+  }
+
+  // Bersihkan prefix @ beserta spasi yang tidak disengaja
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
 async function resolveTikTokUsername(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return '';
   let input = rawInput.trim();
@@ -128,7 +149,7 @@ async function resolveTikTokUsername(rawInput) {
         maxRedirects: 5,
         timeout: 6000,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15'
         }
       });
       const resolved = head.request?.res?.responseUrl || head.config?.url;
@@ -140,16 +161,7 @@ async function resolveTikTokUsername(rawInput) {
     }
   }
 
-  const urlMatch = input.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
-  if (urlMatch && urlMatch[1]) {
-    return urlMatch[1].replace(/\/.*$/, '').trim();
-  }
-
-  if (input.startsWith('@')) {
-    return input.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
-  }
-
-  return input.split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_.]/g, '');
+  return extractCleanHandle(input);
 }
 
 export default async function handler(req, res) {
@@ -228,7 +240,7 @@ export default async function handler(req, res) {
     ''
   ).trim();
 
-  const rawTarget = rawInput;
+  const cleanTarget = extractCleanHandle(rawInput) || rawInput;
   const forceRefresh = Boolean(
     body?.refresh || 
     body?.forceRefresh || 
@@ -243,22 +255,22 @@ export default async function handler(req, res) {
   if (route === 'stalk' || platform) {
     try {
       if (platform === 'tiktok' || platform.includes('tiktok')) {
-        const result = await scrapeTiktok(rawTarget, { forceRefresh });
+        const result = await scrapeTiktok(cleanTarget, { forceRefresh });
         return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
       }
 
       if (platform === 'instagram' || platform.includes('instagram')) {
-        const result = await scrapeInstagram(rawTarget, { forceRefresh });
+        const result = await scrapeInstagram(cleanTarget, { forceRefresh });
         return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
       }
 
       if (platform === 'twitter' || platform === 'x' || platform.includes('twitter')) {
-        const result = await scrapeTwitter(rawTarget, { forceRefresh });
+        const result = await scrapeTwitter(cleanTarget, { forceRefresh });
         return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
       }
 
       if (platform === 'github' || platform.includes('github')) {
-        const result = await scrapeGithub(rawTarget, { forceRefresh });
+        const result = await scrapeGithub(cleanTarget, { forceRefresh });
         return res.status(result.statusCode || (result.success ? 200 : 400)).json(result);
       }
     } catch (err) {

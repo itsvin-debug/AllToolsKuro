@@ -1,10 +1,4 @@
 import axios from 'axios';
-import { execFile } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // In-Memory Cache (TTL 60 detik) untuk proteksi anti-rate-limit
 const profileCache = new Map();
@@ -15,6 +9,25 @@ const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
 ];
+
+export function extractCleanHandle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
+  }
+
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
 
 // Pengurai cerdas tautan & shortlink TikTok (vt/vm) menjadi username murni
 export async function resolveTiktokUsername(rawInput) {
@@ -41,18 +54,7 @@ export async function resolveTiktokUsername(rawInput) {
     }
   }
 
-  // Pola URL web profil atau video tiktok.com/@username
-  const urlMatch = input.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
-  if (urlMatch && urlMatch[1]) {
-    return urlMatch[1].replace(/\/.*$/, '').trim();
-  }
-
-  // Jika diawali simbol @
-  if (input.startsWith('@')) {
-    return input.replace(/^@+/, '').split(/[\/\?\s]/)[0].trim();
-  }
-
-  return input.split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_.]/g, '');
+  return extractCleanHandle(input);
 }
 
 // Konversi timestamp UNIX ke teks tanggal terbaca
@@ -81,12 +83,12 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 3500) {
   }
 }
 
-// Layer 1: Node.js Direct Hydration Extractor (Batas ketat 2.5s agar tidak terkena tarpit WAF Vercel)
+// Layer 1: Node.js Direct Hydration Extractor
 async function extractLayer1Hydration(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const res = await axios.get(profileUrl, {
-      timeout: 2500,
+      timeout: 3500,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': USER_AGENTS[0],
@@ -162,7 +164,7 @@ async function extractLayer1Hydration(username) {
   throw new Error('Layer 1 did not find valid TikTok user data in HTML');
 }
 
-// Engine 2A: TikWM JSON Cloud API (Paling Cepat & Stabil di Cloud Vercel)
+// Engine 2A: TikWM JSON Cloud API
 async function extractTikWM(username) {
   try {
     const res = await fetchWithTimeout(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(username)}`, {
@@ -236,40 +238,6 @@ async function extractSiputzx(username) {
   throw new Error('Siputzx empty');
 }
 
-// Layer 3: Python Anti-Bot Worker (Hanya jika dijalankan di lokal, bukan di Vercel)
-function extractLayer3Python(username) {
-  if (process.env.VERCEL === '1') {
-    return Promise.resolve(null);
-  }
-
-  return new Promise((resolve) => {
-    const scriptPath = path.join(__dirname, 'scraper_fallback.py');
-    execFile('python', [scriptPath, username], { timeout: 8000 }, (err, stdout) => {
-      if (err || !stdout) {
-        resolve(null);
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout);
-        if (parsed.error === 'user_not_found') {
-          resolve({ notFound: true });
-        } else if (parsed.status && parsed.user) {
-          resolve({
-            source: 'layer3_python_worker',
-            user: parsed.user,
-            stats: parsed.stats || {},
-            statsV2: parsed.statsV2 || {}
-          });
-        } else {
-          resolve(null);
-        }
-      } catch {
-        resolve(null);
-      }
-    });
-  });
-}
-
 // Layer 4: TikTok Official oEmbed & Meta Tag Fallback
 async function extractLayer4OEmbed(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
@@ -289,7 +257,6 @@ async function extractLayer4OEmbed(username) {
         let ogImage = '';
         let ogDesc = '';
         try {
-          // Batas 1500ms agar serverless function tidak terhenti jika tiktok.com memblokir IP
           const pageRes = await fetchWithTimeout(profileUrl, {
             headers: { 'User-Agent': USER_AGENTS[0] }
           }, 1500);
@@ -357,7 +324,6 @@ function mapProfileData(raw, username) {
   const followers = Number(stats.followerCount ?? statsV2.followerCount ?? 0);
   const following = Number(stats.followingCount ?? statsV2.followingCount ?? 0);
   
-  // Normalisasi Total Suka (Mengatasi overflow 32-bit int)
   let likes = 0;
   if (stats.heart && Number(stats.heart) > 0) {
     likes = Number(stats.heart);
@@ -397,7 +363,7 @@ function mapProfileData(raw, username) {
 
 // Layanan Utama Pelacak Profil TikTok 100% Mandiri
 export async function stalkTiktokProfile(rawInput, options = {}) {
-  const forceRefresh = Boolean(options.forceRefresh);
+  const forceRefresh = Boolean(options.forceRefresh || options.refresh);
   const username = await resolveTiktokUsername(rawInput);
 
   if (!username) {
@@ -413,7 +379,7 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
   const cacheKey = username.toLowerCase();
   const cached = profileCache.get(cacheKey);
 
-  // 0. Cek In-Memory Cache (jika tidak dipaksa refresh)
+  // Cek In-Memory Cache jika tidak dipaksa refresh
   if (!forceRefresh && cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
     return {
       success: true,
@@ -427,28 +393,19 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  // Eksekusi paralel Engine TikWM, Siputzx, dan Direct Hydration secara serentak
-  // Mesin pertama yang mengembalikan data user valid akan langsung menang (< 2 detik)
+  // Prioritaskan Layer 1 Direct Hydration untuk data & statistik asli 100% akurat
   try {
-    extractedResult = await Promise.any([
-      extractTikWM(username),
-      extractSiputzx(username),
-      extractLayer1Hydration(username)
-    ]);
+    extractedResult = await extractLayer1Hydration(username);
   } catch (_) {
-    // Jika seluruh engine utama gagal, coba Layer 4 (oEmbed) lalu Layer 3 (Python jika di lokal)
     try {
-      extractedResult = await extractLayer4OEmbed(username);
-    } catch (_) {
-      if (process.env.VERCEL !== '1') {
-        try {
-          extractedResult = await extractLayer3Python(username);
-        } catch (_) {}
-      }
+      extractedResult = await extractTikWM(username);
+    } catch (__) {
+      try {
+        extractedResult = await extractSiputzx(username);
+      } catch (___) {}
     }
   }
 
-  // Jika akun resmi dinyatakan tidak ditemukan oleh TikTok
   if (extractedResult?.notFound) {
     return {
       success: false,
@@ -471,7 +428,6 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   const mappedData = mapProfileData(extractedResult, username);
 
-  // Simpan ke In-Memory Cache
   profileCache.set(cacheKey, {
     data: mappedData,
     timestamp: Date.now()
@@ -486,3 +442,9 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
     data: mappedData
   };
 }
+
+export async function scrapeTiktok(target, options = {}) {
+  return await stalkTiktokProfile(target, options);
+}
+
+export default scrapeTiktok;

@@ -25,6 +25,23 @@ import {
   MapPin
 } from 'lucide-react';
 
+function extractCleanHandle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
+  }
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
 function formatMetric(num) {
   if (num === null || num === undefined || isNaN(num)) return '0';
   const val = Number(num);
@@ -85,19 +102,13 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
   }, [loading]);
 
   const fetchTwitterData = async (target, forceRefresh = false) => {
-    let clean = (target || '').trim();
-    const urlMatch = clean.match(/(?:twitter|x)\.com\/([a-zA-Z0-9_]+)/i);
-    if (urlMatch && urlMatch[1]) {
-      clean = urlMatch[1].replace(/\/.*$/, '').trim();
-    } else {
-      clean = clean.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_]/g, '').trim();
-    }
+    const clean = extractCleanHandle(target);
     if (!clean) return null;
 
-    // 1. Direct browser fetch ke api.fxtwitter.com (Sangat cepat, bebas blokir IP, batas 3.5s)
+    // 1. Direct browser fetch ke api.fxtwitter.com (Sangat cepat, bebas blokir IP, batas 4s)
     const runFxTwitter = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
+      const timer = setTimeout(() => ctrl.abort(), 4000);
       try {
         const fxRes = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(clean)}`, {
           headers: { 'Accept': 'application/json' },
@@ -145,10 +156,10 @@ export default function TwitterStalkerView({ onBack, onChangePlatform, onShowToa
       }
     };
 
-    // 2. Fallback backend server (/api/stalk/twitter, batas aman 8.5s)
+    // 2. Fallback backend server (/api/stalk/twitter, batas waktu 15s)
     const runBackend = async () => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 8500);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 15000);
       try {
         const res = await fetch('/api/stalk/twitter', {
           method: 'POST',

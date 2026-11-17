@@ -26,6 +26,23 @@ import {
 } from 'lucide-react';
 import { translations } from '../../utils/translations';
 
+function extractCleanHandle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
+  }
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
 function formatMetric(num) {
   if (num === null || num === undefined || isNaN(num)) return '0';
   const val = Number(num);
@@ -87,13 +104,7 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
   }, [loading]);
 
   const fetchTikTokData = async (target, forceRefresh = false) => {
-    let clean = (target || '').trim();
-    const urlMatch = clean.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
-    if (urlMatch && urlMatch[1]) {
-      clean = urlMatch[1].replace(/\/.*$/, '').trim();
-    } else {
-      clean = clean.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_.]/g, '').trim();
-    }
+    const clean = extractCleanHandle(target);
     if (!clean) return null;
 
     // Normalizer profil TikTok universal untuk semua sumber API
@@ -127,10 +138,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       };
     };
 
-    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas aman 8.5s
+    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 15s
     const runBackend = async () => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 8500);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 15000);
       try {
         const res = await fetch('/api/stalk/tiktok', {
           method: 'POST',
@@ -153,54 +164,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 2: TikTok Official Public oEmbed Endpoint (CORS terbuka bebas blokir, batas 3.5s)
-    const runOEmbed = async () => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
-      try {
-        const oembedUrl = `https://www.tiktok.com/oembed?url=https://www.tiktok.com/@${encodeURIComponent(clean)}`;
-        const oRes = await fetch(oembedUrl, {
-          signal: ctrl.signal
-        });
-        if (!oRes.ok) throw new Error('OEmbed failed');
-        const oJson = await oRes.json();
-        if (oJson?.author_name) {
-          return {
-            success: true,
-            source: 'client_oembed',
-            data: {
-              username: clean,
-              nickname: oJson.author_name || clean,
-              avatar: '',
-              bio: '',
-              bioLink: null,
-              verified: false,
-              privateAccount: false,
-              region: 'Global',
-              id: '',
-              secUid: '',
-              createTime: null,
-              profileUrl: `https://www.tiktok.com/@${clean}`,
-              stats: {
-                followers: 0,
-                following: 0,
-                likes: 0,
-                videos: 0,
-                friends: 0
-              }
-            }
-          };
-        }
-        throw new Error('OEmbed empty');
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
-    // Saluran 3: Direct browser TikWM (IP residensial bebas blokir, batas 3.5s)
+    // Saluran 2: Direct browser TikWM (IP residensial bebas blokir, batas 4s)
     const runTikWM = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
+      const timer = setTimeout(() => ctrl.abort(), 4000);
       try {
         const tikRes = await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(clean)}`, {
           method: 'POST',
@@ -219,10 +186,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 4: Direct browser Siputzx API (batas 3.5s)
+    // Saluran 3: Direct browser Siputzx API (batas 4s)
     const runSiputzx = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
+      const timer = setTimeout(() => ctrl.abort(), 4000);
       try {
         const sipRes = await fetch(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(clean)}`, {
           headers: { 'Accept': 'application/json' },
@@ -241,11 +208,21 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
+    // Prioritaskan backend gateway untuk ekstraksi data lengkap 100% akurat
     try {
-      return await Promise.any([runBackend(), runOEmbed(), runTikWM(), runSiputzx()]);
+      const bData = await runBackend();
+      if (bData?.success && bData?.data) {
+        return bData;
+      }
     } catch (_) {
-      return null;
+      try {
+        return await Promise.any([runTikWM(), runSiputzx()]);
+      } catch (__) {
+        return null;
+      }
     }
+
+    return null;
   };
 
   const handleStalk = async (targetUsername) => {

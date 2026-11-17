@@ -10,6 +10,25 @@ const USER_AGENTS = [
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15'
 ];
 
+export function extractCleanHandle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
+  }
+
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
 // Pengurai cerdas tautan & shortlink TikTok (vt/vm) menjadi username murni
 export async function resolveTiktokUsername(rawInput) {
   if (!rawInput || typeof rawInput !== 'string') return '';
@@ -35,18 +54,7 @@ export async function resolveTiktokUsername(rawInput) {
     }
   }
 
-  // Pola URL web profil atau video tiktok.com/@username
-  const urlMatch = input.match(/tiktok\.com\/@([a-zA-Z0-9_.]+)/i);
-  if (urlMatch && urlMatch[1]) {
-    return urlMatch[1].replace(/\/.*$/, '').trim();
-  }
-
-  // Jika diawali simbol @ (dengan toleransi spasi di depannya)
-  if (input.startsWith('@')) {
-    return input.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
-  }
-
-  return input.split(/[\/\?\s]/)[0].replace(/[^a-zA-Z0-9_.]/g, '');
+  return extractCleanHandle(input);
 }
 
 // Konversi timestamp UNIX ke teks tanggal terbaca
@@ -385,17 +393,17 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  // Eksekusi paralel Engine TikWM, Siputzx, dan Direct Hydration secara serentak
+  // Prioritaskan Layer 1 Direct Hydration untuk data & statistik asli 100% akurat
   try {
-    extractedResult = await Promise.any([
-      extractTikWM(username),
-      extractSiputzx(username),
-      extractLayer1Hydration(username)
-    ]);
+    extractedResult = await extractLayer1Hydration(username);
   } catch (_) {
     try {
-      extractedResult = await extractLayer4OEmbed(username);
-    } catch (_) {}
+      extractedResult = await extractTikWM(username);
+    } catch (__) {
+      try {
+        extractedResult = await extractSiputzx(username);
+      } catch (___) {}
+    }
   }
 
   if (extractedResult?.notFound) {

@@ -3,14 +3,27 @@ import axios from 'axios';
 const profileCache = new Map();
 const CACHE_TTL_MS = 60 * 1000;
 
-function resolveTwitterUsername(raw) {
+export function extractCleanHandle(raw) {
   if (!raw || typeof raw !== 'string') return '';
   let str = raw.trim();
-  const urlMatch = str.match(/(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]+)/i);
-  if (urlMatch && urlMatch[1]) {
-    return urlMatch[1].replace(/\/.*$/, '').trim();
+
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
   }
-  return str.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
+
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
+function resolveTwitterUsername(raw) {
+  return extractCleanHandle(raw);
 }
 
 function formatDate(isoOrDateStr) {

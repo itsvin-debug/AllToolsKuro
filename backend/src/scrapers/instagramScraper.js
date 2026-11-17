@@ -3,14 +3,27 @@ import axios from 'axios';
 const profileCache = new Map();
 const CACHE_TTL_MS = 60 * 1000;
 
-function resolveInstagramUsername(raw) {
+export function extractCleanHandle(raw) {
   if (!raw || typeof raw !== 'string') return '';
   let str = raw.trim();
-  const urlMatch = str.match(/instagram\.com\/([a-zA-Z0-9_.]+)/i);
-  if (urlMatch && urlMatch[1]) {
-    return urlMatch[1].replace(/\/.*$/, '').trim();
+
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
   }
-  return str.replace(/^@+\s*/, '').split(/[\/\?\s]/)[0].trim();
+
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
+function resolveInstagramUsername(raw) {
+  return extractCleanHandle(raw);
 }
 
 function decodeHtmlEntities(str) {
@@ -64,7 +77,7 @@ async function fetchEngineCrawlerOpenGraph(username) {
   for (const ua of crawlers) {
     try {
       const res = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-        timeout: 4500,
+        timeout: 6500,
         validateStatus: (status) => status < 500,
         headers: {
           'User-Agent': ua,
@@ -80,7 +93,10 @@ async function fetchEngineCrawlerOpenGraph(username) {
       }
 
       const html = typeof res.data === 'string' ? res.data : '';
-      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:description"/);
+      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || 
+                        html.match(/content="([^"]+)" property="og:description"/) ||
+                        html.match(/name="description" content="([^"]+)"/) ||
+                        html.match(/content="([^"]+)" name="description"/);
       const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
       const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
 
@@ -93,12 +109,19 @@ async function fetchEngineCrawlerOpenGraph(username) {
         const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
 
         let bio = '';
-        const bioJsonMatch = html.match(/"biography":"([^"]+)"/) || html.match(/"bio":"([^"]+)"/);
-        if (bioJsonMatch && bioJsonMatch[1]) {
-          try {
-            bio = JSON.parse(`"${bioJsonMatch[1]}"`);
-          } catch {
-            bio = bioJsonMatch[1];
+        const bioMetaMatch = html.match(/name="description" content="[^"]*on Instagram: &quot;([^&"]+)&quot;"/) ||
+                             html.match(/content="[^"]*on Instagram: &quot;([^&"]+)&quot;" name="description"/);
+        if (bioMetaMatch && bioMetaMatch[1]) {
+          bio = decodeHtmlEntities(bioMetaMatch[1]);
+        }
+        if (!bio) {
+          const bioJsonMatch = html.match(/"biography":"([^"]+)"/) || html.match(/"bio":"([^"]+)"/);
+          if (bioJsonMatch && bioJsonMatch[1]) {
+            try {
+              bio = JSON.parse(`"${bioJsonMatch[1]}"`);
+            } catch {
+              bio = bioJsonMatch[1];
+            }
           }
         }
         if (!bio && rawDesc.includes(' - ')) {

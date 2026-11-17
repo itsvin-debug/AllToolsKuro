@@ -25,6 +25,23 @@ import {
   MessageCircle
 } from 'lucide-react';
 
+function extractCleanHandle(raw) {
+  if (!raw || typeof raw !== 'string') return '';
+  let str = raw.trim();
+  if (/^https?:\/\//i.test(str) || /(?:tiktok|instagram|twitter|x|github)\.com\//i.test(str)) {
+    try {
+      const urlObj = new URL(str.startsWith('http') ? str : `https://${str}`);
+      const segments = urlObj.pathname.split('/').filter(Boolean);
+      const ignored = ['p', 'reel', 'reels', 'stories', 'tv', 'explore', 'accounts', 'i', 'intent', 'search', 'home', 'video', 'photo'];
+      const validSeg = segments.find(s => !ignored.includes(s.toLowerCase()));
+      if (validSeg) str = validSeg;
+    } catch (_) {}
+  }
+  str = str.replace(/^@+\s*/, '');
+  str = str.split(/[\/\?\&#\s]/)[0];
+  return str.replace(/[^a-zA-Z0-9_.-]/g, '').trim();
+}
+
 function formatMetric(num) {
   if (num === null || num === undefined || isNaN(num)) return '0';
   const val = Number(num);
@@ -127,10 +144,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       profileUrl: `https://www.instagram.com/${u.username || cleanUsername}`
     });
 
-    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas aman 8.5s
+    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas waktu 15s
     const runBackend = async () => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 8500);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 15000);
       try {
         const res = await fetch('/api/stalk/instagram', {
           method: 'POST',
@@ -153,10 +170,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       }
     };
 
-    // Saluran 2: Direct Siputzx API dari browser (batas 3.5s)
+    // Saluran 2: Direct Siputzx API dari browser (batas 4s)
     const runSiputzx = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
+      const timer = setTimeout(() => ctrl.abort(), 4000);
       try {
         const res = await fetch(`https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`, {
           headers: { 'Accept': 'application/json' },
@@ -175,10 +192,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       }
     };
 
-    // Saluran 3: AllOrigins CORS proxy ke Siputzx (batas 3.5s)
+    // Saluran 3: AllOrigins CORS proxy ke Siputzx (batas 4s)
     const runAllOriginsSiputzx = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 3500);
+      const timer = setTimeout(() => ctrl.abort(), 4000);
       try {
         const targetUrl = `https://api.siputzx.my.id/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}`;
         const aoRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`, {
@@ -198,20 +215,24 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     };
 
     try {
-      return await Promise.any([runBackend(), runSiputzx(), runAllOriginsSiputzx()]);
+      const bData = await runBackend();
+      if (bData && (bData.data || bData.success || bData.username)) {
+        return bData.data || bData;
+      }
     } catch (_) {
-      return null;
+      try {
+        return await Promise.any([runSiputzx(), runAllOriginsSiputzx()]);
+      } catch (__) {
+        return null;
+      }
     }
+
+    return null;
   };
 
   const handleStalk = async (targetUsername) => {
     const raw = (targetUsername || inputVal).trim();
-    let cleanUsername = raw
-      .replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, '')
-      .replace(/^@+\s*/, '')
-      .split(/[\/\?\s]/)[0]
-      .replace(/[^a-zA-Z0-9_.]/g, '')
-      .trim();
+    const cleanUsername = extractCleanHandle(raw);
 
     if (!cleanUsername) {
       onShowToast?.(isEn ? 'Please enter an Instagram username or URL.' : 'Masukkan username atau tautan Instagram.', 'warning');
