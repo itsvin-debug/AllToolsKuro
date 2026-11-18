@@ -216,10 +216,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       };
     };
 
-    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 4s
+    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 8.5 detik
     const runBackend = async () => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 4000);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 8500);
       try {
         const res = await fetch('/api/stalk/tiktok', {
           method: 'POST',
