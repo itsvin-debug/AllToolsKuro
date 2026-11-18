@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   X, 
+  Minus,
   Send, 
   Sparkles, 
-  Compass, 
   ArrowUpRight, 
   RotateCcw,
   AlertTriangle,
@@ -18,45 +18,69 @@ import {
   recordDeviceStrike 
 } from '../services/storageService';
 
-// Fungsi utilitas pembersih teks agar ucapan Kuro tampil natural tanpa simbol markdown mentah (** atau #)
+// Bersihkan markdown mentah agar tampilan ucapan Kuro tetap rapi
 function cleanSpeechText(text) {
   if (!text) return '';
   return text
-    .replace(/\*\*(.*?)\*\*/g, '$1') // Buang format tebal bintang ganda
-    .replace(/\*(.*?)\*/g, '$1')     // Buang format miring
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
     .replace(/__(.*?)__/g, '$1')
     .replace(/_(.*?)_/g, '$1')
-    .replace(/#{1,6}\s+/g, '')        // Buang tag heading
-    .replace(/`([^`]+)`/g, '$1')      // Buang backtick inline code
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Ambil teks label link saja
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .trim();
 }
 
-// Data resmi 15 utilitas Kuro Studio untuk sekuens Guided Tour Otomatis
+// Katalog 17 utilitas AllToolsKuro lengkap untuk penjelasan fitur
 const KURO_TOOLS_CATALOG = [
   {
     id: 'downloader',
     name: 'Media Downloader',
     tag: 'All-in-One HD',
-    desc: 'Pengunduh serbaguna untuk mengunduh video, foto slide album, dan audio MP3 tanpa watermark dari TikTok, Instagram, YouTube, dan medsos lainnya dengan kualitas jernih hingga 4K serta opsi 1080p Status WA Anti-Burik agar tidak pecah saat di-upload.'
+    desc: 'Unduh video, album slide foto, dan audio MP3 tanpa watermark dari TikTok, Instagram, YouTube, dan medsos lainnya hingga kualitas 4K & Status WA Anti-Burik 1080p.'
+  },
+  {
+    id: 'tiktokStalker',
+    name: 'Social Media Stalker',
+    tag: 'Multi-Platform OSINT',
+    desc: 'Pantau profil, statistik followers, bio, dan postingan akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login.'
+  },
+  {
+    id: 'resolver',
+    name: 'Safelink & Link Resolver',
+    tag: 'Bypass Link & Iklan',
+    desc: 'Lewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, dll) langsung ke direct download (Mediafire, GDrive, Mega) dan ekstrak seluruh tautan bio Linktree instan.'
+  },
+  {
+    id: 'animeFinder',
+    name: 'Rekomendasi Anime',
+    tag: 'Database MyAnimeList',
+    desc: 'Jelajahi ribuan anime terbaik berdasarkan kombinasi genre favorit, skor rating MyAnimeList, poster visual HD, dan sinopsis lengkap.'
+  },
+  {
+    id: 'manhwaFinder',
+    name: 'Rekomendasi Manhwa',
+    tag: 'Komik Webtoon Korea',
+    desc: 'Temukan komik Korea (Manhwa) terpopuler dengan filter genre, skor pembaca, cover jernih, dan rangkuman alur cerita seru.'
   },
   {
     id: 'jjFinder',
     name: 'Cari Link JJ',
     tag: 'Jedag-Jedug Viral',
-    desc: 'Temukan ribuan sound jedag-jedug viral, preset Alight Motion, dan backsound tren terbaru dengan tautan langsung siap pakai untuk konten kreatifmu.'
+    desc: 'Temukan ribuan sound jedag-jedug viral, template CapCut siap pakai, preset Alight Motion, dan backsound tren terbaru untuk konten kreatif.'
   },
   {
     id: 'pngToPdf',
     name: 'PNG to PDF',
     tag: 'Konversi Dokumen',
-    desc: 'Satukan banyak file gambar atau foto PNG dan JPG menjadi satu berkas PDF rapi dengan tata letak proporsional dan kualitas visual tajam.'
+    desc: 'Satukan banyak file gambar PNG dan JPG menjadi satu berkas PDF rapi dengan tata letak proporsional dan resolusi tajam.'
   },
   {
     id: 'linkToDoc',
     name: 'Link to PDF/PPT',
     tag: 'Ekstraktor Materi',
-    desc: 'Ekstrak dokumen kuliah dan materi presentasi dari Scribd atau SlideShare menjadi berkas PDF atau PPT utuh langsung dari tautan web.'
+    desc: 'Ekstrak dokumen kuliah dan presentasi dari Scribd atau SlideShare menjadi berkas PDF atau PPT utuh langsung dari tautan web.'
   },
   {
     id: 'imageToLink',
@@ -68,7 +92,7 @@ const KURO_TOOLS_CATALOG = [
     id: 'compressor',
     name: 'Kompres Media & PDF',
     tag: 'Hemat Memori',
-    desc: 'Kecilkan ukuran video, foto, dan dokumen PDF secara signifikan tanpa merusak isi, teks hilang, atau tata letak bergeser.'
+    desc: 'Kecilkan ukuran video, foto, dan dokumen PDF secara signifikan tanpa merusak isi atau membuat gambar pecah.'
   },
   {
     id: 'qrStudio',
@@ -80,7 +104,7 @@ const KURO_TOOLS_CATALOG = [
     id: 'audioMerger',
     name: 'Audio Merger',
     tag: 'Kombinasi Suara',
-    desc: 'Gabungkan beberapa trek audio atau musik menjadi satu kesatuan alunan utuh dengan perpindahan lagu yang mulus dan jernih.'
+    desc: 'Gabungkan beberapa trek audio atau musik menjadi satu kesatuan alunan utuh dengan perpindahan lagu yang mulus.'
   },
   {
     id: 'photoStudio',
@@ -92,144 +116,106 @@ const KURO_TOOLS_CATALOG = [
     id: 'videoStudio',
     name: 'Video Studio',
     tag: 'Studio Kreatif',
-    desc: 'Editor video praktis untuk mengatur kecepatan pemutaran, mengubah rasio layar 9:16 untuk story dan 16:9 untuk layar lebar, serta filter visual.'
+    desc: 'Editor video praktis untuk mengatur kecepatan pemutaran, rotasi, rasio layar 9:16 story & 16:9 layar lebar, serta filter visual.'
   },
   {
     id: 'videoTrimmer',
     name: 'Video Trimmer',
     tag: 'Pemotong Presisi',
-    desc: 'Pangkas detik awal atau akhir klip videomu secara akurat tanpa menurunkan bitrate asli atau merusak kualitas audionya.'
+    desc: 'Pangkas detik awal atau akhir klip videomu secara presisi tanpa menurunkan bitrate asli atau merusak kualitas audionya.'
   },
   {
     id: 'bgRemover',
     name: 'Hapus Background',
     tag: 'AI Background Remover',
-    desc: 'Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan AI untuk menghasilkan file PNG transparan yang rapi dan presisi.'
-  },
-  {
-    id: 'resolver',
-    name: 'Safelink & Link Resolver',
-    tag: 'Bypass Link & Iklan',
-    desc: 'Lewati tautan safelink bertingkat (seperti Sfl.gl, SafelinkU, Ouo, Bitly, dll), lewati hitungan detik dan halaman iklan membingungkan untuk langsung mengambil link unduhan asli (Mediafire, Google Drive, Mega, dll) secara instan dan aman.'
-  },
-  {
-    id: 'animeFinder',
-    name: 'Rekomendasi Anime',
-    tag: 'Database Anime HD',
-    desc: 'Jelajahi ribuan anime terbaik berdasarkan genre favorit, skor rating MyAnimeList, poster visual resolusi tinggi, dan sinopsis lengkap.'
-  },
-  {
-    id: 'manhwaFinder',
-    name: 'Rekomendasi Manhwa',
-    tag: 'Komik Webtoon Korea',
-    desc: 'Temukan komik Korea (Manhwa) terpopuler dengan filter genre, rating pembaca, cover jernih, dan rangkuman jalan cerita seru.'
+    desc: 'Hapus latar belakang foto dalam satu kali klik menggunakan kecerdasan buatan untuk menghasilkan file PNG transparan rapi.'
   },
   {
     id: 'ipChecker',
     name: 'IP & DNS Checker',
-    tag: 'Analisis Jaringan & Keamanan',
+    tag: 'Analisis Jaringan',
     desc: 'Cek telemetri IP publik, operator ISP, nomor ASN, koordinat lokasi, dan deteksi VPN/Proxy secara real-time.'
-  },
-  {
-    id: 'tiktokStalker',
-    name: 'Social Media Stalker',
-    tag: 'Multi-Platform OSINT (4 Platform)',
-    desc: 'Pantau intelijen akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login dan tanpa meninggalkan jejak tayangan profil.'
   }
 ];
 
-export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTool }) {
-  // Mode tampilan: 'collapsed' | 'chat_popup' | 'floating_helper'
-  const [mode, setMode] = useState('collapsed');
-  
-  // State animasi karakter: 'idle' | 'wave' | 'talking' | 'confused' | 'thinking' | 'angry'
-  const [animState, setAnimState] = useState('idle');
+const POSITION_STORAGE_KEY = 'kuro_bot_floating_pos';
+const DEVICE_CHAT_STORAGE_KEY = 'kuro_device_ai_chat_history';
 
-  // Posisi docking 4-kuadran pop-up & tombol: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
-  const [dockQuadrant, setDockQuadrant] = useState(() => {
-    if (typeof window === 'undefined') return 'bottom-right';
-    const savedQuadrant = localStorage.getItem('kuro_bot_dock_quadrant');
-    if (savedQuadrant) return savedQuadrant;
-    const oldSide = localStorage.getItem('kuro_chat_dock_side');
-    if (oldSide === 'left') return 'bottom-left';
-    return 'bottom-right';
-  });
+// Hitung koordinat default yang aman pada viewport saat ini
+function computeDefaultPosition(isPopup) {
+  if (typeof window === 'undefined') return { x: 24, y: 100 };
+  const screenW = window.innerWidth;
+  const screenH = window.innerHeight;
+  const isMobile = screenW < 640;
 
-  // State gestur drag tombol melayang (X & Y)
-  const [buttonDragDelta, setButtonDragDelta] = useState({ x: 0, y: 0 });
-  const [isButtonDragging, setIsButtonDragging] = useState(false);
-  const buttonDragStateRef = useRef({
-    startX: 0,
-    startY: 0,
-    startTime: 0,
-    isDragging: false,
-    lastX: 0,
-    lastY: 0
-  });
+  if (isPopup) {
+    const w = isMobile ? Math.floor(screenW * 0.92) : 385;
+    const h = Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560);
+    const x = isMobile ? Math.max(12, Math.floor((screenW - w) / 2)) : Math.max(16, screenW - w - 24);
+    const y = isMobile ? Math.max(16, screenH - h - 100) : Math.max(16, screenH - h - 24);
+    return { x, y };
+  }
 
-  // State gestur drag popup chat (X & Y)
-  const [popupDragDelta, setPopupDragDelta] = useState({ x: 0, y: 0 });
-  const [isPopupDragging, setIsPopupDragging] = useState(false);
-  const popupDragStateRef = useRef({
-    startX: 0,
-    startY: 0,
-    isDragging: false,
-    lastX: 0,
-    lastY: 0
-  });
+  const w = isMobile ? 48 : 56;
+  const h = isMobile ? 48 : 56;
+  const x = isMobile ? Math.max(16, screenW - w - 16) : Math.max(16, screenW - w - 24);
+  const y = isMobile ? Math.max(16, screenH - h - 100) : Math.max(16, screenH - h - 24);
+  return { x, y };
+}
 
-  // Helper kelas CSS untuk posisi 4-kuadran di layar (dengan safe clearance untuk mobile bottom nav)
-  const getQuadrantClasses = (isPopup = false) => {
-    if (isPopup) {
-      switch (dockQuadrant) {
-        case 'top-left':
-          return 'top-20 sm:top-20 left-3 sm:left-6';
-        case 'top-right':
-          return 'top-20 sm:top-20 right-3 sm:right-6';
-        case 'bottom-left':
-          return 'bottom-28 sm:bottom-6 left-3 sm:left-6';
-        case 'bottom-right':
-        default:
-          return 'bottom-28 sm:bottom-6 right-3 sm:right-6';
-      }
-    } else {
-      switch (dockQuadrant) {
-        case 'top-left':
-          return 'top-20 sm:top-20 left-4 sm:left-6 flex-row-reverse';
-        case 'top-right':
-          return 'top-20 sm:top-20 right-4 sm:right-6';
-        case 'bottom-left':
-          return 'bottom-28 sm:bottom-6 left-4 sm:left-6 flex-row-reverse';
-        case 'bottom-right':
-        default:
-          return 'bottom-28 sm:bottom-6 right-4 sm:right-6';
+// Muat dan validasi koordinat tersimpan
+function getInitialPosition() {
+  if (typeof window === 'undefined') return { x: 24, y: 100 };
+  try {
+    const raw = localStorage.getItem(POSITION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (
+        typeof parsed.x === 'number' && 
+        typeof parsed.y === 'number' && 
+        !isNaN(parsed.x) && 
+        !isNaN(parsed.y) &&
+        parsed.x >= 0 && 
+        parsed.y >= 0 &&
+        parsed.x < window.innerWidth &&
+        parsed.y < window.innerHeight
+      ) {
+        return parsed;
       }
     }
-  };
+  } catch (_) {}
+  return computeDefaultPosition(false);
+}
 
-  // Fungsi rotasi cepat posisi widget melayang ke 4 kuadran (Kanan-Bawah -> Kiri-Bawah -> Kiri-Atas -> Kanan-Atas)
-  const cycleDockQuadrant = () => {
-    const quadrants = ['bottom-right', 'bottom-left', 'top-left', 'top-right'];
-    const currentIndex = quadrants.indexOf(dockQuadrant);
-    const nextQuadrant = quadrants[(currentIndex + 1) % quadrants.length];
-    setDockQuadrant(nextQuadrant);
-    try {
-      localStorage.setItem('kuro_bot_dock_quadrant', nextQuadrant);
-      localStorage.setItem('kuro_chat_dock_side', nextQuadrant.includes('left') ? 'left' : 'right');
-    } catch (_) {}
-  };
+export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTool }) {
+  // Mode tampilan: false = collapsed (tombol mengambang), true = chat popup terbuka
+  const [isOpen, setIsOpen] = useState(false);
+  const [animState, setAnimState] = useState('idle');
+
+  // Posisi mengambang persisten
+  const [pos, setPos] = useState(getInitialPosition);
+  const widgetRef = useRef(null);
+
+  // State gestur drag
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStateRef = useRef({
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
+    isDragging: false,
+    startTime: 0
+  });
 
   // Modal alert syarat isi nama panggilan
   const [showNameAlert, setShowNameAlert] = useState(false);
 
-  // State sistem ngambek per perangkat (3-Strike System & 30 Menit Cooldown)
+  // Status ngambek per perangkat (3-Strike System & 30 Menit Cooldown)
   const [angerState, setAngerState] = useState(() => getDeviceAngerState());
   const [remainingCountdown, setRemainingCountdown] = useState('');
 
-  // Kunci penyimpanan riwayat lokal terisolasi khusus perangkat ini saja
-  const DEVICE_CHAT_STORAGE_KEY = 'kuro_device_ai_chat_history';
-
-  // Obrolan terisolasi per perangkat
+  // Riwayat pesan tersimpan per perangkat
   const [messages, setMessages] = useState(() => {
     try {
       const saved = localStorage.getItem(DEVICE_CHAT_STORAGE_KEY);
@@ -237,7 +223,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
-    } catch (e) {}
+    } catch (_) {}
     return [];
   });
 
@@ -245,17 +231,69 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   const [isTyping, setIsTyping] = useState(false);
   const [displayedReply, setDisplayedReply] = useState('');
 
-  // Tour State
-  const [isTourActive, setIsTourActive] = useState(false);
-  const [tourIndex, setTourIndex] = useState(0);
-  const [highlightedToolId, setHighlightedToolId] = useState(null);
-
   const messagesEndRef = useRef(null);
   const typingTimerRef = useRef(null);
-  const tourSequenceRef = useRef(null);
   const hasGreetedRef = useRef(false);
 
-  // Monitor status ngambek dan live countdown 30 menit
+  // Fungsi Strict Viewport Clamping (mencegah koordinat keluar batas layar)
+  const clampPosition = useCallback((targetPos, openState) => {
+    if (typeof window === 'undefined') return targetPos;
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+    const isMobile = screenW < 640;
+
+    const el = widgetRef.current;
+    const rect = el ? el.getBoundingClientRect() : null;
+
+    const widgetWidth = rect?.width || (openState ? Math.min(Math.floor(screenW * 0.92), 385) : (isMobile ? 48 : 56));
+    const widgetHeight = rect?.height || (openState ? Math.min(Math.floor(screenH * 0.82), 560) : (isMobile ? 48 : 56));
+
+    // Beri batas bawah ekstra untuk mobile bottom nav (96px)
+    const bottomClearance = isMobile ? 96 : 16;
+    const topClearance = 16;
+    const horizontalPadding = 12;
+
+    const rawX = (typeof targetPos?.x === 'number' && !isNaN(targetPos.x)) 
+      ? targetPos.x 
+      : (screenW - widgetWidth - 24);
+    const rawY = (typeof targetPos?.y === 'number' && !isNaN(targetPos.y)) 
+      ? targetPos.y 
+      : (screenH - widgetHeight - bottomClearance);
+
+    const safeX = Math.max(horizontalPadding, Math.min(rawX, screenW - widgetWidth - horizontalPadding));
+    const safeY = Math.max(topClearance, Math.min(rawY, screenH - widgetHeight - bottomClearance));
+
+    return { x: Math.round(safeX), y: Math.round(safeY) };
+  }, []);
+
+  // Strict Viewport Clamping otomatis saat resize layar, perubahan mode, atau isi pesan
+  useEffect(() => {
+    const handleViewportCheck = () => {
+      setPos(prev => {
+        const clamped = clampPosition(prev, isOpen);
+        if (clamped.x !== prev.x || clamped.y !== prev.y) {
+          try {
+            localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(clamped));
+          } catch (_) {}
+          return clamped;
+        }
+        return prev;
+      });
+    };
+
+    handleViewportCheck();
+    const rafId = requestAnimationFrame(handleViewportCheck);
+    const timer = setTimeout(handleViewportCheck, 120);
+
+    window.addEventListener('resize', handleViewportCheck);
+    return () => {
+      window.removeEventListener('resize', handleViewportCheck);
+      cancelAnimationFrame(rafId);
+      clearTimeout(timer);
+    };
+  }, [isOpen, messages.length, displayedReply, clampPosition]);
+
+  // Monitor status ngambek dan live countdown
   useEffect(() => {
     const updateAngerTimer = () => {
       const current = getDeviceAngerState();
@@ -276,7 +314,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     return () => clearInterval(interval);
   }, []);
 
-  // Simpan riwayat secara lokal di perangkat ini saja setiap kali ada obrolan baru
+  // Simpan riwayat chat lokal di perangkat
   useEffect(() => {
     try {
       if (messages.length > 0) {
@@ -284,15 +322,15 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       } else {
         localStorage.removeItem(DEVICE_CHAT_STORAGE_KEY);
       }
-    } catch (e) {}
+    } catch (_) {}
   }, [messages]);
 
-  // Auto-scroll riwayat obrolan ke bawah
+  // Auto-scroll obrolan ke bagian bawah
   useEffect(() => {
-    if (mode === 'chat_popup') {
+    if (isOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, displayedReply, mode]);
+  }, [messages, displayedReply, isOpen]);
 
   // Efek mengetik bertahap karakter per karakter (Typewriter Effect + Lip-Sync)
   const streamText = useCallback((fullText, onComplete, finalAnim = 'idle') => {
@@ -306,7 +344,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setDisplayedReply('');
 
     let currentIndex = 0;
-    const speed = 18;
+    const speed = 16;
 
     typingTimerRef.current = setInterval(() => {
       currentIndex += 1;
@@ -323,7 +361,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }, speed);
   }, []);
 
-  // Sapaan otomatis saat pengguna pertama kali membuka web (Hanya jika nama sudah terisi)
+  // Sapaan otomatis pertama kali jika nama sudah terisi
   useEffect(() => {
     if (hasGreetedRef.current) return;
     hasGreetedRef.current = true;
@@ -334,29 +372,28 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     try {
       const saved = localStorage.getItem(DEVICE_CHAT_STORAGE_KEY);
       if (saved && JSON.parse(saved).length > 0) return;
-    } catch (e) {}
+    } catch (_) {}
 
     const greetTimer = setTimeout(() => {
-      setMode('chat_popup');
+      setIsOpen(true);
       setAnimState('wave');
 
-      const greetingText = `Halo ${userName}! Aku KuroBot, asisten AI dan maskot resmi AllToolsKuro. Ada yang bisa aku bantu seputar fitur dan navigasi hari ini?`;
+      const greetingText = `Halo ${userName}! Aku KuroBot, asisten AI resmi AllToolsKuro. Ada yang bisa aku bantu seputar fitur dan navigasi hari ini?`;
       
       setTimeout(() => {
         streamText(greetingText, () => {
           setMessages([{ sender: 'ai', text: greetingText, animation: 'idle' }]);
         });
-      }, 700);
+      }, 600);
     }, 900);
 
     return () => clearTimeout(greetTimer);
   }, [streamText]);
 
-  // Buka widget secara manual dengan pemeriksaan nama pengguna
+  // Buka jendela chat secara manual
   const handleOpenWidget = () => {
     const userName = getDeviceUserName();
 
-    // 1. Validasi Nama Pengguna & Syarat Akses Chatbot
     if (!userName || !userName.trim()) {
       if (currentScreen !== 'welcome' && onNavigateScreen) {
         onNavigateScreen('welcome');
@@ -369,33 +406,66 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       return;
     }
 
-    setMode('chat_popup');
+    setIsOpen(true);
     setAnimState('wave');
 
     if (messages.length === 0) {
-      const greeting = `Halo ${userName}! Aku KuroBot, asisten AI dan maskot resmi AllToolsKuro. Ada yang bisa aku bantu seputar fitur dan navigasi hari ini?`;
+      const greeting = `Halo ${userName}! Aku KuroBot, asisten AI resmi AllToolsKuro. Ada yang bisa aku bantu seputar fitur dan navigasi hari ini?`;
       streamText(greeting, () => {
         setMessages([{ sender: 'ai', text: greeting, animation: 'idle' }]);
       });
     } else {
-      setTimeout(() => setAnimState('idle'), 1200);
+      setTimeout(() => setAnimState('idle'), 1000);
     }
   };
 
-  // Fitur Hapus Riwayat Khusus Perangkat Ini & Reset ke Sapaan Awal
+  // Tutup dan perkecil jendela chat ke launcher mengambang
+  const handleCloseWidget = () => {
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    setIsTyping(false);
+    setIsOpen(false);
+    setAnimState('idle');
+  };
+
+  // Navigasi ke fitur terpilih & perkecil jendela chat
+  const handleOpenTool = (toolId) => {
+    if (onOpenTool) {
+      onOpenTool(toolId);
+    }
+    handleCloseWidget();
+  };
+
+  // Aksi Jelaskan Semua Fitur (menampilkan daftar 17 fitur di dalam pesan chat)
+  const handleExplainAllFeatures = () => {
+    const userName = getDeviceUserName() || 'Kawan';
+    const introText = `Halo ${userName}! AllToolsKuro memiliki ${KURO_TOOLS_CATALOG.length} utilitas lengkap untuk kebutuhan media, dokumen, dan intelijen digital secara gratis. Berikut daftar lengkap seluruh fiturnya:`;
+
+    setMessages(prev => [
+      ...prev,
+      { sender: 'user', text: 'Jelaskan Semua Fitur' },
+      { 
+        sender: 'ai', 
+        text: introText, 
+        animation: 'wave',
+        isCatalogList: true 
+      }
+    ]);
+    setAnimState('wave');
+  };
+
+  // Hapus riwayat chat di perangkat & reset
   const handleClearHistory = () => {
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
       typingTimerRef.current = null;
     }
-    if (tourSequenceRef.current) {
-      clearTimeout(tourSequenceRef.current);
-      tourSequenceRef.current = null;
-    }
 
     try {
       localStorage.removeItem(DEVICE_CHAT_STORAGE_KEY);
-    } catch (e) {}
+    } catch (_) {}
 
     setMessages([]);
     setDisplayedReply('');
@@ -403,132 +473,64 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setAnimState('wave');
 
     const userName = getDeviceUserName() || 'Kawan';
-    const welcomeReset = `Halo ${userName}! Aku KuroBot, asisten AI dan maskot resmi AllToolsKuro. Ada yang bisa aku bantu seputar fitur dan navigasi hari ini?`;
+    const welcomeReset = `Halo ${userName}! Aku KuroBot, asisten AI resmi AllToolsKuro. Riwayat obrolan telah dibersihkan. Ada yang ingin ditanyakan seputar fitur hari ini?`;
     setTimeout(() => {
       streamText(welcomeReset, () => {
         setMessages([{ sender: 'ai', text: welcomeReset, animation: 'idle' }]);
       });
-    }, 450);
+    }, 300);
   };
 
-  // Batalkan seluruh timer tour
-  const handleCancelTour = () => {
-    if (typingTimerRef.current) {
-      clearInterval(typingTimerRef.current);
-      typingTimerRef.current = null;
-    }
-    if (tourSequenceRef.current) {
-      clearTimeout(tourSequenceRef.current);
-      tourSequenceRef.current = null;
-    }
-    document.querySelectorAll('.ring-blue-500').forEach(el => {
-      el.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white', 'transition-all', 'duration-300');
+  // Rotasi cepat posisi widget ke 4 sudut layar yang aman
+  const cycleQuadrantPosition = () => {
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+    const isMobile = screenW < 640;
+
+    const w = isOpen ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 56);
+    const h = isOpen ? Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560) : (isMobile ? 48 : 56);
+    const bottomClearance = isMobile ? 96 : 16;
+
+    const corners = [
+      { x: screenW - w - 16, y: screenH - h - bottomClearance }, // Bawah-Kanan
+      { x: 16, y: screenH - h - bottomClearance },                // Bawah-Kiri
+      { x: 16, y: 16 },                                          // Atas-Kiri
+      { x: screenW - w - 16, y: 16 }                             // Atas-Kanan
+    ];
+
+    // Cari sudut terdekat saat ini lalu pilih sudut berikutnya
+    let closestIndex = 0;
+    let minDistance = Infinity;
+    corners.forEach((c, idx) => {
+      const d = Math.hypot(c.x - pos.x, c.y - pos.y);
+      if (d < minDistance) {
+        minDistance = d;
+        closestIndex = idx;
+      }
     });
 
-    setIsTourActive(false);
-    setHighlightedToolId(null);
+    const nextCorner = corners[(closestIndex + 1) % corners.length];
+    const clamped = clampPosition(nextCorner, isOpen);
+    setPos(clamped);
+    try {
+      localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(clamped));
+    } catch (_) {}
   };
 
-  const handleCloseWidget = () => {
-    handleCancelTour();
-    setMode('collapsed');
-    setAnimState('idle');
-  };
-
-  // Auto-scroll ke elemen kartu alat di halaman beranda
-  const scrollToToolElement = (toolId) => {
-    const el = document.getElementById(`tool-${toolId}`);
-    if (!el) return;
-
-    document.querySelectorAll('.ring-blue-500').forEach(node => {
-      node.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white');
-    });
-
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.classList.add('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white', 'transition-all', 'duration-300');
-    setHighlightedToolId(toolId);
-  };
-
-  // Eksekusi sekuens tour per fitur
-  const executeTourStep = useCallback((index) => {
-    if (index >= KURO_TOOLS_CATALOG.length) {
-      document.querySelectorAll('.ring-blue-500').forEach(el => {
-        el.classList.remove('ring-4', 'ring-blue-500', 'ring-offset-2', 'ring-offset-white');
-      });
-
-      setHighlightedToolId(null);
-      setIsTourActive(false);
-
-      const userName = getDeviceUserName() || 'Kawan';
-      const finishMsg = `Selesai! Itu dia ${KURO_TOOLS_CATALOG.length} fitur hebat di AllToolsKuro, ${userName}! Silakan coba salah satu alat yang kamu butuhkan sekarang!`;
-      streamText(finishMsg, () => {
-        setMessages(prev => [...prev, { sender: 'ai', text: finishMsg, animation: 'wave' }]);
-      }, 'wave');
-      return;
-    }
-
-    if (currentScreen !== 'welcome' && onNavigateScreen) {
-      onNavigateScreen('welcome');
-    }
-
-    const currentTool = KURO_TOOLS_CATALOG[index];
-    setTourIndex(index);
-    scrollToToolElement(currentTool.id);
-
-    const stepSpeech = `[${index + 1}/${KURO_TOOLS_CATALOG.length}] ${currentTool.name} (${currentTool.tag}): ${currentTool.desc}`;
-    streamText(stepSpeech, () => {
-      setMessages(prev => [...prev, { 
-        sender: 'ai', 
-        text: stepSpeech, 
-        animation: 'talking', 
-        toolId: currentTool.id,
-        tourStep: index + 1 
-      }]);
-
-      tourSequenceRef.current = setTimeout(() => {
-        executeTourStep(index + 1);
-      }, 5500);
-    });
-  }, [streamText, currentScreen, onNavigateScreen]);
-
-  // Mulai tour seluruh fitur
-  const handleStartTour = () => {
-    setMode('floating_helper');
-    setIsTourActive(true);
-    setTourIndex(0);
-    executeTourStep(0);
-  };
-
-  // Navigasi ke fitur tunggal
-  const handleGuideSpecificTool = (toolId, customText) => {
-    setMode('floating_helper');
-    setIsTourActive(false);
-    scrollToToolElement(toolId);
-
-    const tool = KURO_TOOLS_CATALOG.find(t => t.id === toolId);
-    const explanation = cleanSpeechText(customText) || (tool 
-      ? `Ini dia fitur ${tool.name}! ${tool.desc} Klik tombol Buka Fitur untuk langsung menggunakannya.`
-      : 'Fitur siap digunakan!');
-
-    streamText(explanation, () => {
-      setMessages(prev => [...prev, { sender: 'ai', text: explanation, animation: 'talking', toolId }]);
-    });
-  };
-
-  // Kirim pesan obrolan ke Backend (dengan sistem peringatan kata kasar & ngambek 30 menit)
+  // Kirim pesan obrolan (dengan proteksi kata kasar & ngambek 30 menit)
   const handleSendMessage = async (customMessage = null) => {
     const textToSend = (customMessage || inputText).trim();
     if (!textToSend || isTyping) return;
 
     const userName = getDeviceUserName() || 'Kawan';
 
-    // 1. CEK STATUS NGAMBEK 30 MENIT PER PERANGKAT
+    // 1. Cek status ngambek
     const currentAnger = getDeviceAngerState();
     if (currentAnger.isAngry) {
       const totalSeconds = Math.max(0, Math.floor(currentAnger.remainingMs / 1000));
       const mins = Math.floor(totalSeconds / 60);
       const secs = totalSeconds % 60;
-      const angryRefusal = `? Hmph! Aku masih ngambek sama kamu, ${userName}! Jangan ajak aku bicara dulu! (Sisa waktu ngambek: ${mins} menit ${secs} detik).`;
+      const angryRefusal = `Hmph! Aku masih ngambek sama kamu, ${userName}! Jangan ajak aku bicara dulu! (Sisa waktu ngambek: ${mins} menit ${secs} detik).`;
 
       setInputText('');
       setAnimState('angry');
@@ -542,8 +544,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       return;
     }
 
-    // 2. DETEKSI KATA KASAR / SLURS / MAKIAN / SLANG GAUL KOTOR
-    const isProfane = /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard|anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|ngentd|bangsat|bgst|bngst|bajingan|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|anj|anjr|anjir|kelamin|titit|tetek|toket|penis|vagina)\b/i.test(textToSend);
+    // 2. Deteksi kata kasar & makian
+    const isProfane = /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard|anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|bangsat|bgst|bngst|bajingan|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|dick|pussy|cunt|anj|anjr|anjir)\b/i.test(textToSend);
 
     if (isProfane) {
       setInputText('');
@@ -558,13 +560,13 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       let warningMsg = '';
       let targetAnim = 'confused';
       if (strikeResult.strikes === 1) {
-        warningMsg = `? Hmph! ${userName}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)`;
+        warningMsg = `Hmph! ${userName}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)`;
         targetAnim = 'confused';
       } else if (strikeResult.strikes === 2) {
-        warningMsg = `? Mou! Sudah kubilang jangan bicara kasar, ${userName}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek dan tidak mau bicara denganmu lagi! (Peringatan 2/3)`;
+        warningMsg = `Mou! Sudah kubilang jangan bicara kasar, ${userName}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek! (Peringatan 2/3)`;
         targetAnim = 'angry';
       } else {
-        warningMsg = `? Cukup! Aku benar-benar marah dan ngambek padamu, ${userName}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)`;
+        warningMsg = `Cukup! Aku benar-benar marah dan ngambek padamu, ${userName}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)`;
         targetAnim = 'angry';
       }
 
@@ -575,7 +577,22 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       return;
     }
 
-    // 3. JIKA BUKAN KATA KASAR, PROSES CHAT KE BACKEND
+    // 3. Deteksi lokal pertanyaan pengenalan & daftar semua fitur
+    const lower = textToSend.toLowerCase();
+    if (
+      lower.includes('jelaskan semua fitur') || 
+      lower.includes('semua fitur') || 
+      lower.includes('daftar fitur') || 
+      lower.includes('list fitur') || 
+      lower.includes('apa saja fiturnya') ||
+      lower.includes('fitur apa saja')
+    ) {
+      setInputText('');
+      handleExplainAllFeatures();
+      return;
+    }
+
+    // 4. Proses chat ke backend
     setInputText('');
     setDisplayedReply('');
 
@@ -595,132 +612,117 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         })
       });
 
-      if (!res.ok) {
-        throw new Error(`HTTP error ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
       const data = await res.json();
       const reply = cleanSpeechText(data.reply || `Halo ${userName}! Ada yang bisa KuroBot bantu seputar AllToolsKuro?`);
-      const isValidContext = data.is_valid_context !== undefined ? data.is_valid_context : (data.isValidContext !== undefined ? data.isValidContext : true);
-      const anim = (!isValidContext || data.animation === 'confused' || data.animation === 'angry') ? data.animation || 'confused' : (data.animation || 'talking');
-      const action = data.action || 'none';
+      const anim = (data.animation === 'confused' || data.animation === 'angry') ? data.animation : (data.animation || 'talking');
       const targetTool = data.target_tool || data.targetTool || null;
 
       setAnimState(anim);
 
-      if (action === 'start_tour') {
-        handleStartTour();
-      } else if (action === 'navigate_tool' && targetTool) {
-        handleGuideSpecificTool(targetTool, reply);
+      if (data.action === 'start_tour' || data.action === 'explain_features') {
+        handleExplainAllFeatures();
       } else {
         streamText(reply, () => {
-          setMessages(prev => [...prev, { sender: 'ai', text: reply, animation: anim }]);
+          setMessages(prev => [...prev, { 
+            sender: 'ai', 
+            text: reply, 
+            animation: anim,
+            toolId: targetTool
+          }]);
         }, anim);
       }
-    } catch (err) {
-      console.warn('[KuroBot] Request fallback:', err);
-      const lower = textToSend.toLowerCase();
-
-      // Filter kata kasar & ujaran kebencian di fallback
-      const isFallbackProfane = /\b(nigga|nigger|negro|niggas|niggers|chink|spic|kike|faggot|retard|anjing|asw|asu|babi|kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|bangsat|bgst|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|fuck|shit|bitch|anj|anjr|anjir)\b/i.test(lower);
-      if (isFallbackProfane) {
-        const strikeResult = recordDeviceStrike();
-        setAngerState(getDeviceAngerState());
-        let abusiveMsg = `? Hmph! ${userName}, kata-kata itu tidak sopan sama sekali! Tolong jaga bahasamu ya, jangan membuat Kuro kesal! (Peringatan 1/3)`;
-        if (strikeResult.strikes === 2) {
-          abusiveMsg = `? Mou! Sudah kubilang jangan bicara kasar, ${userName}! Kalau kamu mengulanginya sekali lagi, Kuro benar-benar akan ngambek dan tidak mau bicara denganmu lagi! (Peringatan 2/3)`;
-        } else if (strikeResult.strikes >= 3) {
-          abusiveMsg = `? Cukup! Aku benar-benar marah dan ngambek padamu, ${userName}! Jangan ajak aku bicara selama 30 menit ke depan! Hmph! 💢 (Peringatan 3/3)`;
-        }
-        setAnimState('angry');
-        streamText(abusiveMsg, () => {
-          setMessages(prev => [...prev, { sender: 'ai', text: abusiveMsg, animation: 'angry' }]);
-        }, 'angry');
+    } catch (_) {
+      // Fallback offline jika koneksi AI terganggu
+      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('linktree')) {
+        const fbMsg = `Ini dia fitur Safelink & Linktree Resolver, ${userName}! Alat instan untuk melewati tautan iklan bertingkat (Sfl.gl, SafelinkU, Ouo) langsung ke unduhan Mediafire/GDrive dan mengekstrak tautan Linktree.`;
+        setAnimState('talking');
+        streamText(fbMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: fbMsg, animation: 'talking', toolId: 'resolver' }]);
+        });
         return;
       }
 
-      // Deteksi pertanyaan identitas & pengenalan web AllToolsKuro di fallback
-      const isWebIntro = /\b(web apa|situs apa|aplikasi apa|apk apa|buat apa|fungsi web|kegunaan web|gunanya web|alltoolskuro|bisa ngapain|bisa apa|apa itu|ini web apa|web apa ini|situs ini buat apa)\b/i.test(lower);
-      if (isWebIntro) {
-        const introReply = `Halo ${userName}! AllToolsKuro adalah platform web utilitas serbaguna yang dirancang untuk mempermudah berbagai kebutuhan digitalmu secara gratis! ✨\n\nDi sini kamu bisa menggunakan ${KURO_TOOLS_CATALOG.length} fitur lengkap:\n• Social Media Stalker: Intelijen akun multi-platform (TikTok, Instagram, X/Twitter, GitHub) 100% anonim tanpa login.\n• Safelink & Linktree Resolver: Lewati link iklan bertingkat (Sfl.gl, SafelinkU, Ouo) ke direct download (Mediafire, GDrive, Mega) dan ekstrak ratusan tautan aggregator Linktree secara instan.\n• Rekomendasi Anime & Manhwa: Temukan ribuan anime MAL dan komik webtoon Korea berdasarkan saringan multi-genre.\n• Cari Link JJ: Ribuan template CapCut, preset Alight Motion, dan XML Google Drive.\n• Media Downloader: Unduh video tanpa watermark TikTok, IG, YT (kualitas HD hingga Status WA Anti-Burik).\n• Studio Visual AI: Hapus Background AI, QR Code Studio, Photo & Video Studio, dan Kompres Media.\n• Konversi Dokumen: PNG to PDF dan materi Scribd/SlideShare.\n\nMau Kuro pandu mencoba fitur yang mana hari ini?`;
-        setAnimState('wave');
-        streamText(introReply, () => {
-          setMessages(prev => [...prev, { sender: 'ai', text: introReply, animation: 'wave' }]);
-        }, 'wave');
+      if (lower.includes('stalk') || lower.includes('tiktok') || lower.includes('instagram') || lower.includes('twitter') || lower.includes('github')) {
+        const fbMsg = `Fitur Social Media Stalker siap memantau profil TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login, ${userName}!`;
+        setAnimState('talking');
+        streamText(fbMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: fbMsg, animation: 'talking', toolId: 'tiktokStalker' }]);
+        });
         return;
       }
 
-      if (lower.includes('safelink') || lower.includes('bypass') || lower.includes('shortlink') || lower.includes('sfl') || lower.includes('linktree') || lower.includes('bio link') || lower.includes('bypas') || lower.includes('baypas') || lower.includes('mediafire')) {
-        handleGuideSpecificTool('resolver', `Tentu saja, ${userName}! Ini dia fitur Safelink & Linktree Resolver. Alat cepat untuk melewati tautan safelink bertingkat seperti Sfl.gl atau SafelinkU agar langsung membuka file unduhan aslinya, serta mengekstrak isi bio Linktree secara otomatis.`);
+      if (lower.includes('anime')) {
+        const fbMsg = `Fitur Rekomendasi Anime menyediakan ribuan judul terbaik berdasarkan kombinasi genre dan rating MyAnimeList, ${userName}.`;
+        setAnimState('talking');
+        streamText(fbMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: fbMsg, animation: 'talking', toolId: 'animeFinder' }]);
+        });
         return;
       }
 
-      if (lower.includes('anime') || lower.includes('mal') || lower.includes('kartun jepang') || lower.includes('wibu')) {
-        handleGuideSpecificTool('animeFinder', `Tentu saja, ${userName}! Ini dia fitur Rekomendasi Anime. Kamu bisa mencari ribuan anime terbaik berdasarkan kombinasi genre dan skor rating MyAnimeList!`);
+      if (lower.includes('manhwa')) {
+        const fbMsg = `Fitur Rekomendasi Manhwa menghadirkan katalog komik Korea terlengkap dengan sinopsis dan skor pembaca, ${userName}.`;
+        setAnimState('talking');
+        streamText(fbMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: fbMsg, animation: 'talking', toolId: 'manhwaFinder' }]);
+        });
         return;
       }
 
-      if (lower.includes('manhwa') || lower.includes('komik') || lower.includes('webtoon') || lower.includes('manga korea')) {
-        handleGuideSpecificTool('manhwaFinder', `Tentu, ${userName}! Ini fitur Rekomendasi Manhwa. Jelajahi komik webtoon Korea terpopuler dengan cover jernih dan sinopsis seru.`);
+      if (lower.includes('capcut') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('jj')) {
+        const fbMsg = `Fitur Cari Link JJ menyediakan ribuan sound viral, preset Alight Motion, dan template CapCut siap pakai, ${userName}.`;
+        setAnimState('talking');
+        streamText(fbMsg, () => {
+          setMessages(prev => [...prev, { sender: 'ai', text: fbMsg, animation: 'talking', toolId: 'jjFinder' }]);
+        });
         return;
       }
 
-      if (lower.includes('capcut') || lower.includes('template') || lower.includes('preset') || lower.includes('alight motion') || lower.includes('xml') || lower.includes('cc') || lower.includes('jj')) {
-        handleGuideSpecificTool('jjFinder', `Tentu, ${userName}! Fitur Cari Link JJ menyediakan ribuan template CapCut, preset Alight Motion, dan file XML Google Drive yang siap digunakan.`);
-        return;
-      }
-
-      if (lower.includes('stalk') || lower.includes('kepoin') || lower.includes('stalker') || lower.includes('tiktok') || lower.includes('instagram') || lower.includes('twitter') || lower.includes('github stalk') || lower.includes('osint') || lower.includes('profil ig') || lower.includes('profil twitter')) {
-        handleGuideSpecificTool('tiktokStalker', `Tentu, ${userName}! Gunakan Social Media Stalker untuk melihat detail profil, bio, dan statistik akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa jejak kunjungan.`);
-        return;
-      }
-
-      if (lower.includes('ip') || lower.includes('isp') || lower.includes('asn') || lower.includes('dns') || lower.includes('vpn') || lower.includes('lokasi ip')) {
-        handleGuideSpecificTool('ipChecker', `Tentu, ${userName}! Fitur IP & DNS Checker siap menampilkan telemetri jaringan, provider ISP, dan deteksi VPN kamu secara lengkap.`);
-        return;
-      }
-
-      const fallbackMsg = `? Eh? Pertanyaan di luar topik! Silakan tanyakan seputar fitur Safelink Bypasser, Rekomendasi Anime/Manhwa, Cari Link JJ, atau ${KURO_TOOLS_CATALOG.length} alat lainnya di AllToolsKuro saja ya, ${userName}.`;
+      const defaultFallback = `KuroBot siap membantu kebutuhan media, dokumen, dan navigasi di AllToolsKuro, ${userName}! Tanyakan seputar fitur yang tersedia atau klik 'Jelaskan Semua Fitur'.`;
       setAnimState('confused');
-      streamText(fallbackMsg, () => {
-        setMessages(prev => [...prev, { sender: 'ai', text: fallbackMsg, animation: 'confused' }]);
+      streamText(defaultFallback, () => {
+        setMessages(prev => [...prev, { sender: 'ai', text: defaultFallback, animation: 'confused' }]);
       }, 'confused');
     }
   };
 
-  // ─── GESTUR DRAG TOMBOL MELAYANG (4-KUADRAN: ATAS/BAWAH/KIRI/KANAN) ───
-  const handleButtonStart = (e) => {
-    // Hanya tangani klik mouse utama (kiri) atau sentuhan jari
+  // ─── GESTUR DRAGGING DENGAN CLAMPING PREVENT-OFFSCREEN ───
+  const handleDragStart = (e) => {
+    if (e.target.closest('button') || e.target.closest('input')) return;
     if (e.button !== undefined && e.button !== 0) return;
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    buttonDragStateRef.current = {
+
+    dragStateRef.current = {
       startX: clientX,
       startY: clientY,
-      startTime: Date.now(),
+      originX: pos.x,
+      originY: pos.y,
       isDragging: false,
-      lastX: clientX,
-      lastY: clientY
+      lastDx: 0,
+      lastDy: 0,
+      startTime: Date.now()
     };
 
-    const handleMove = (moveEvent) => {
-      const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
-      const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
-      const deltaX = currentX - buttonDragStateRef.current.startX;
-      const deltaY = currentY - buttonDragStateRef.current.startY;
-      buttonDragStateRef.current.lastX = currentX;
-      buttonDragStateRef.current.lastY = currentY;
+    const handleMove = (moveEv) => {
+      const curX = moveEv.touches ? moveEv.touches[0].clientX : moveEv.clientX;
+      const curY = moveEv.touches ? moveEv.touches[0].clientY : moveEv.clientY;
+      const dx = curX - dragStateRef.current.startX;
+      const dy = curY - dragStateRef.current.startY;
+      dragStateRef.current.lastDx = dx;
+      dragStateRef.current.lastDy = dy;
 
-      // Ambang batas gerakan 6px untuk membedakan antara klik biasa dan gestur tarik
-      if (!buttonDragStateRef.current.isDragging && (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6)) {
-        buttonDragStateRef.current.isDragging = true;
-        setIsButtonDragging(true);
+      if (!dragStateRef.current.isDragging && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+        dragStateRef.current.isDragging = true;
+        setIsDragging(true);
       }
 
-      if (buttonDragStateRef.current.isDragging) {
-        if (moveEvent.cancelable) moveEvent.preventDefault();
-        setButtonDragDelta({ x: deltaX, y: deltaY });
+      if (dragStateRef.current.isDragging) {
+        if (moveEv.cancelable) moveEv.preventDefault();
+        setDragOffset({ x: dx, y: dy });
       }
     };
 
@@ -731,34 +733,27 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       window.removeEventListener('touchend', handleEnd);
       window.removeEventListener('touchcancel', handleEnd);
 
-      const { startX, startY, startTime, isDragging: wasDragging, lastX, lastY } = buttonDragStateRef.current;
+      const { isDragging: wasDragging, originX, originY, startTime } = dragStateRef.current;
       const duration = Date.now() - startTime;
-      const totalDeltaX = lastX - startX;
-      const totalDeltaY = lastY - startY;
 
-      setIsButtonDragging(false);
-      setButtonDragDelta({ x: 0, y: 0 });
+      setIsDragging(false);
+      setDragOffset({ x: 0, y: 0 });
 
-      // Jika bukan drag (gerakan kecil di bawah 8px dan durasi singkat), buka widget
-      if (!wasDragging && Math.abs(totalDeltaX) < 8 && Math.abs(totalDeltaY) < 8 && duration < 500) {
+      // Jika hanya ketukan singkat tanpa drag pada tombol launcher, buka chat
+      if (!wasDragging && !isOpen && duration < 350) {
         handleOpenWidget();
         return;
       }
 
-      // Hitung snap kuadran ke 4 sudut layar: Kiri-Atas, Kanan-Atas, Kiri-Bawah, Kanan-Bawah
-      const screenWidth = window.innerWidth || document.documentElement.clientWidth;
-      const screenHeight = window.innerHeight || document.documentElement.clientHeight;
-
-      const isLeft = lastX < screenWidth * 0.5;
-      const isTop = lastY < screenHeight * 0.5;
-
-      const finalQuadrant = `${isTop ? 'top' : 'bottom'}-${isLeft ? 'left' : 'right'}`;
-
-      setDockQuadrant(finalQuadrant);
-      try {
-        localStorage.setItem('kuro_bot_dock_quadrant', finalQuadrant);
-        localStorage.setItem('kuro_chat_dock_side', isLeft ? 'left' : 'right');
-      } catch (err) {}
+      if (wasDragging) {
+        const rawNewX = originX + (dragStateRef.current.lastDx || 0);
+        const rawNewY = originY + (dragStateRef.current.lastDy || 0);
+        const clamped = clampPosition({ x: rawNewX, y: rawNewY }, isOpen);
+        setPos(clamped);
+        try {
+          localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(clamped));
+        } catch (_) {}
+      }
     };
 
     window.addEventListener('mousemove', handleMove);
@@ -768,80 +763,13 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     window.addEventListener('touchcancel', handleEnd);
   };
 
-  // ─── GESTUR DRAG POPUP CHAT (SNAP KE 4 KUADRAN) ───
-  const handlePopupDragStart = (e) => {
-    // Abaikan jika menyentuh tombol di dalam header
-    if (e.target.closest('button')) return;
-    if (e.button !== undefined && e.button !== 0) return;
-
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    popupDragStateRef.current = {
-      startX: clientX,
-      startY: clientY,
-      isDragging: false,
-      lastX: clientX,
-      lastY: clientY
-    };
-
-    const handleMove = (moveEvent) => {
-      const currentX = moveEvent.touches ? moveEvent.touches[0].clientX : moveEvent.clientX;
-      const currentY = moveEvent.touches ? moveEvent.touches[0].clientY : moveEvent.clientY;
-      const deltaX = currentX - popupDragStateRef.current.startX;
-      const deltaY = currentY - popupDragStateRef.current.startY;
-      popupDragStateRef.current.lastX = currentX;
-      popupDragStateRef.current.lastY = currentY;
-
-      if (!popupDragStateRef.current.isDragging && (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6)) {
-        popupDragStateRef.current.isDragging = true;
-        setIsPopupDragging(true);
-      }
-
-      if (popupDragStateRef.current.isDragging) {
-        if (moveEvent.cancelable) moveEvent.preventDefault();
-        setPopupDragDelta({ x: deltaX, y: deltaY });
-      }
-    };
-
-    const handleEnd = () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleEnd);
-      window.removeEventListener('touchmove', handleMove);
-      window.removeEventListener('touchend', handleEnd);
-      window.removeEventListener('touchcancel', handleEnd);
-
-      const { isDragging: wasDragging, lastX, lastY } = popupDragStateRef.current;
-
-      setIsPopupDragging(false);
-      setPopupDragDelta({ x: 0, y: 0 });
-
-      if (!wasDragging) return;
-
-      const screenWidth = window.innerWidth || document.documentElement.clientWidth;
-      const screenHeight = window.innerHeight || document.documentElement.clientHeight;
-
-      const isLeft = lastX < screenWidth * 0.5;
-      const isTop = lastY < screenHeight * 0.5;
-
-      const finalQuadrant = `${isTop ? 'top' : 'bottom'}-${isLeft ? 'left' : 'right'}`;
-
-      setDockQuadrant(finalQuadrant);
-      try {
-        localStorage.setItem('kuro_bot_dock_quadrant', finalQuadrant);
-        localStorage.setItem('kuro_chat_dock_side', isLeft ? 'left' : 'right');
-      } catch (err) {}
-    };
-
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleEnd);
-    window.addEventListener('touchmove', handleMove, { passive: false });
-    window.addEventListener('touchend', handleEnd);
-    window.addEventListener('touchcancel', handleEnd);
-  };
+  // Posisi render visual saat ini (posisi dasar + offset pergeseran selama drag)
+  const currentRenderX = pos.x + dragOffset.x;
+  const currentRenderY = pos.y + dragOffset.y;
 
   return (
     <>
-      {/* ─── 1. MODAL ALERT PERINGATAN WAJIB ISI NAMA (NEOBRUTALIST TERANG) ─── */}
+      {/* ─── 1. MODAL ALERT PERINGATAN WAJIB ISI NAMA ─── */}
       {showNameAlert && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
           <div 
@@ -874,106 +802,76 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         </div>
       )}
 
-      {/* ─── PANDUAN VISUAL SNAP 4-KUADRAN SAAT DRAGGING ─── */}
-      {(isButtonDragging || isPopupDragging) && (
-        <div className="fixed inset-0 z-40 pointer-events-none p-4 grid grid-cols-2 grid-rows-2 gap-4 animate-in fade-in duration-150">
-          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-start justify-start p-3">
-            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
-              Kiri-Atas
-            </span>
-          </div>
-          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-start justify-end p-3">
-            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
-              Kanan-Atas
-            </span>
-          </div>
-          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-end justify-start p-3">
-            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
-              Kiri-Bawah
-            </span>
-          </div>
-          <div className="border-2 border-dashed border-blue-500 bg-blue-500/10 rounded-2xl flex items-end justify-end p-3">
-            <span className="text-[10px] font-mono font-black bg-blue-600 text-white px-2 py-0.5 rounded border border-black shadow-[1px_1px_0px_#000000]">
-              Kanan-Bawah
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* ─── 2. TOMBOL WIDGET MELAYANG (COLLAPSED) DENGAN DOCKING 4-KUADRAN ─── */}
-      {mode === 'collapsed' && (
+      {/* ─── 2. TOMBOL LAUNCHER MENGAMBANG (COLLAPSED) — SELALU ADA DI LAYAR ─── */}
+      {!isOpen && (
         <div 
-          className={`fixed z-50 flex items-center gap-2 group ${
-            isButtonDragging ? '' : 'transition-all duration-300 ease-out'
-          } ${getQuadrantClasses(false)}`}
+          ref={widgetRef}
+          onMouseDown={handleDragStart}
+          onTouchStart={handleDragStart}
           style={{
-            transform: (buttonDragDelta.x || buttonDragDelta.y) 
-              ? `translate(${buttonDragDelta.x}px, ${buttonDragDelta.y}px)` 
-              : 'none'
+            position: 'fixed',
+            left: `${currentRenderX}px`,
+            top: `${currentRenderY}px`,
+            zIndex: 50
           }}
+          className={`flex items-center gap-2 select-none touch-none ${
+            isDragging ? 'cursor-grabbing' : 'cursor-grab transition-[left,top] duration-150 ease-out'
+          }`}
         >
-          {/* Label Sapaan saat Hover di Desktop */}
-          <div className="hidden sm:flex items-center gap-1.5 bg-white text-black border-2 border-black px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_#000000] text-xs font-bold font-mono pointer-events-none group-hover:opacity-100 opacity-90 transition-opacity select-none">
+          {/* Label Sapaan Desktop */}
+          <div className="hidden sm:flex items-center gap-1.5 bg-white text-black border-2 border-black px-3 py-1.5 rounded-xl shadow-[3px_3px_0px_#000000] text-xs font-bold font-mono pointer-events-none select-none">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <span>Tanya KuroBot</span>
           </div>
 
-          <div
-            role="button"
-            tabIndex={0}
-            onMouseDown={handleButtonStart}
-            onTouchStart={handleButtonStart}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleOpenWidget();
-              }
-            }}
-            className={`w-11 h-11 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl bg-white border-2 border-black ${
-              isButtonDragging 
-                ? 'shadow-[4px_4px_0px_#000000] scale-105 cursor-grabbing' 
-                : 'shadow-[3px_3px_0px_#000000] hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 active:shadow-none cursor-grab'
-            } transition-all flex items-center justify-center relative select-none touch-none overflow-hidden p-0.5 sm:p-1`}
-            title="Tarik ke 4 sudut layar (atas/bawah/kiri/kanan) untuk atur posisi, atau klik untuk buka chat"
-            aria-label="Buka Asisten KuroBot (Tarik ke 4 sudut untuk atur posisi)"
+          <button
+            type="button"
+            onClick={handleOpenWidget}
+            className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white border-2 border-black ${
+              isDragging 
+                ? 'shadow-[4px_4px_0px_#000000] scale-105' 
+                : 'shadow-[3px_3px_0px_#000000] hover:shadow-[4px_4px_0px_#000000] hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5'
+            } transition-all flex items-center justify-center relative overflow-hidden p-1 cursor-pointer`}
+            title="Klik untuk buka chat, atau tahan & geser untuk atur posisi"
+            aria-label="Buka Asisten KuroBot"
           >
-            {/* Karakter Vektor SVG Elaina */}
-            <KuroCharacter state="wave" size={typeof window !== 'undefined' && window.innerWidth < 640 ? 38 : 48} />
+            <KuroCharacter state="wave" size={typeof window !== 'undefined' && window.innerWidth < 640 ? 38 : 46} />
             
-            {/* Badge Status Aktif / Ngambek */}
+            {/* Status Aktif / Ngambek */}
             <span 
-              className={`absolute top-1 right-1 sm:top-1.5 sm:right-1.5 w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full border border-black ${
+              className={`absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full border border-black ${
                 angerState.isAngry ? 'bg-rose-500 animate-ping' : 'bg-blue-600 animate-pulse'
               }`} 
             />
 
-            {/* Indikator Geser Halus di Bagian Bawah Tombol */}
-            <div className="absolute bottom-1 inset-x-0 flex justify-center items-center pointer-events-none opacity-50">
-              <div className="w-4 h-1 rounded-full bg-black/40" />
+            {/* Indikator Titik Geser */}
+            <div className="absolute bottom-1 inset-x-0 flex justify-center items-center pointer-events-none opacity-40">
+              <div className="w-3.5 h-0.5 rounded-full bg-black" />
             </div>
-          </div>
+          </button>
         </div>
       )}
 
-      {/* ─── 3. POPUP CHAT INTERAKTIF NEOBRUTALIST (TERANG & BERKARAKTER ANIME) ─── */}
-      {mode === 'chat_popup' && (
+      {/* ─── 3. POPUP JENDELA CHAT (EXPANDED) — STRICT VIEWPORT CLAMPED ─── */}
+      {isOpen && (
         <div 
-          className={`fixed z-50 w-[92vw] sm:w-[385px] max-h-[82vh] sm:max-h-[560px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-200 ${
-            isPopupDragging ? 'select-none' : 'transition-all duration-300 ease-out'
-          } ${getQuadrantClasses(true)}`}
+          ref={widgetRef}
           style={{
-            transform: (popupDragDelta.x || popupDragDelta.y) 
-              ? `translate(${popupDragDelta.x}px, ${popupDragDelta.y}px)` 
-              : 'none'
+            position: 'fixed',
+            left: `${currentRenderX}px`,
+            top: `${currentRenderY}px`,
+            zIndex: 50
           }}
+          className={`w-[92vw] sm:w-[385px] max-h-[82vh] sm:max-h-[560px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150 ${
+            isDragging ? 'select-none' : 'transition-[left,top] duration-150 ease-out'
+          }`}
         >
-          
-          {/* Header Popup: Drag Handle, Karakter, Nama, & Kontrol */}
+          {/* Header Popup: Drag Handle, Karakter, Nama, & Kontrol Minimalkan */}
           <div 
-            onMouseDown={handlePopupDragStart}
-            onTouchStart={handlePopupDragStart}
+            onMouseDown={handleDragStart}
+            onTouchStart={handleDragStart}
             className={`p-3 bg-neutral-50 text-black border-b-2 border-black flex items-center justify-between select-none touch-none ${
-              isPopupDragging ? 'cursor-grabbing bg-neutral-100' : 'cursor-grab'
+              isDragging ? 'cursor-grabbing bg-neutral-100' : 'cursor-grab'
             }`}
           >
             <div className="flex items-center gap-2.5 pointer-events-none">
@@ -994,26 +892,26 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               </div>
             </div>
 
-            {/* Indikator Drag Handle & Tombol Aksi */}
+            {/* Kontrol Header */}
             <div className="flex items-center gap-1.5">
-              {/* Tombol Rotasi Cepat Posisi 4-Kuadran */}
+              {/* Tombol Rotasi Cepat Posisi 4 Sudut */}
               <button
                 type="button"
-                onClick={cycleDockQuadrant}
+                onClick={cycleQuadrantPosition}
                 className="w-7 h-7 rounded-lg bg-white hover:bg-neutral-100 text-neutral-800 border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
-                title={`Pindah Posisi Layar (Saat ini: ${dockQuadrant})`}
-                aria-label="Pindah sudut kuadran posisi widget"
+                title="Pindah ke Sudut Layar Lainnya"
+                aria-label="Pindah sudut posisi widget"
               >
                 <Move className="w-3.5 h-3.5 stroke-[2.5]" />
               </button>
 
-              {/* Petunjuk Visual Drag Geser */}
+              {/* Indikator Geser */}
               <div 
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-neutral-300 bg-white text-neutral-500 text-[9px] font-mono select-none"
-                title="Tarik ke 4 sudut (atas/bawah/kiri/kanan) untuk atur posisi"
+                className="hidden xs:flex items-center gap-1 px-1.5 py-0.5 rounded border border-neutral-300 bg-white text-neutral-500 text-[9px] font-mono select-none"
+                title="Tahan dan geser untuk memindahkan jendela chat"
               >
                 <GripHorizontal className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline font-bold">Geser</span>
+                <span className="font-bold">Geser</span>
               </div>
 
               {/* Tombol Hapus Riwayat Chat */}
@@ -1027,22 +925,23 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
               </button>
 
-              {/* Tombol Tour Fitur */}
-              <button
-                type="button"
-                onClick={handleStartTour}
-                className="px-2 py-1 bg-amber-400 hover:bg-amber-300 text-black text-xs font-black rounded-lg border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center gap-1 transition-all cursor-pointer"
-                title={`Mulai Tour ${KURO_TOOLS_CATALOG.length} Fitur`}
-              >
-                <Compass className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span className="hidden xs:inline">Tour</span>
-              </button>
-
-              {/* Tombol Tutup */}
+              {/* Tombol Minimalkan (-) */}
               <button
                 type="button"
                 onClick={handleCloseWidget}
                 className="w-7 h-7 rounded-lg bg-white hover:bg-neutral-100 text-neutral-700 hover:text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                title="Minimalkan ke Tombol Mengambang"
+                aria-label="Minimalkan Chat"
+              >
+                <Minus className="w-4 h-4 stroke-[2.5]" />
+              </button>
+
+              {/* Tombol Tutup (X) */}
+              <button
+                type="button"
+                onClick={handleCloseWidget}
+                className="w-7 h-7 rounded-lg bg-white hover:bg-neutral-100 text-neutral-700 hover:text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 flex items-center justify-center transition-all cursor-pointer"
+                title="Tutup Chat"
                 aria-label="Tutup Chat"
               >
                 <X className="w-4 h-4 stroke-[2.5]" />
@@ -1050,7 +949,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             </div>
           </div>
 
-          {/* Banner Peringatan & Status Ngambek 30 Menit */}
+          {/* Banner Peringatan Ngambek */}
           {angerState.isAngry && (
             <div className="p-2.5 bg-rose-100 border-b-2 border-black text-rose-800 text-xs font-mono font-bold flex items-center justify-between px-3">
               <span className="flex items-center gap-1.5">
@@ -1064,7 +963,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
           )}
 
           {/* Area Riwayat Pesan Obrolan Neobrutalist Terang */}
-          <div className="flex-1 p-3.5 overflow-y-auto max-h-[350px] flex flex-col gap-3 bg-neutral-50/70 text-xs custom-scrollbar">
+          <div className="flex-1 p-3.5 overflow-y-auto max-h-[360px] flex flex-col gap-3 bg-neutral-50/70 text-xs custom-scrollbar">
             {messages.map((m, idx) => (
               <div
                 key={idx}
@@ -1078,26 +977,71 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                   </div>
                 )}
                 
-                {/* Bubble Chat: Biru Elektrik untuk User, Putih Neobrutalist untuk AI */}
+                {/* Bubble Chat */}
                 <div
-                  className={`p-3 rounded-xl border-2 border-black max-w-[85%] text-xs leading-relaxed font-sans shadow-[2px_2px_0px_#000000] ${
+                  className={`p-3 rounded-xl border-2 border-black max-w-[88%] text-xs leading-relaxed font-sans shadow-[2px_2px_0px_#000000] ${
                     m.sender === 'user'
                       ? 'bg-blue-600 text-white font-medium text-right'
                       : 'bg-white text-neutral-900 text-left'
                   }`}
                 >
-                  <p className="whitespace-pre-line">{cleanSpeechText(m.text)}</p>
+                  {m.isCatalogList ? (
+                    <div className="space-y-2">
+                      <p className="whitespace-pre-line font-medium text-neutral-800">{cleanSpeechText(m.text)}</p>
+                      
+                      {/* Daftar 17 Utilitas AllToolsKuro dengan Scroll Terbatas max-h-[50vh] */}
+                      <div className="max-h-[50vh] sm:max-h-[300px] overflow-y-auto space-y-2 pr-1 custom-scrollbar pt-1">
+                        {KURO_TOOLS_CATALOG.map((tool, tIdx) => (
+                          <div 
+                            key={tool.id}
+                            className="p-2.5 rounded-xl border border-black bg-neutral-50 hover:bg-blue-50/50 transition-colors shadow-[1px_1px_0px_#000000] flex flex-col gap-1.5"
+                          >
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[10px] font-mono font-black text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded border border-blue-900/30">
+                                  [{tIdx + 1}/{KURO_TOOLS_CATALOG.length}]
+                                </span>
+                                <span className="font-black text-xs text-neutral-900 truncate">
+                                  {tool.name}
+                                </span>
+                              </div>
+                              <span className="text-[9px] font-mono font-bold text-neutral-600 bg-neutral-200/80 px-1.5 py-0.5 rounded shrink-0">
+                                {tool.tag}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-neutral-700 leading-relaxed font-sans">
+                              {tool.desc}
+                            </p>
+                            <div className="pt-1 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenTool(tool.id)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 active:translate-x-0.5 active:translate-y-0.5 text-white font-bold text-[10px] border border-black shadow-[1px_1px_0px_#000000] cursor-pointer transition-all"
+                              >
+                                <span>Buka Fitur Ini</span>
+                                <ArrowUpRight className="w-3 h-3 stroke-[2.5]" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="whitespace-pre-line">{cleanSpeechText(m.text)}</p>
 
-                  {/* Tombol Pintasan Buka Fitur */}
-                  {m.toolId && onOpenTool && (
-                    <button
-                      type="button"
-                      onClick={() => onOpenTool(m.toolId)}
-                      className="mt-2.5 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-bold text-[11px] border border-black shadow-[1px_1px_0px_#000000] cursor-pointer"
-                    >
-                      <span>Buka Fitur Ini</span>
-                      <ArrowUpRight className="w-3 h-3 stroke-[2.5]" />
-                    </button>
+                      {/* Tombol Pintasan Buka Fitur Tunggal */}
+                      {m.toolId && onOpenTool && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenTool(m.toolId)}
+                          className="mt-2.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 active:translate-x-0.5 active:translate-y-0.5 text-white font-bold text-[11px] border border-black shadow-[1px_1px_0px_#000000] cursor-pointer transition-all"
+                        >
+                          <span>Buka Fitur Ini</span>
+                          <ArrowUpRight className="w-3 h-3 stroke-[2.5]" />
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -1123,43 +1067,43 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
           <div className="px-3 py-2 bg-neutral-100 border-t-2 border-black flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             <button
               type="button"
-              onClick={handleStartTour}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-blue-50 text-blue-700 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+              onClick={handleExplainAllFeatures}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-blue-50 text-blue-700 border border-black text-[11px] font-bold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000] transition-colors"
             >
               Jelaskan Semua Fitur
             </button>
             <button
               type="button"
-              onClick={() => handleSendMessage('bagaimana cara bypass link safelink?')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+              onClick={() => handleSendMessage('apa saja fitur social media stalker?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000] transition-colors"
+            >
+              Social Media Stalker
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSendMessage('bagaimana cara kerja safelink resolver?')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000] transition-colors"
             >
               Safelink Bypasser
             </button>
             <button
               type="button"
               onClick={() => handleSendMessage('cara cari template capcut dan preset jedag-jedug?')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000] transition-colors"
             >
               Template CapCut
             </button>
             <button
               type="button"
               onClick={() => handleSendMessage('rekomendasi anime apa yang bagus ditonton?')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000] transition-colors"
             >
               Rekomendasi Anime
             </button>
             <button
               type="button"
-              onClick={() => handleSendMessage('apa saja rekomendasi manhwa seru?')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
-            >
-              Rekomendasi Manhwa
-            </button>
-            <button
-              type="button"
               onClick={() => handleSendMessage('apa saja format yang didukung downloader?')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000]"
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-neutral-50 text-neutral-800 border border-black text-[11px] font-semibold font-mono shrink-0 cursor-pointer shadow-[1px_1px_0px_#000000] transition-colors"
             >
               Media Downloader
             </button>
@@ -1193,61 +1137,6 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             </button>
           </form>
 
-        </div>
-      )}
-
-      {/* ─── 4. FLOATING TOUR HELPER BUBBLE (SAAT TOUR AKTIF) ─── */}
-      {mode === 'floating_helper' && isTourActive && (
-        <div 
-          className={`fixed z-50 w-[90vw] sm:w-[360px] bg-white text-black border-2 border-black rounded-2xl shadow-[6px_6px_0px_#000000] p-4 flex flex-col gap-2.5 animate-in fade-in duration-150 ${getQuadrantClasses(true)}`}
-        >
-          <div className="flex items-center justify-between border-b-2 border-black pb-2">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-blue-600 border border-black overflow-hidden flex items-center justify-center p-0.5">
-                <KuroCharacter state={animState} size={28} />
-              </div>
-              <span className="font-black text-xs">Pemandu Tour Kuro</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-mono font-bold bg-amber-400 text-black px-2 py-0.5 rounded border border-black">
-                {tourIndex + 1}/{KURO_TOOLS_CATALOG.length}
-              </span>
-              <button
-                type="button"
-                onClick={handleCancelTour}
-                className="p-1 rounded bg-white hover:bg-neutral-100 text-black border border-black cursor-pointer"
-                title="Hentikan Tour"
-              >
-                <X className="w-3.5 h-3.5 stroke-[2.5]" />
-              </button>
-            </div>
-          </div>
-
-          <div className="p-2.5 rounded-xl bg-neutral-50 border border-black text-xs leading-relaxed">
-            <p className="font-semibold text-neutral-800">{displayedReply || messages[messages.length - 1]?.text}</p>
-          </div>
-
-          <div className="flex items-center justify-between pt-1">
-            <button
-              type="button"
-              onClick={handleCancelTour}
-              className="px-3 py-1.5 rounded-lg border border-black bg-white hover:bg-neutral-100 text-neutral-700 text-[11px] font-bold"
-            >
-              Selesai Tour
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (tourSequenceRef.current) clearTimeout(tourSequenceRef.current);
-                executeTourStep(tourIndex + 1);
-              }}
-              className="px-3.5 py-1.5 rounded-lg border-2 border-black bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-black shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
-            >
-              {tourIndex + 1 >= KURO_TOOLS_CATALOG.length 
-                ? `Selesai (${KURO_TOOLS_CATALOG.length}/${KURO_TOOLS_CATALOG.length})` 
-                : `Lanjut (${tourIndex + 2}/${KURO_TOOLS_CATALOG.length})`}
-            </button>
-          </div>
         </div>
       )}
     </>
