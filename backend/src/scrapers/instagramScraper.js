@@ -216,32 +216,43 @@ async function fetchEngineCrawlerOpenGraph(username) {
 
 // Jalur 2: Google Edge Relay (Bypass blokir WAF IP Datacenter/AWS Vercel)
 async function fetchEngineGoogleRelay(username) {
-  const urls = [
-    `https://www-instagram-com.translate.goog/${encodeURIComponent(username)}/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en`,
-    `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(`https://www.instagram.com/${encodeURIComponent(username)}/`)}`
+  const crawlers = [
+    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    'WhatsApp/2.23.20.0',
+    'LinkedInBot/1.0 (compatible; +http://www.linkedin.com)'
   ];
 
-  for (const url of urls) {
-    try {
-      const res = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cookie': 'CONSENT=YES+; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzEaAmVuIAEaBgiA_LmnBg'
-        },
-        timeout: 6000,
-        validateStatus: (s) => s < 500
-      });
+  const targetClean = encodeURIComponent(username);
+  const endpoints = [
+    `https://www-instagram-com.translate.goog/${targetClean}/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en`,
+    `https://translate.google.com/translate?sl=auto&tl=en&u=https://www.instagram.com/${targetClean}/`
+  ];
 
-      const html = typeof res.data === 'string' ? res.data : '';
-      if (!html || res.status === 404) continue;
+  for (const url of endpoints) {
+    for (const ua of crawlers) {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5500);
+        const res = await fetch(url, {
+          headers: {
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          signal: ctrl.signal
+        });
+        clearTimeout(timer);
 
-      const parsed = parseInstagramHtml(html, username);
-      if (parsed) {
-        return { source: 'google_edge_relay', data: parsed };
-      }
-    } catch (_) {}
+        if (!res.ok) continue;
+        const html = await res.text();
+        if (!html || html.length < 1000) continue;
+
+        const parsed = parseInstagramHtml(html, username);
+        if (parsed && isValidInstagramData(parsed)) {
+          return { source: 'google_edge_relay', data: parsed };
+        }
+      } catch (_) {}
+    }
   }
 
   throw new Error('Google Relay did not yield valid profile data');
