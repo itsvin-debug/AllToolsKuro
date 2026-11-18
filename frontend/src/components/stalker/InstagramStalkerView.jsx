@@ -51,6 +51,165 @@ function formatMetric(num) {
   return val.toLocaleString('id-ID');
 }
 
+function decodeHtmlEntities(str) {
+  if (!str) return '';
+  return str
+    .replace(/&#064;/g, '@')
+    .replace(/&#x2022;/g, '•')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function parseMetricString(str) {
+  if (!str) return 0;
+  const clean = str.replace(/,/g, '').trim().toLowerCase();
+  if (clean.endsWith('jt') || clean.endsWith('m')) {
+    return Math.round(parseFloat(clean.replace(/(?:jt|m)$/, '')) * 1000000);
+  }
+  if (clean.endsWith('rb') || clean.endsWith('k')) {
+    return Math.round(parseFloat(clean.replace(/(?:rb|k)$/, '')) * 1000);
+  }
+  if (clean.endsWith('b')) {
+    return Math.round(parseFloat(clean.replace(/b$/, '')) * 1000000000);
+  }
+  return parseInt(clean.replace(/[^0-9]/g, ''), 10) || 0;
+}
+
+function extractInstagramStatsFromText(text) {
+  if (!text) return { followers: 0, following: 0, posts: 0 };
+  const followersMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Followers|Pengikut)/i);
+  const followingMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Following|Mengikuti)/i);
+  const postsMatch = text.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*(?:Posts|Postingan|Kiriman)/i);
+  return {
+    followers: followersMatch ? parseMetricString(followersMatch[1]) : 0,
+    following: followingMatch ? parseMetricString(followingMatch[1]) : 0,
+    posts: postsMatch ? parseMetricString(postsMatch[1]) : 0
+  };
+}
+
+function parseInstagramHtml(html, username) {
+  if (!html || typeof html !== 'string') return null;
+
+  let fullName = '';
+  let avatar = '';
+  let bio = '';
+  let followers = 0;
+  let following = 0;
+  let posts = 0;
+  let isPrivate = html.includes('"is_private":true') || html.includes('This Account is Private') || html.includes('Akun Ini Privat');
+  let isVerified = html.includes('"is_verified":true');
+
+  // 1. Ekstraksi dari skrip JSON tersemat
+  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+  for (const s of scripts) {
+    if (!fullName) {
+      const fnMatch = s.match(/"full_name":"([^"]+)"/);
+      if (fnMatch) {
+        try { fullName = JSON.parse(`"${fnMatch[1]}"`); } catch { fullName = fnMatch[1]; }
+      }
+    }
+    if (!avatar) {
+      const avMatch = s.match(/"profile_pic_url_hd":"([^"]+)"/) || s.match(/"profile_pic_url":"([^"]+)"/);
+      if (avMatch) {
+        avatar = avMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+      }
+    }
+    if (!bio) {
+      const bioMatch = s.match(/"biography":"([^"]+)"/);
+      if (bioMatch) {
+        try { bio = JSON.parse(`"${bioMatch[1]}"`); } catch { bio = bioMatch[1]; }
+      }
+    }
+    if (!followers) {
+      const fMatch = s.match(/"edge_followed_by":\s*\{\s*"count":\s*(\d+)/) || s.match(/"follower_count":\s*(\d+)/);
+      if (fMatch) followers = Number(fMatch[1]);
+    }
+    if (!following) {
+      const foMatch = s.match(/"edge_follow":\s*\{\s*"count":\s*(\d+)/) || s.match(/"following_count":\s*(\d+)/);
+      if (foMatch) following = Number(foMatch[1]);
+    }
+    if (!posts) {
+      const pMatch = s.match(/"edge_owner_to_timeline_media":\s*\{\s*"count":\s*(\d+)/) || s.match(/"media_count":\s*(\d+)/);
+      if (pMatch) posts = Number(pMatch[1]);
+    }
+  }
+
+  // 2. Ekstraksi Meta Tag (OpenGraph & description)
+  const descMatch = html.match(/property="og:description" content="([^"]+)"/) || 
+                    html.match(/content="([^"]+)" property="og:description"/) ||
+                    html.match(/name="description" content="([^"]+)"/) ||
+                    html.match(/content="([^"]+)" name="description"/);
+  const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
+  const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
+
+  if (!avatar && imgMatch && imgMatch[1]) {
+    avatar = decodeHtmlEntities(imgMatch[1]).replace(/&amp;/g, '&');
+  }
+
+  if (titleMatch && titleMatch[1]) {
+    const rawTitle = decodeHtmlEntities(titleMatch[1]).replace(/&amp;/g, '&');
+    const titleName = rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
+    if (titleName && !fullName) {
+      fullName = titleName;
+    }
+  }
+
+  if (descMatch && descMatch[1]) {
+    const rawDesc = decodeHtmlEntities(descMatch[1]);
+    const statsParsed = extractInstagramStatsFromText(rawDesc);
+    if (!followers && statsParsed.followers > 0) followers = statsParsed.followers;
+    if (!following && statsParsed.following > 0) following = statsParsed.following;
+    if (!posts && statsParsed.posts > 0) posts = statsParsed.posts;
+
+    if (!bio) {
+      const bioMetaMatch = html.match(/name="description" content="[^"]*on Instagram: &quot;([^&"]+)&quot;"/) ||
+                           html.match(/content="[^"]*on Instagram: &quot;([^&"]+)&quot;" name="description"/);
+      if (bioMetaMatch && bioMetaMatch[1]) {
+        bio = decodeHtmlEntities(bioMetaMatch[1]);
+      } else if (rawDesc.includes(' - ')) {
+        const afterDash = rawDesc.split(' - ')[1]?.trim();
+        if (afterDash && !afterDash.startsWith('See Instagram photos') && !afterDash.startsWith('Lihat foto')) {
+          bio = afterDash;
+        }
+      }
+    }
+  }
+
+  const uName = username.trim().toLowerCase();
+  const rawName = String(fullName || '').trim();
+  const hasRealName = rawName !== '' && rawName.toLowerCase() !== uName;
+  const hasValidAvatar = Boolean(avatar && avatar.startsWith('http') && !avatar.includes('default') && !avatar.includes('dumpor-logo'));
+  const hasBio = Boolean(bio && bio.trim() !== '');
+  const hasStats = (followers > 0 || following > 0 || posts > 0);
+
+  if (!hasRealName && !hasValidAvatar && !hasBio && !hasStats && !isPrivate) {
+    return null;
+  }
+
+  return {
+    username,
+    fullName: fullName || username,
+    nickname: fullName || username,
+    avatar: (avatar || '').replace(/&amp;/g, '&'),
+    bio: bio || '',
+    bioLink: null,
+    isPrivate,
+    privateAccount: isPrivate,
+    isVerified,
+    verified: isVerified,
+    followers,
+    following,
+    posts,
+    stats: { followers, following, posts },
+    recentMedia: [],
+    category: 'Kreator',
+    profileUrl: `https://www.instagram.com/${username}`
+  };
+}
+
 export function isValidInstagramData(d) {
   if (!d) return false;
   const target = d.data || d;
@@ -213,10 +372,60 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       }
     };
 
+    // Saluran 2: CodeTabs CORS Proxy ke Instagram Embed
+    const runClientCodeTabs = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 7000);
+      try {
+        const embedUrl = `https://www.instagram.com/${encodeURIComponent(cleanUsername)}/embed/captioned/`;
+        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
+        const res = await fetch(proxyUrl, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('CodeTabs non-200');
+        const html = await res.text();
+        const parsed = parseInstagramHtml(html, cleanUsername);
+        if (parsed && isValidInstagramData(parsed)) {
+          return normalizeInstagram(parsed);
+        }
+        throw new Error('CodeTabs parse invalid');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 3: AllOrigins CORS Proxy ke Instagram Embed
+    const runClientAllOrigins = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 7000);
+      try {
+        const embedUrl = `https://www.instagram.com/${encodeURIComponent(cleanUsername)}/embed/captioned/`;
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(embedUrl)}`;
+        const res = await fetch(proxyUrl, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('AllOrigins non-200');
+        const json = await res.json();
+        const html = json?.contents || '';
+        const parsed = parseInstagramHtml(html, cleanUsername);
+        if (parsed && isValidInstagramData(parsed)) {
+          return normalizeInstagram(parsed);
+        }
+        throw new Error('AllOrigins parse invalid');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // 1. Prioritaskan backend gateway untuk ekstraksi data lengkap
     try {
       const bData = await runBackend();
       if (bData && isValidInstagramData(bData)) {
         return bData;
+      }
+    } catch (_) {}
+
+    // 2. Fallback Client-side Edge Relay (CORS Proxies) jika backend diblokir AWS/Vercel IP
+    try {
+      const clientData = await Promise.any([runClientCodeTabs(), runClientAllOrigins()]);
+      if (clientData && isValidInstagramData(clientData)) {
+        return clientData;
       }
     } catch (_) {}
 

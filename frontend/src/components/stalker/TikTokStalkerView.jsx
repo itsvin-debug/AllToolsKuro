@@ -52,6 +52,84 @@ function formatMetric(num) {
   return val.toLocaleString('id-ID');
 }
 
+function parseMetricString(str) {
+  if (!str) return 0;
+  const clean = str.replace(/,/g, '').trim().toLowerCase();
+  if (clean.endsWith('jt') || clean.endsWith('m')) {
+    return Math.round(parseFloat(clean.replace(/(?:jt|m)$/, '')) * 1000000);
+  }
+  if (clean.endsWith('rb') || clean.endsWith('k')) {
+    return Math.round(parseFloat(clean.replace(/(?:rb|k)$/, '')) * 1000);
+  }
+  if (clean.endsWith('b')) {
+    return Math.round(parseFloat(clean.replace(/b$/, '')) * 1000000000);
+  }
+  return parseInt(clean.replace(/[^0-9]/g, ''), 10) || 0;
+}
+
+function parseTikTokHtml(html, clean) {
+  if (!html || typeof html !== 'string') return null;
+
+  // 1. Ekstraksi skrip rehidrasi JSON TikTok
+  const rehydrateMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+  if (rehydrateMatch && rehydrateMatch[1]) {
+    try {
+      const d = JSON.parse(rehydrateMatch[1]);
+      const u = d['__DEFAULT_SCOPE__']?.['webapp.user-detail']?.userInfo;
+      if (u?.user) {
+        return {
+          user: u.user,
+          stats: u.stats || {},
+          statsV2: u.statsV2 || {}
+        };
+      }
+    } catch (_) {}
+  }
+
+  // 2. Ekstraksi OpenGraph & Meta bot tags
+  const descMatch = html.match(/property="og:description" content="([^"]+)"/) || 
+                    html.match(/content="([^"]+)" property="og:description"/) ||
+                    html.match(/property="twitter:description" content="([^"]+)"/) ||
+                    html.match(/content="([^"]+)" property="twitter:description"/);
+  const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || 
+                     html.match(/content="([^"]+)" property="og:title"/);
+  const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || 
+                   html.match(/content="([^"]+)" property="og:image"/);
+
+  if (descMatch && descMatch[1]) {
+    const desc = descMatch[1];
+    const fMatch = desc.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*Followers/i);
+    const foMatch = desc.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*Following/i);
+    const lMatch = desc.match(/([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\s*Likes/i);
+    const nickname = (titleMatch ? titleMatch[1].replace(/\s*on TikTok.*/i, '').trim() : '') || clean;
+    const avatar = imgMatch ? imgMatch[1].replace(/&amp;/g, '&') : '';
+
+    return {
+      user: {
+        uniqueId: clean,
+        nickname,
+        avatarLarger: avatar,
+        avatarMedium: avatar,
+        avatarThumb: avatar,
+        signature: '',
+        verified: false,
+        privateAccount: false,
+        region: 'Global'
+      },
+      stats: {
+        followerCount: fMatch ? parseMetricString(fMatch[1]) : 0,
+        followingCount: foMatch ? parseMetricString(foMatch[1]) : 0,
+        heartCount: lMatch ? parseMetricString(lMatch[1]) : 0,
+        videoCount: 0,
+        friendCount: 0
+      },
+      statsV2: {}
+    };
+  }
+
+  return null;
+}
+
 function renderBioWithLinks(text) {
   if (!text) return null;
   const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -170,7 +248,77 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Saluran 2: Direct browser TikWM (IP residensial bebas blokir, batas 4s)
+    // Saluran 2: TikTok Official oEmbed API (CORS resmi dari TikTok)
+    const runClientOEmbed = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent('https://www.tiktok.com/@' + clean)}`;
+        const res = await fetch(oembedUrl, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('oEmbed non-200');
+        const data = await res.json();
+        if (data && (data.author_name || data.title)) {
+          return normalizeTikTok({
+            user: {
+              uniqueId: clean,
+              nickname: data.author_name || clean,
+              avatar: '',
+              signature: '',
+              verified: false,
+              privateAccount: false,
+              region: 'Global'
+            },
+            stats: {
+              followerCount: 0,
+              followingCount: 0,
+              heartCount: 0,
+              videoCount: 0,
+              friendCount: 0
+            }
+          }, 'client_oembed');
+        }
+        throw new Error('oEmbed empty');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 3: CodeTabs CORS Proxy ke Profil Publik TikTok
+    const runClientCodeTabs = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6500);
+      try {
+        const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent('https://www.tiktok.com/@' + clean)}`;
+        const res = await fetch(proxyUrl, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('CodeTabs non-200');
+        const html = await res.text();
+        const parsed = parseTikTokHtml(html, clean);
+        if (parsed) return normalizeTikTok(parsed, 'client_codetabs');
+        throw new Error('CodeTabs parse failed');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 4: AllOrigins CORS Proxy ke Profil Publik TikTok
+    const runClientAllOrigins = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6500);
+      try {
+        const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent('https://www.tiktok.com/@' + clean)}`;
+        const res = await fetch(proxyUrl, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('AllOrigins non-200');
+        const json = await res.json();
+        const html = json?.contents || '';
+        const parsed = parseTikTokHtml(html, clean);
+        if (parsed) return normalizeTikTok(parsed, 'client_allorigins');
+        throw new Error('AllOrigins parse failed');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 5: Direct browser TikWM (Batas 4s)
     const runTikWM = async () => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 4000);
@@ -198,13 +346,23 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       if (bData?.success && bData?.data) {
         return bData;
       }
-    } catch (_) {
-      try {
-        return await runTikWM();
-      } catch (__) {
-        return null;
-      }
-    }
+    } catch (_) {}
+
+    // Fallback Client-side Edge Relay (CORS proxies & direct TikWM)
+    try {
+      const clientRelay = await Promise.any([
+        runClientCodeTabs(),
+        runClientAllOrigins(),
+        runTikWM()
+      ]);
+      if (clientRelay?.data) return clientRelay;
+    } catch (_) {}
+
+    // Fallback direct TikTok official oEmbed
+    try {
+      const oembedData = await runClientOEmbed();
+      if (oembedData?.data) return oembedData;
+    } catch (_) {}
 
     return null;
   };

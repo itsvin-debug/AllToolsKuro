@@ -261,39 +261,45 @@ export async function resolveLink(targetUrl, options = {}) {
   // 2. Tipe B: Jalur Cepat Link Aggregator / Bio Link (Linktree, Heylink, Carrd, dll)
   const isAggregator = AGGREGATOR_DOMAINS.some(d => host === d || host.endsWith('.' + d)) || cleanUrl.includes('linktr.ee');
   if (isAggregator) {
-    const uas = [
-      UA_DESKTOP,
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
-    ];
-    for (const ua of uas) {
-      try {
-        const aggRes = await axios.get(cleanUrl, {
-          timeout: 6000,
-          maxContentLength: 10 * 1024 * 1024,
-          headers: {
-            'User-Agent': ua,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Cache-Control': 'no-cache'
-          }
-        });
-        if (typeof aggRes.data === 'string') {
-          const aggregatorItems = extractAggregatorItems(aggRes.data, cleanUrl);
-          if (aggregatorItems.length > 0) {
-            return {
-              status: 'success',
-              result_type: 'multiple_links',
-              category: 'aggregator',
-              original_url: cleanUrl,
-              items: aggregatorItems,
-              count: aggregatorItems.length,
-              engine: 'aggregator-scanner',
-              elapsed_ms: Math.max(1, Date.now() - startTime)
-            };
-          }
+    try {
+      const fetchDirect = axios.get(cleanUrl, {
+        timeout: 8000,
+        maxContentLength: 12 * 1024 * 1024,
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Cache-Control': 'no-cache'
         }
-      } catch (_) {}
-    }
+      }).then(r => typeof r.data === 'string' ? r.data : '');
+
+      const gtUrl = `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(cleanUrl)}`;
+      const fetchRelay = axios.get(gtUrl, {
+        timeout: 8000,
+        maxContentLength: 12 * 1024 * 1024,
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          'Cookie': 'CONSENT=YES+; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzEaAmVuIAEaBgiA_LmnBg'
+        }
+      }).then(r => typeof r.data === 'string' ? r.data : '');
+
+      const winningHtml = await Promise.any([fetchDirect, fetchRelay]);
+      if (winningHtml) {
+        const aggregatorItems = extractAggregatorItems(winningHtml, cleanUrl);
+        if (aggregatorItems.length > 0) {
+          return {
+            status: 'success',
+            result_type: 'multiple_links',
+            category: 'aggregator',
+            original_url: cleanUrl,
+            items: aggregatorItems,
+            count: aggregatorItems.length,
+            engine: 'aggregator-scanner',
+            elapsed_ms: Math.max(1, Date.now() - startTime)
+          };
+        }
+      }
+    } catch (_) {}
 
     if (host.includes('linktr.ee') || host.includes('heylink.me') || host.includes('carrd.co')) {
       return {

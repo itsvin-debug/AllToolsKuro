@@ -124,7 +124,7 @@ async function fetchEngineEmbedProfile(username) {
         if (!avatar) {
           const avMatch = s.match(/"profile_pic_url_hd":"([^"]+)"/) || s.match(/"profile_pic_url":"([^"]+)"/);
           if (avMatch) {
-            avatar = avMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+            avatar = avMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
           }
         }
         if (!bio) {
@@ -150,12 +150,12 @@ async function fetchEngineEmbedProfile(username) {
       // 2. Ekstraksi meta tag jika script belum lengkap
       if (!avatar) {
         const ogImg = html.match(/property="og:image" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:image"/);
-        if (ogImg) avatar = decodeHtmlEntities(ogImg[1]);
+        if (ogImg) avatar = decodeHtmlEntities(ogImg[1]).replace(/&amp;/g, '&');
       }
       if (!fullName) {
         const ogTitle = html.match(/property="og:title" content="([^"]+)"/) || html.match(/content="([^"]+)" property="og:title"/);
         if (ogTitle) {
-          fullName = decodeHtmlEntities(ogTitle[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim();
+          fullName = decodeHtmlEntities(ogTitle[1]).replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').replace(/&amp;/g, '&').trim();
         }
       }
 
@@ -163,7 +163,7 @@ async function fetchEngineEmbedProfile(username) {
         username,
         fullName: fullName || username,
         nickname: fullName || username,
-        avatar,
+        avatar: (avatar || '').replace(/&amp;/g, '&'),
         bio,
         bioLink: null,
         isPrivate,
@@ -185,7 +185,7 @@ async function fetchEngineEmbedProfile(username) {
     } catch (_) {}
   }
 
-  throw new Error('Jalur 1 Embed did not yield valid profile data');
+  throw new Error('Jalur Embed did not yield valid profile data');
 }
 
 // Jalur 2: Social Link-Preview Meta Parser (Multi-Crawler User-Agent)
@@ -225,9 +225,9 @@ async function fetchEngineCrawlerOpenGraph(username) {
         const rawDesc = decodeHtmlEntities(descMatch[1]);
         const statsExtracted = extractInstagramStatsFromText(rawDesc);
         const rawTitle = titleMatch ? decodeHtmlEntities(titleMatch[1]) : '';
-        const nameExtracted = rawTitle ? rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').trim() : username;
+        const nameExtracted = rawTitle ? rawTitle.replace(/\s*\(@[a-zA-Z0-9_.]+\).*/, '').replace(/•.*/, '').replace(/&amp;/g, '&').trim() : username;
         const isPrivate = html.includes('"is_private":true') || html.includes('"isPrivate":true');
-        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+        const rawImg = imgMatch ? decodeHtmlEntities(imgMatch[1]).replace(/&amp;/g, '&') : '';
 
         let bio = '';
         const bioMetaMatch = html.match(/name="description" content="[^"]*on Instagram: &quot;([^&"]+)&quot;"/) ||
@@ -288,7 +288,7 @@ async function fetchEngineCrawlerOpenGraph(username) {
     }
   }
 
-  throw new Error('Jalur 2 Crawler did not yield valid profile data');
+  throw new Error('Jalur Crawler did not yield valid profile data');
 }
 
 // Jalur 3: Google Edge Relay (Bypass blokir IP Datacenter/AWS Vercel)

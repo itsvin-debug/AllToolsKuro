@@ -196,6 +196,8 @@ async function extractLayerCrawlerOpenGraph(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   const crawlers = [
     'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+    'WhatsApp/2.23.20.0',
+    'TelegramBot (like TwitterBot)',
     'Twitterbot/1.0'
   ];
 
@@ -206,17 +208,33 @@ async function extractLayerCrawlerOpenGraph(username) {
         validateStatus: (status) => status < 500,
         headers: {
           'User-Agent': ua,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8'
         }
       });
 
       if (res.status === 404) return { notFound: true };
       const html = typeof res.data === 'string' ? res.data : '';
-      if (!html || html.length < 500) continue;
+      if (!html || html.length < 300) continue;
 
-      const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || html.match(/name="twitter:title" content="([^"]+)"/);
-      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || html.match(/name="twitter:description" content="([^"]+)"/);
-      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || html.match(/name="twitter:image" content="([^"]+)"/);
+      const titleMatch = html.match(/property="og:title" content="([^"]+)"/) || 
+                         html.match(/content="([^"]+)" property="og:title"/) ||
+                         html.match(/property="twitter:title" content="([^"]+)"/) || 
+                         html.match(/name="twitter:title" content="([^"]+)"/) ||
+                         html.match(/content="([^"]+)" property="twitter:title"/);
+
+      const descMatch = html.match(/property="og:description" content="([^"]+)"/) || 
+                        html.match(/content="([^"]+)" property="og:description"/) ||
+                        html.match(/property="twitter:description" content="([^"]+)"/) || 
+                        html.match(/name="twitter:description" content="([^"]+)"/) ||
+                        html.match(/content="([^"]+)" property="twitter:description"/);
+
+      const imgMatch = html.match(/property="og:image" content="([^"]+)"/) || 
+                       html.match(/content="([^"]+)" property="og:image"/) ||
+                       html.match(/property="twitter:image" content="([^"]+)"/) || 
+                       html.match(/name="twitter:image" content="([^"]+)"/) ||
+                       html.match(/content="([^"]+)" property="twitter:image"/);
+
       const idMatch = html.match(/user\/profile\/(\d+)/);
 
       if (descMatch && descMatch[1]) {
@@ -227,7 +245,7 @@ async function extractLayerCrawlerOpenGraph(username) {
 
         const rawTitle = titleMatch ? decodeHtmlEntities(titleMatch[1]) : '';
         const nickname = rawTitle.replace(/\s*on TikTok.*/i, '').trim() || username;
-        const avatar = imgMatch ? decodeHtmlEntities(imgMatch[1]) : '';
+        const avatar = imgMatch ? decodeHtmlEntities(imgMatch[1]).replace(/&amp;/g, '&') : '';
         const id = idMatch ? idMatch[1] : '';
 
         return {
@@ -489,7 +507,7 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
 
   let extractedResult = null;
 
-  // Prioritaskan Layer 1 Direct Hydration, lalu fallback ke Crawler OpenGraph (anti-WAF)
+  // Prioritaskan Layer 1 Direct Hydration, lalu fallback ke Crawler OpenGraph (anti-WAF), oEmbed, dan Cloud APIs
   try {
     extractedResult = await extractLayer1Hydration(username);
   } catch (_) {
@@ -497,11 +515,15 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
       extractedResult = await extractLayerCrawlerOpenGraph(username);
     } catch (__) {
       try {
-        extractedResult = await extractTikWM(username);
+        extractedResult = await extractLayer4OEmbed(username);
       } catch (___) {
         try {
-          extractedResult = await extractSiputzx(username);
-        } catch (____) {}
+          extractedResult = await extractTikWM(username);
+        } catch (____) {
+          try {
+            extractedResult = await extractSiputzx(username);
+          } catch (_____) {}
+        }
       }
     }
   }

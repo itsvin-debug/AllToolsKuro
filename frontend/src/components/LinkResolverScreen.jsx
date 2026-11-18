@@ -165,25 +165,29 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
       // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd) dengan multi-proxy
       if (target.includes('linktr.ee') || target.includes('heylink.me') || target.includes('carrd.co')) {
         try {
+          const fetchFromProxy = async (proxyUrl) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 8500);
+            try {
+              const res = await fetch(proxyUrl, { signal: controller.signal });
+              if (!res.ok) throw new Error('Proxy non-200');
+              const text = await res.text();
+              if (text && (text.includes('__NEXT_DATA__') || text.includes('href='))) return text;
+              throw new Error('Proxy missing data');
+            } finally {
+              clearTimeout(timer);
+            }
+          };
+
           const proxyUrls = [
             `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
             `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`
           ];
+
           let html = '';
-          for (const pUrl of proxyUrls) {
-            try {
-              const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 6000);
-              const aoRes = await fetch(pUrl, { signal: controller.signal }).finally(() => clearTimeout(timer));
-              if (aoRes.ok) {
-                const text = await aoRes.text();
-                if (text && (text.includes('__NEXT_DATA__') || text.includes('href='))) {
-                  html = text;
-                  break;
-                }
-              }
-            } catch (_) {}
-          }
+          try {
+            html = await Promise.any(proxyUrls.map(fetchFromProxy));
+          } catch (_) {}
 
           if (html && html.includes('__NEXT_DATA__')) {
             const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
