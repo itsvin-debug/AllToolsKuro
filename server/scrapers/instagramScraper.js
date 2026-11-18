@@ -216,29 +216,32 @@ async function fetchEngineCrawlerOpenGraph(username) {
 
 // Jalur 2: Google Edge Relay (Bypass blokir WAF IP Datacenter/AWS Vercel)
 async function fetchEngineGoogleRelay(username) {
-  try {
-    const target = `https://www.instagram.com/${encodeURIComponent(username)}/`;
-    const gtUrl = `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(target)}`;
-    const res = await axios.get(gtUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Cookie': 'CONSENT=YES+; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzEaAmVuIAEaBgiA_LmnBg'
-      },
-      timeout: 5000,
-      validateStatus: (s) => s < 500
-    });
+  const urls = [
+    `https://www-instagram-com.translate.goog/${encodeURIComponent(username)}/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en`,
+    `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(`https://www.instagram.com/${encodeURIComponent(username)}/`)}`
+  ];
 
-    const html = typeof res.data === 'string' ? res.data : '';
-    if (!html || res.status === 404) {
-      throw new Error(`Google Relay empty or status ${res.status}`);
-    }
+  for (const url of urls) {
+    try {
+      const res = await axios.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cookie': 'CONSENT=YES+; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzEaAmVuIAEaBgiA_LmnBg'
+        },
+        timeout: 6000,
+        validateStatus: (s) => s < 500
+      });
 
-    const parsed = parseInstagramHtml(html, username);
-    if (parsed) {
-      return { source: 'google_edge_relay', data: parsed };
-    }
-  } catch (err) {
-    throw new Error(`Google Relay error: ${err.message}`);
+      const html = typeof res.data === 'string' ? res.data : '';
+      if (!html || res.status === 404) continue;
+
+      const parsed = parseInstagramHtml(html, username);
+      if (parsed) {
+        return { source: 'google_edge_relay', data: parsed };
+      }
+    } catch (_) {}
   }
 
   throw new Error('Google Relay did not yield valid profile data');
