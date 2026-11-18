@@ -63,6 +63,57 @@ const RESOLVER_STEPS = [
   }
 ];
 
+function extractClientAggregatorItems(content, targetUrl) {
+  if (!content || typeof content !== 'string') return [];
+  const items = [];
+  const seen = new Set();
+  let baseHost = '';
+  try { baseHost = new URL(targetUrl).hostname.toLowerCase(); } catch {}
+
+  // 1. Ekstraksi script __NEXT_DATA__
+  if (content.includes('__NEXT_DATA__')) {
+    try {
+      const match = content.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (match && match[1]) {
+        const parsed = JSON.parse(match[1]);
+        const links = parsed.props?.pageProps?.links || parsed.props?.pageProps?.account?.links || [];
+        for (const l of links) {
+          const u = l.url?.trim();
+          const t = l.title?.trim() || 'Tautan Eksternal';
+          if (u && (u.startsWith('http://') || u.startsWith('https://')) && !seen.has(u)) {
+            items.push({ title: t, url: u });
+            seen.add(u);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (items.length > 0) return items;
+
+  // 2. Ekstraksi format markdown dari Jina Reader
+  if (content.includes('](') || content.includes('Markdown Content:')) {
+    const linkRegex = /\[(?:!\[[^\]]*\]\([^\)]*\)\s*)?([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g;
+    let match;
+    while ((match = linkRegex.exec(content)) !== null) {
+      let title = match[1].trim().replace(/^!\[[^\]]*\]\([^\)]*\)\s*/, '').trim();
+      const url = match[2].trim();
+      if (!url.startsWith('http')) continue;
+      try {
+        const linkHost = new URL(url).hostname.toLowerCase();
+        if (linkHost === baseHost || linkHost.includes('jina.ai') || linkHost.includes('cookie') || title.toLowerCase() === 'tiktok' || title.toLowerCase() === 'report') continue;
+      } catch {}
+      if (!seen.has(url)) {
+        seen.add(url);
+        if (title.length > 120) title = title.substring(0, 117) + '...';
+        items.push({ title: title || 'Tautan', url });
+      }
+    }
+  }
+
+  return items;
+}
+
 export default function LinkResolverScreen({ onBack, onShowToast }) {
   const [urlInput, setUrlInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -113,122 +164,149 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
     setSearchFilter('');
     setCopiedItemIndex(null);
 
-    // Animasi bertahap visual 5 langkah
-    const animTimer1 = setTimeout(() => setActiveStepIndex(1), 200);
-    const animTimer2 = setTimeout(() => setActiveStepIndex(2), 500);
-    const animTimer3 = setTimeout(() => setActiveStepIndex(3), 900);
+    // Animasi visual dinamis
+    const animTimer1 = setTimeout(() => setActiveStepIndex(1), 180);
+    const animTimer2 = setTimeout(() => setActiveStepIndex(2), 380);
+    const animTimer3 = setTimeout(() => setActiveStepIndex(3), 680);
+
+    const isAggregator = /linktr\.ee|heylink\.me|carrd\.co|bio\.link|beacons\.ai|taplink\.cc/i.test(target);
+
+    // Saluran 1: Backend resolver API (5s timeout)
+    const runBackend = async () => {
+      const res = await axios.post('/api/resolve', { url: target }, { timeout: 5000 });
+      if (res.data?.status === 'success') return res.data;
+      throw new Error(res.data?.message || 'Backend resolver tidak menemukan tautan');
+    };
+
+    // Saluran 2: Jina AI Edge Reader (4.5s timeout)
+    const runClientJina = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const res = await fetch(`https://r.jina.ai/${target}`, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('Jina non-200');
+        const text = await res.text();
+        const items = extractClientAggregatorItems(text, target);
+        if (items.length > 0) {
+          return {
+            status: 'success',
+            result_type: 'multiple_links',
+            category: 'aggregator',
+            original_url: target,
+            items,
+            count: items.length,
+            engine: 'jina-edge-reader',
+            elapsed_ms: 1200
+          };
+        }
+        throw new Error('Jina empty');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 3: CodeTabs CORS Proxy (4.5s timeout)
+    const runClientCodeTabs = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const res = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('CodeTabs non-200');
+        const text = await res.text();
+        const items = extractClientAggregatorItems(text, target);
+        if (items.length > 0) {
+          return {
+            status: 'success',
+            result_type: 'multiple_links',
+            category: 'aggregator',
+            original_url: target,
+            items,
+            count: items.length,
+            engine: 'client-edge-relay',
+            elapsed_ms: 1200
+          };
+        }
+        throw new Error('CodeTabs empty');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Saluran 4: AllOrigins Proxy (4.5s timeout)
+    const runClientAllOrigins = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`, { signal: ctrl.signal });
+        if (!res.ok) throw new Error('AllOrigins non-200');
+        const text = await res.text();
+        const items = extractClientAggregatorItems(text, target);
+        if (items.length > 0) {
+          return {
+            status: 'success',
+            result_type: 'multiple_links',
+            category: 'aggregator',
+            original_url: target,
+            items,
+            count: items.length,
+            engine: 'client-edge-relay',
+            elapsed_ms: 1200
+          };
+        }
+        throw new Error('AllOrigins empty');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
 
     try {
-      const res = await axios.post('/api/resolve', { url: target }, {
-        timeout: 24000
-      });
+      let finalData = null;
+      if (isAggregator) {
+        finalData = await Promise.any([
+          runBackend(),
+          runClientJina(),
+          runClientCodeTabs(),
+          runClientAllOrigins()
+        ]);
+      } else {
+        finalData = await runBackend();
+      }
 
       clearTimeout(animTimer1);
       clearTimeout(animTimer2);
       clearTimeout(animTimer3);
 
       setActiveStepIndex(3);
-      await new Promise((r) => setTimeout(r, 260));
+      await new Promise((r) => setTimeout(r, 120));
+      setActiveStepIndex(4);
+      setResolveResult(finalData);
 
-      if (res.data && res.data.status === 'success') {
-        setActiveStepIndex(4);
-        setResolveResult(res.data);
+      try {
+        const isMultiple = finalData.result_type === 'multiple_links' || (Array.isArray(finalData.items) && finalData.items.length > 0);
+        const destHostname = isMultiple 
+          ? `Bio Aggregator (${finalData.count || finalData.items?.length} link)`
+          : (finalData.resolved_url ? new URL(finalData.resolved_url).hostname : 'Resolved Link');
 
-        // Catat ke riwayat lokal aplikasi
-        try {
-          const isMultiple = res.data.result_type === 'multiple_links' || (Array.isArray(res.data.items) && res.data.items.length > 0);
-          const destHostname = isMultiple 
-            ? `Bio Aggregator (${res.data.count || res.data.items?.length} link)`
-            : (res.data.resolved_url ? new URL(res.data.resolved_url).hostname : 'Resolved Link');
+        logHistoryItem({
+          type: 'tool',
+          toolId: 'resolver',
+          toolName: 'Safelink Resolver',
+          title: destHostname,
+          description: `Dari ${target.substring(0, 32)}... (${finalData.elapsed_ms || 0} ms)`,
+          timestamp: Date.now()
+        });
+      } catch {}
 
-          logHistoryItem({
-            type: 'tool',
-            toolId: 'resolver',
-            toolName: 'Safelink Resolver',
-            title: destHostname,
-            description: `Dari ${target.substring(0, 32)}... (${res.data.elapsed_ms || 0} ms)`,
-            timestamp: Date.now()
-          });
-        } catch {
-          // Abaikan parsing error
-        }
-
-        if (res.data.result_type === 'multiple_links') {
-          onShowToast?.(`Berhasil mengekstrak ${res.data.count || res.data.items?.length} tautan!`);
-        } else {
-          onShowToast?.('Link tujuan berhasil di-bypass!');
-        }
+      if (finalData.result_type === 'multiple_links') {
+        onShowToast?.(`Berhasil mengekstrak ${finalData.count || finalData.items?.length} tautan!`);
       } else {
-        setErrorMessage(res.data?.message || 'Link tujuan tidak ditemukan atau dilindungi proteksi.');
+        onShowToast?.('Link tujuan berhasil di-bypass!');
       }
     } catch (err) {
-      // Client-side Edge Relay Fallback khusus bio aggregator (Linktree, Heylink, Carrd) dengan multi-proxy
-      if (target.includes('linktr.ee') || target.includes('heylink.me') || target.includes('carrd.co')) {
-        try {
-          const fetchFromProxy = async (proxyUrl) => {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 8500);
-            try {
-              const res = await fetch(proxyUrl, { signal: controller.signal });
-              if (!res.ok) throw new Error('Proxy non-200');
-              const text = await res.text();
-              if (text && (text.includes('__NEXT_DATA__') || text.includes('href='))) return text;
-              throw new Error('Proxy missing data');
-            } finally {
-              clearTimeout(timer);
-            }
-          };
-
-          const proxyUrls = [
-            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
-            `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`
-          ];
-
-          let html = '';
-          try {
-            html = await Promise.any(proxyUrls.map(fetchFromProxy));
-          } catch (_) {}
-
-          if (html && html.includes('__NEXT_DATA__')) {
-            const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-            if (match && match[1]) {
-              const parsed = JSON.parse(match[1]);
-              const links = parsed.props?.pageProps?.links || parsed.props?.pageProps?.account?.links || [];
-              const items = [];
-              for (const l of links) {
-                const u = l.url?.trim();
-                if (u && (u.startsWith('http://') || u.startsWith('https://'))) {
-                  items.push({ title: l.title || 'Tautan Eksternal', url: u });
-                }
-              }
-              if (items.length > 0) {
-                clearTimeout(animTimer1);
-                clearTimeout(animTimer2);
-                clearTimeout(animTimer3);
-                const fallbackResult = {
-                  status: 'success',
-                  result_type: 'multiple_links',
-                  category: 'aggregator',
-                  original_url: target,
-                  items,
-                  count: items.length,
-                  engine: 'client-edge-relay',
-                  elapsed_ms: 1200
-                };
-                setActiveStepIndex(4);
-                setResolveResult(fallbackResult);
-                onShowToast?.(`Berhasil mengekstrak ${items.length} tautan via Edge Relay!`);
-                return;
-              }
-            }
-          }
-        } catch (_) {}
-      }
-
       clearTimeout(animTimer1);
       clearTimeout(animTimer2);
       clearTimeout(animTimer3);
-      const msg = err.response?.data?.message || (err.code === 'ECONNABORTED' 
+      const msg = err.response?.data?.message || err.message || (err.code === 'ECONNABORTED' 
         ? 'Proses bypass melebihi batas waktu (timeout). Link mungkin dilindungi Captcha interaktif.' 
         : 'Gagal menghubungi server resolver. Pastikan koneksi backend aktif.');
       setErrorMessage(msg);

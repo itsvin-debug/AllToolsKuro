@@ -127,7 +127,7 @@ function extractSflSlug(targetUrl) {
   }
 }
 
-async function followManualRedirects(startUrl, maxHops = 4) {
+async function followManualRedirects(startUrl, maxHops = 3) {
   let curr = startUrl;
   let lastHtml = '';
   let lastStatus = 200;
@@ -136,7 +136,7 @@ async function followManualRedirects(startUrl, maxHops = 4) {
     try {
       const res = await axios.get(curr, {
         maxRedirects: 0,
-        timeout: 3500,
+        timeout: 2000,
         maxContentLength: 5 * 1024 * 1024,
         headers: {
           'User-Agent': UA_DESKTOP,
@@ -194,7 +194,27 @@ function extractAggregatorItems(html, baseUrl) {
 
   if (items.length > 0) return items;
 
-  // 2. Pemindaian tag <a> pada DOM HTML
+  // 2. Pemindaian format markdown dari Edge Reader (Jina AI)
+  if (html.includes('](') || html.includes('Markdown Content:')) {
+    const linkRegex = /\[(?:!\[[^\]]*\]\([^\)]*\)\s*)?([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g;
+    let match;
+    while ((match = linkRegex.exec(html)) !== null) {
+      let title = match[1].trim().replace(/^!\[[^\]]*\]\([^\)]*\)\s*/, '').trim();
+      const url = match[2].trim();
+      if (!isValidPublicUrl(url)) continue;
+      const linkHost = new URL(url).hostname.toLowerCase();
+      if (linkHost === baseHost || linkHost.includes('jina.ai') || linkHost.includes('cookie') || title.toLowerCase() === 'tiktok' || title.toLowerCase() === 'report') continue;
+      if (!seen.has(url)) {
+        seen.add(url);
+        if (title.length > 120) title = title.substring(0, 117) + '...';
+        items.push({ title: title || linkHost, url });
+      }
+    }
+  }
+
+  if (items.length > 0) return items;
+
+  // 3. Pemindaian tag <a> pada DOM HTML
   try {
     const $ = cheerio.load(html);
     $('a[href]').each((_, el) => {
@@ -273,7 +293,7 @@ export default async function handler(req, res) {
   if (isAggregator) {
     try {
       const fetchDirect = axios.get(cleanUrl, {
-        timeout: 8000,
+        timeout: 3500,
         maxContentLength: 12 * 1024 * 1024,
         headers: {
           'User-Agent': UA_DESKTOP,
@@ -283,9 +303,17 @@ export default async function handler(req, res) {
         }
       }).then(r => typeof r.data === 'string' ? r.data : '');
 
+      const fetchJina = axios.get(`https://r.jina.ai/${cleanUrl}`, {
+        timeout: 3500,
+        headers: {
+          'User-Agent': UA_DESKTOP,
+          'Accept': 'text/plain, text/markdown, */*'
+        }
+      }).then(r => typeof r.data === 'string' ? r.data : '');
+
       const gtUrl = `https://translate.google.com/translate?sl=auto&tl=en&u=${encodeURIComponent(cleanUrl)}`;
       const fetchRelay = axios.get(gtUrl, {
-        timeout: 8000,
+        timeout: 3500,
         maxContentLength: 12 * 1024 * 1024,
         headers: {
           'User-Agent': UA_DESKTOP,
@@ -293,7 +321,7 @@ export default async function handler(req, res) {
         }
       }).then(r => typeof r.data === 'string' ? r.data : '');
 
-      const winningHtml = await Promise.any([fetchDirect, fetchRelay]);
+      const winningHtml = await Promise.any([fetchDirect, fetchJina, fetchRelay]);
       if (winningHtml) {
         const aggregatorItems = extractAggregatorItems(winningHtml, cleanUrl);
         if (aggregatorItems.length > 0) {

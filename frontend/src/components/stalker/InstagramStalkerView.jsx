@@ -335,10 +335,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       };
     };
 
-    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas waktu 16s + 1 retry otomatis
-    const runBackend = async (isRetry = false) => {
+    // Saluran 1: Backend API Gateway (/api/stalk/instagram) dengan batas waktu 4s
+    const runBackend = async () => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 16000);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 4000);
       try {
         const res = await fetch('/api/stalk/instagram', {
           method: 'POST',
@@ -361,12 +361,6 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
           }
         }
         throw new Error(parsed?.message || 'Backend empty');
-      } catch (err) {
-        if (!isRetry) {
-          await new Promise(r => setTimeout(r, 800));
-          return runBackend(true);
-        }
-        throw err;
       } finally {
         clearTimeout(bTimer);
       }
@@ -375,7 +369,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     // Saluran 2: CodeTabs CORS Proxy ke Instagram Embed
     const runClientCodeTabs = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 7000);
+      const timer = setTimeout(() => ctrl.abort(), 4500);
       try {
         const embedUrl = `https://www.instagram.com/${encodeURIComponent(cleanUsername)}/embed/captioned/`;
         const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(embedUrl)}`;
@@ -395,7 +389,7 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
     // Saluran 3: AllOrigins CORS Proxy ke Instagram Embed
     const runClientAllOrigins = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 7000);
+      const timer = setTimeout(() => ctrl.abort(), 4500);
       try {
         const embedUrl = `https://www.instagram.com/${encodeURIComponent(cleanUsername)}/embed/captioned/`;
         const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(embedUrl)}`;
@@ -413,19 +407,81 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       }
     };
 
-    // 1. Prioritaskan backend gateway untuk ekstraksi data lengkap
-    try {
-      const bData = await runBackend();
-      if (bData && isValidInstagramData(bData)) {
-        return bData;
-      }
-    } catch (_) {}
+    // Saluran 4: Edge Markdown / Reader API (r.jina.ai)
+    const runClientJinaReader = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const jinaUrl = `https://r.jina.ai/https://www.instagram.com/${encodeURIComponent(cleanUsername)}/`;
+        const res = await fetch(jinaUrl, {
+          headers: { 'Accept': 'application/json' },
+          signal: ctrl.signal
+        });
+        if (!res.ok) throw new Error('Jina non-200');
+        const json = await res.json();
+        const data = json?.data || json || {};
+        const title = data.title || '';
+        const desc = data.description || '';
+        const content = data.content || '';
+        const combined = `${title} ${desc} ${content}`;
 
-    // 2. Fallback Client-side Edge Relay (CORS Proxies) jika backend diblokir AWS/Vercel IP
+        if (combined.includes('Log into Instagram') && !combined.includes('Followers') && !combined.includes('Pengikut')) {
+          throw new Error('Jina returned login redirect');
+        }
+
+        const stats = extractInstagramStatsFromText(combined);
+        let fullName = '';
+        if (title) {
+          const tMatch = title.match(/([^\(@•]+)(?:\s*\(@|\s*•)/);
+          if (tMatch && tMatch[1]) fullName = tMatch[1].trim();
+        }
+
+        const isPrivate = combined.includes('This Account is Private') || combined.includes('Akun Ini Privat');
+
+        let bio = '';
+        const bioMatch = content.match(/(?:Bio|Description|Biography):\s*([^\n]+)/i) || 
+                         desc.match(/on Instagram:\s*"([^"]+)"/i);
+        if (bioMatch && bioMatch[1]) bio = bioMatch[1].trim();
+
+        const extracted = {
+          username: cleanUsername,
+          fullName: fullName || cleanUsername,
+          nickname: fullName || cleanUsername,
+          avatar: '',
+          bio,
+          bioLink: null,
+          isPrivate,
+          privateAccount: isPrivate,
+          isVerified: combined.includes('Verified') || combined.includes('Terverifikasi'),
+          verified: combined.includes('Verified') || combined.includes('Terverifikasi'),
+          followers: stats.followers,
+          following: stats.following,
+          posts: stats.posts,
+          stats,
+          recentMedia: [],
+          category: 'Kreator',
+          profileUrl: `https://www.instagram.com/${cleanUsername}`
+        };
+
+        if (isValidInstagramData(extracted)) {
+          return normalizeInstagram(extracted);
+        }
+        throw new Error('Jina parse invalid');
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+
+    // Eksekusi paralel seluruh saluran (Promise.any) sejak detik ke-0 tanpa menunggu timeout
     try {
-      const clientData = await Promise.any([runClientCodeTabs(), runClientAllOrigins()]);
-      if (clientData && isValidInstagramData(clientData)) {
-        return clientData;
+      const winner = await Promise.any([
+        runBackend(),
+        runClientCodeTabs(),
+        runClientAllOrigins(),
+        runClientJinaReader()
+      ]);
+      if (winner && isValidInstagramData(winner)) {
+        return winner;
       }
     } catch (_) {}
 

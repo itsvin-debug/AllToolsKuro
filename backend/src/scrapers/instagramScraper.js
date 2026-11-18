@@ -92,7 +92,7 @@ async function fetchEngineEmbedProfile(username) {
   for (const url of urls) {
     try {
       const res = await axios.get(url, {
-        timeout: 5000,
+        timeout: 3000,
         validateStatus: (s) => s < 500,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -198,7 +198,7 @@ async function fetchEngineCrawlerOpenGraph(username) {
   for (const ua of crawlers) {
     try {
       const res = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-        timeout: 6500,
+        timeout: 3000,
         validateStatus: (status) => status < 500,
         headers: {
           'User-Agent': ua,
@@ -301,7 +301,7 @@ async function fetchEngineGoogleRelay(username) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         'Cookie': 'CONSENT=YES+; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzEaAmVuIAEaBgiA_LmnBg'
       },
-      timeout: 8000,
+      timeout: 3000,
       validateStatus: (s) => s < 500
     });
 
@@ -392,7 +392,7 @@ async function fetchEngineGoogleRelay(username) {
 async function fetchEngineWebProfileApi(username) {
   try {
     const webRes = await axios.get(`https://i.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`, {
-      timeout: 4500,
+      timeout: 3000,
       validateStatus: (status) => status < 500,
       headers: {
         'x-ig-app-id': '936619743392459',
@@ -463,6 +463,72 @@ async function fetchEngineWebProfileApi(username) {
     if (err.isNotFound) throw err;
   }
   throw new Error('Jalur Web Profile API did not yield valid profile data');
+}
+
+// Jalur 4: Edge Markdown / Reader API (r.jina.ai)
+async function fetchEngineJinaReader(username) {
+  try {
+    const res = await axios.get(`https://r.jina.ai/https://www.instagram.com/${encodeURIComponent(username)}/`, {
+      timeout: 3000,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      validateStatus: (s) => s < 500
+    });
+
+    const data = res.data?.data || res.data || {};
+    const title = data.title || '';
+    const desc = data.description || '';
+    const content = data.content || '';
+    const combined = `${title} ${desc} ${content}`;
+
+    if (combined.includes('Log into Instagram') && !combined.includes('Followers') && !combined.includes('Pengikut')) {
+      throw new Error('Jina returned login redirect');
+    }
+
+    const stats = extractInstagramStatsFromText(combined);
+    let fullName = '';
+    if (title) {
+      const tMatch = title.match(/([^\(@•]+)(?:\s*\(@|\s*•)/);
+      if (tMatch && tMatch[1]) fullName = tMatch[1].trim();
+    }
+
+    const isPrivate = combined.includes('This Account is Private') || combined.includes('Akun Ini Privat');
+
+    let bio = '';
+    const bioMatch = content.match(/(?:Bio|Description|Biography):\s*([^\n]+)/i) || 
+                     desc.match(/on Instagram:\s*"([^"]+)"/i);
+    if (bioMatch && bioMatch[1]) bio = bioMatch[1].trim();
+
+    const extracted = {
+      username,
+      fullName: fullName || username,
+      nickname: fullName || username,
+      avatar: '',
+      bio,
+      bioLink: null,
+      isPrivate,
+      privateAccount: isPrivate,
+      isVerified: combined.includes('Verified') || combined.includes('Terverifikasi'),
+      verified: combined.includes('Verified') || combined.includes('Terverifikasi'),
+      followers: stats.followers,
+      following: stats.following,
+      posts: stats.posts,
+      stats,
+      recentMedia: [],
+      category: 'Kreator',
+      profileUrl: `https://www.instagram.com/${username}`
+    };
+
+    if (isValidInstagramData(extracted)) {
+      return {
+        source: 'jina_edge_reader',
+        data: extracted
+      };
+    }
+  } catch (err) {}
+  throw new Error('Jalur Jina Edge Reader did not yield valid profile data');
 }
 
 // Deep Merge Engine penggabung metadata parsial dari berbagai jalur
@@ -537,46 +603,25 @@ export async function scrapeInstagram(rawInput, options = {}) {
     };
   }
 
-  let resultCrawler = null;
-  let resultEmbed = null;
-  let resultRelay = null;
-  const debugErrors = {};
+  // Eksekusi paralel seluruh mesin scraper dengan timeout ketat 3 detik per request
+  const [resCrawler, resEmbed, resRelay, resJina, resWebApi] = await Promise.allSettled([
+    fetchEngineCrawlerOpenGraph(username),
+    fetchEngineEmbedProfile(username),
+    fetchEngineGoogleRelay(username),
+    fetchEngineJinaReader(username),
+    fetchEngineWebProfileApi(username)
+  ]);
 
-  // 1. Eksekusi Crawler OpenGraph langsung
-  try {
-    resultCrawler = await fetchEngineCrawlerOpenGraph(username);
-  } catch (err) {
-    debugErrors.crawler = err.message;
-  }
+  const dataCrawler = resCrawler.status === 'fulfilled' ? resCrawler.value?.data : null;
+  const dataEmbed = resEmbed.status === 'fulfilled' ? resEmbed.value?.data : null;
+  const dataRelay = resRelay.status === 'fulfilled' ? resRelay.value?.data : null;
+  const dataJina = resJina.status === 'fulfilled' ? resJina.value?.data : null;
+  const dataWebApi = resWebApi.status === 'fulfilled' ? resWebApi.value?.data : null;
 
-  // 2. Jika crawler langsung gagal (misal diblokir IP datacenter AWS di Vercel), jalankan Google Edge Relay
-  if (!resultCrawler) {
-    try {
-      resultRelay = await fetchEngineGoogleRelay(username);
-    } catch (err) {
-      debugErrors.relay = err.message;
-    }
-  }
-
-  // 3. Eksekusi Embed Profil
-  try {
-    resultEmbed = await fetchEngineEmbedProfile(username);
-  } catch (err) {
-    debugErrors.embed = err.message;
-  }
-
-  // Deep merge properti dari Jalur 1, Jalur 2, dan Jalur 3
-  let mergedData = deepMergeInstagramData(resultCrawler?.data || resultRelay?.data, resultEmbed?.data);
-
-  // Jika belum valid, coba fallback direct Web Profile API
-  if (!isValidInstagramData(mergedData)) {
-    try {
-      const apiRes = await fetchEngineWebProfileApi(username);
-      mergedData = deepMergeInstagramData(mergedData, apiRes?.data);
-    } catch (err) {
-      debugErrors.webApi = err.message;
-    }
-  }
+  // Deep merge seluruh hasil metadata parsial yang berhasil
+  let mergedData = deepMergeInstagramData(dataCrawler || dataRelay, dataEmbed);
+  mergedData = deepMergeInstagramData(mergedData, dataWebApi);
+  mergedData = deepMergeInstagramData(mergedData, dataJina);
 
   // JANGAN PERNAH kembalikan objek palsu serba 0 jika tidak ada bukti data nyata
   if (!isValidInstagramData(mergedData)) {
@@ -584,8 +629,7 @@ export async function scrapeInstagram(rawInput, options = {}) {
       success: false,
       statusCode: 404,
       error: 'user_not_found',
-      message: `Akun Instagram @${username} tidak ditemukan atau data publik tidak dapat diakses.`,
-      debugErrors
+      message: `Akun Instagram @${username} tidak ditemukan atau data publik tidak dapat diakses.`
     };
   }
 
@@ -594,9 +638,9 @@ export async function scrapeInstagram(rawInput, options = {}) {
     data: mergedData
   });
 
-  const finalSource = resultCrawler 
-    ? (resultEmbed ? 'native_hybrid_merged' : 'crawler_link_preview')
-    : (resultRelay ? 'google_edge_relay' : 'instagram_embed');
+  const finalSource = dataCrawler 
+    ? (dataEmbed ? 'native_hybrid_merged' : 'crawler_link_preview')
+    : (dataEmbed ? 'instagram_embed' : (dataRelay ? 'google_edge_relay' : (dataJina ? 'jina_edge_reader' : 'instagram_direct_api')));
 
   return {
     success: true,

@@ -216,10 +216,10 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       };
     };
 
-    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 16s + 1 retry otomatis
-    const runBackend = async (isRetry = false) => {
+    // Saluran 1: Backend API Gateway (/api/stalk/tiktok) dengan batas waktu 4s
+    const runBackend = async () => {
       const backendCtrl = new AbortController();
-      const bTimer = setTimeout(() => backendCtrl.abort(), 16000);
+      const bTimer = setTimeout(() => backendCtrl.abort(), 4000);
       try {
         const res = await fetch('/api/stalk/tiktok', {
           method: 'POST',
@@ -237,14 +237,67 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
         try { parsed = JSON.parse(text); } catch { throw new Error('Backend json parse failed'); }
         if (res.ok && parsed?.success && parsed?.data) return parsed;
         throw new Error(parsed?.message || 'Backend empty');
-      } catch (err) {
-        if (!isRetry) {
-          await new Promise(r => setTimeout(r, 800));
-          return runBackend(true);
-        }
-        throw err;
       } finally {
         clearTimeout(bTimer);
+      }
+    };
+
+    // Saluran Edge Reader: Jina AI Markdown Relay (Bypass Cloudflare & TikTok WAF)
+    const runClientJinaReader = async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4500);
+      try {
+        const jinaUrl = `https://r.jina.ai/https://www.tiktok.com/@${clean}`;
+        const res = await fetch(jinaUrl, {
+          signal: ctrl.signal,
+          headers: { 'Accept': 'text/plain, text/markdown, */*' }
+        });
+        if (!res.ok) throw new Error('Jina non-200');
+        const md = await res.text();
+        if (!md || md.length < 100) throw new Error('Jina empty');
+        if (md.includes("Couldn't find this account") || md.includes('Account not found')) {
+          throw new Error('Not found');
+        }
+
+        const avatarMatch = md.match(/!\[(?:Image \d+|Avatar|Profile)?[^\]]*\]\((https:\/\/[^\s\)]+tiktokcdn[^\s\)]+)\)/i);
+        const nameMatch = md.match(/^#\s+(.+)$/m);
+        const followingMatch = md.match(/\*\*([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\*\*\s*Following/i);
+        const followersMatch = md.match(/\*\*([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\*\*\s*Followers/i);
+        const likesMatch = md.match(/\*\*([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\*\*\s*Likes/i);
+        const bioMatch = md.match(/\[Message\]\([^\)]+\)\s*\n+(?:##\s*)?([^\n#]+)/i);
+
+        const nickname = nameMatch ? nameMatch[1].trim() : clean;
+        const avatar = avatarMatch ? avatarMatch[1] : '';
+        const followers = followersMatch ? parseMetricString(followersMatch[1]) : 0;
+        const following = followingMatch ? parseMetricString(followingMatch[1]) : 0;
+        const likes = likesMatch ? parseMetricString(likesMatch[1]) : 0;
+        const bio = bioMatch ? bioMatch[1].trim() : '';
+
+        if (nickname || avatar || followers > 0 || likes > 0) {
+          return normalizeTikTok({
+            user: {
+              uniqueId: clean,
+              nickname,
+              avatarLarger: avatar,
+              avatarMedium: avatar,
+              avatarThumb: avatar,
+              signature: bio,
+              verified: false,
+              privateAccount: false,
+              region: 'Global'
+            },
+            stats: {
+              followerCount: followers,
+              followingCount: following,
+              heartCount: likes,
+              videoCount: 0,
+              friendCount: 0
+            }
+          }, 'client_jina_edge_reader');
+        }
+        throw new Error('Jina parse empty');
+      } finally {
+        clearTimeout(timer);
       }
     };
 
@@ -340,25 +393,21 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       }
     };
 
-    // Prioritaskan backend gateway untuk ekstraksi data lengkap 100% akurat
+    // Eksekusi paralel kompetitif dari detik ke-0 (Backend vs Jina Reader vs TikWM vs Proxy)
     try {
-      const bData = await runBackend();
-      if (bData?.success && bData?.data) {
-        return bData;
+      const winner = await Promise.any([
+        runBackend(),
+        runClientJinaReader(),
+        runTikWM(),
+        runClientCodeTabs(),
+        runClientAllOrigins()
+      ]);
+      if (winner?.data && (winner.data.avatar || winner.data.stats?.followers > 0 || winner.data.nickname)) {
+        return winner;
       }
     } catch (_) {}
 
-    // Fallback Client-side Edge Relay (CORS proxies & direct TikWM)
-    try {
-      const clientRelay = await Promise.any([
-        runClientCodeTabs(),
-        runClientAllOrigins(),
-        runTikWM()
-      ]);
-      if (clientRelay?.data) return clientRelay;
-    } catch (_) {}
-
-    // Fallback direct TikTok official oEmbed
+    // Fallback cadangan ke official oEmbed
     try {
       const oembedData = await runClientOEmbed();
       if (oembedData?.data) return oembedData;

@@ -115,7 +115,7 @@ async function extractLayer1Hydration(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   try {
     const res = await axios.get(profileUrl, {
-      timeout: 3500,
+      timeout: 3000,
       validateStatus: (status) => status < 500,
       headers: {
         'User-Agent': USER_AGENTS[0],
@@ -196,15 +196,13 @@ async function extractLayerCrawlerOpenGraph(username) {
   const profileUrl = `https://www.tiktok.com/@${username}`;
   const crawlers = [
     'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-    'WhatsApp/2.23.20.0',
-    'TelegramBot (like TwitterBot)',
-    'Twitterbot/1.0'
+    'WhatsApp/2.23.20.0'
   ];
 
   for (const ua of crawlers) {
     try {
       const res = await axios.get(profileUrl, {
-        timeout: 5000,
+        timeout: 3000,
         validateStatus: (status) => status < 500,
         headers: {
           'User-Agent': ua,
@@ -248,6 +246,17 @@ async function extractLayerCrawlerOpenGraph(username) {
         const avatar = imgMatch ? decodeHtmlEntities(imgMatch[1]).replace(/&amp;/g, '&') : '';
         const id = idMatch ? idMatch[1] : '';
 
+        // Deteksi halaman 404 / placeholder generik TikTok
+        if (
+          rawTitle.includes('Kunjungi TikTok') ||
+          rawTitle.includes('Watch more videos') ||
+          rawTitle.includes('Watch trending videos') ||
+          avatar.includes('poster-square.png') ||
+          (!fMatch && !foMatch && !lMatch && !id)
+        ) {
+          return { notFound: true };
+        }
+
         return {
           source: 'layer_crawler_opengraph',
           user: {
@@ -278,6 +287,70 @@ async function extractLayerCrawlerOpenGraph(username) {
   throw new Error('Crawler bot did not find valid TikTok user data');
 }
 
+// Layer Jina Reader: Edge Reader Extractor bypass WAF datacenter
+async function extractLayerJinaReader(username) {
+  try {
+    const res = await fetchWithTimeout(`https://r.jina.ai/https://www.tiktok.com/@${encodeURIComponent(username)}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/plain, text/markdown, */*'
+      }
+    }, 3000);
+
+    if (res.status === 404) return { notFound: true };
+    if (!res.ok) throw new Error(`Jina non-200: ${res.status}`);
+
+    const md = await res.text();
+    if (!md || md.length < 100) throw new Error('Jina response empty');
+
+    if (md.includes("Couldn't find this account") || md.includes('Account not found')) {
+      return { notFound: true };
+    }
+
+    const avatarMatch = md.match(/!\[(?:Image \d+|Avatar|Profile)?[^\]]*\]\((https:\/\/[^\s\)]+tiktokcdn[^\s\)]+)\)/i);
+    const nameMatch = md.match(/^#\s+(.+)$/m);
+    const followingMatch = md.match(/\*\*([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\*\*\s*Following/i);
+    const followersMatch = md.match(/\*\*([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\*\*\s*Followers/i);
+    const likesMatch = md.match(/\*\*([0-9.,]+(?:\s*[KMBkmb]|rb|jt)?)\*\*\s*Likes/i);
+    const bioMatch = md.match(/\[Message\]\([^\)]+\)\s*\n+(?:##\s*)?([^\n#]+)/i);
+
+    const nickname = nameMatch ? nameMatch[1].trim() : username;
+    const avatar = avatarMatch ? avatarMatch[1] : '';
+    const followers = followersMatch ? parseMetricString(followersMatch[1]) : 0;
+    const following = followingMatch ? parseMetricString(followingMatch[1]) : 0;
+    const likes = likesMatch ? parseMetricString(likesMatch[1]) : 0;
+    const bio = bioMatch ? bioMatch[1].trim() : '';
+
+    if (nickname || avatar || followers > 0 || likes > 0) {
+      return {
+        source: 'layer_jina_edge_reader',
+        user: {
+          uniqueId: username,
+          nickname,
+          avatarLarger: avatar,
+          avatarMedium: avatar,
+          avatarThumb: avatar,
+          signature: bio,
+          verified: false,
+          privateAccount: false,
+          region: 'Global'
+        },
+        stats: {
+          followerCount: followers,
+          followingCount: following,
+          heartCount: likes,
+          videoCount: 0,
+          friendCount: 0
+        },
+        statsV2: {}
+      };
+    }
+  } catch (err) {
+    throw new Error(`Jina reader failed: ${err.message}`);
+  }
+  throw new Error('Jina did not extract user');
+}
+
 // Engine 2A: TikWM JSON Cloud API
 async function extractTikWM(username) {
   try {
@@ -287,7 +360,7 @@ async function extractTikWM(username) {
         'User-Agent': USER_AGENTS[0],
         'Accept': 'application/json, text/plain, */*'
       }
-    }, 3500);
+    }, 3000);
 
     const text = await res.text();
     let json = null;
@@ -315,7 +388,7 @@ async function extractSiputzx(username) {
   try {
     const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/stalk/tiktok?username=${encodeURIComponent(username)}`, {
       headers: { 'User-Agent': USER_AGENTS[1] }
-    }, 3500);
+    }, 3000);
 
     const text = await res.text();
     let json = null;
@@ -505,40 +578,34 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
     };
   }
 
-  let extractedResult = null;
+  // Eksekusi paralel semua engine dengan batas waktu 3 detik
+  const engineTasks = [
+    extractLayer1Hydration(username).catch(e => ({ error: e.message })),
+    extractLayerJinaReader(username).catch(e => ({ error: e.message })),
+    extractLayerCrawlerOpenGraph(username).catch(e => ({ error: e.message })),
+    extractTikWM(username).catch(e => ({ error: e.message })),
+    extractLayer4OEmbed(username).catch(e => ({ error: e.message })),
+    extractSiputzx(username).catch(e => ({ error: e.message }))
+  ];
 
-  // Prioritaskan Layer 1 Direct Hydration, lalu fallback ke Crawler OpenGraph (anti-WAF), oEmbed, dan Cloud APIs
-  try {
-    extractedResult = await extractLayer1Hydration(username);
-  } catch (_) {
-    try {
-      extractedResult = await extractLayerCrawlerOpenGraph(username);
-    } catch (__) {
-      try {
-        extractedResult = await extractLayer4OEmbed(username);
-      } catch (___) {
-        try {
-          extractedResult = await extractTikWM(username);
-        } catch (____) {
-          try {
-            extractedResult = await extractSiputzx(username);
-          } catch (_____) {}
-        }
-      }
+  const settled = await Promise.allSettled(engineTasks);
+  const successfulResults = settled
+    .filter(r => r.status === 'fulfilled' && r.value && !r.value.error)
+    .map(r => r.value);
+
+  const hasNotFound = successfulResults.some(r => r.notFound);
+  const validDataResults = successfulResults.filter(r => !r.notFound && r.user);
+
+  if (validDataResults.length === 0) {
+    if (hasNotFound) {
+      return {
+        success: false,
+        status: 'error',
+        statusCode: 404,
+        error: 'user_not_found',
+        message: `Akun TikTok @${username} tidak ditemukan atau telah dihapus/diblokir.`
+      };
     }
-  }
-
-  if (extractedResult?.notFound) {
-    return {
-      success: false,
-      status: 'error',
-      statusCode: 404,
-      error: 'user_not_found',
-      message: `Akun TikTok @${username} tidak ditemukan atau telah dihapus/diblokir.`
-    };
-  }
-
-  if (!extractedResult || !extractedResult.user) {
     return {
       success: false,
       status: 'error',
@@ -548,7 +615,48 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
     };
   }
 
-  const mappedData = mapProfileData(extractedResult, username);
+  // Urutkan berdasarkan kelengkapan metrik & avatar
+  validDataResults.sort((a, b) => {
+    const scoreA = (a.user?.avatarLarger || a.user?.avatar ? 2 : 0) + 
+                   (a.stats?.followerCount > 0 ? 2 : 0) + 
+                   (a.user?.signature ? 1 : 0);
+    const scoreB = (b.user?.avatarLarger || b.user?.avatar ? 2 : 0) + 
+                   (b.stats?.followerCount > 0 ? 2 : 0) + 
+                   (b.user?.signature ? 1 : 0);
+    return scoreB - scoreA;
+  });
+
+  // Gabungkan atribut dari hasil lain untuk memaksimalkan kelengkapan data
+  const base = validDataResults[0];
+  const mergedResult = {
+    source: base.source || 'concurrent_hybrid',
+    user: { ...base.user },
+    stats: { ...base.stats },
+    statsV2: { ...(base.statsV2 || {}) }
+  };
+
+  for (const item of validDataResults) {
+    if (!mergedResult.user.avatarLarger && (item.user?.avatarLarger || item.user?.avatar)) {
+      mergedResult.user.avatarLarger = item.user.avatarLarger || item.user.avatar;
+    }
+    if (!mergedResult.user.signature && item.user?.signature) {
+      mergedResult.user.signature = item.user.signature;
+    }
+    if ((!mergedResult.stats.followerCount || mergedResult.stats.followerCount === 0) && item.stats?.followerCount > 0) {
+      mergedResult.stats.followerCount = item.stats.followerCount;
+    }
+    if ((!mergedResult.stats.heartCount || mergedResult.stats.heartCount === 0) && (item.stats?.heartCount > 0 || item.stats?.likes > 0)) {
+      mergedResult.stats.heartCount = item.stats.heartCount || item.stats.likes;
+    }
+    if ((!mergedResult.stats.followingCount || mergedResult.stats.followingCount === 0) && item.stats?.followingCount > 0) {
+      mergedResult.stats.followingCount = item.stats.followingCount;
+    }
+    if ((!mergedResult.stats.videoCount || mergedResult.stats.videoCount === 0) && item.stats?.videoCount > 0) {
+      mergedResult.stats.videoCount = item.stats.videoCount;
+    }
+  }
+
+  const mappedData = mapProfileData(mergedResult, username);
 
   profileCache.set(cacheKey, {
     data: mappedData,
@@ -558,7 +666,7 @@ export async function stalkTiktokProfile(rawInput, options = {}) {
   return {
     success: true,
     status: 'success',
-    source: extractedResult.source || 'self_hosted_scraper',
+    source: mergedResult.source || 'concurrent_hybrid',
     cached: false,
     timestamp: new Date().toISOString(),
     data: mappedData
