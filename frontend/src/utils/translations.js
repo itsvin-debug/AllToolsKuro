@@ -146,6 +146,11 @@ export const translations = {
           name: 'Social Media Stalker',
           desc: 'Pantau intelijen akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa jejak.',
           tag: '4 PLATFORM'
+        },
+        waViewOnce: {
+          name: 'WA View Once Vault',
+          desc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat tertaut.',
+          tag: 'WA MEDIA'
         }
       }
     },
@@ -733,6 +738,11 @@ export const translations = {
           name: 'Social Media Stalker',
           desc: 'Inspect TikTok, Instagram, X (Twitter), and GitHub profiles 100% anonymously with zero footprint.',
           tag: '4 PLATFORMS'
+        },
+        waViewOnce: {
+          name: 'WA View Once Vault',
+          desc: 'Capture and securely save View Once photos/videos from target numbers in real-time via linked device.',
+          tag: 'WA MEDIA'
         }
       }
     },

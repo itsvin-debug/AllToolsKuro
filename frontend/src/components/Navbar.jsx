@@ -64,7 +64,8 @@ export default function Navbar({
     { id: 'animeFinder', label: t.welcome?.tools?.animeFinder?.name || 'Rekomendasi Anime', icon: Tv },
     { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen },
     { id: 'ipChecker', label: t.welcome?.tools?.ipChecker?.name || 'IP & DNS Checker', icon: ShieldCheck },
-    { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'Social Media Stalker', icon: Globe2 }
+    { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'Social Media Stalker', icon: Globe2 },
+    { id: 'waViewOnce', label: t.welcome?.tools?.waViewOnce?.name || 'WA View Once Vault', icon: ShieldCheck }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);

@@ -14,6 +14,7 @@ import AnimeFinderScreen from './components/AnimeFinderScreen';
 import ManhwaFinderScreen from './components/ManhwaFinderScreen';
 import IpCheckerScreen from './components/IpCheckerScreen';
 import TiktokStalkerScreen from './components/TiktokStalkerScreen';
+import WaViewOnceView from './components/tools/WaViewOnceView';
 import PngToPdfScreen from './components/PngToPdfScreen';
 import MediaCompressorScreen from './components/MediaCompressorScreen';
 import QrStudioScreen from './components/QrStudioScreen';
@@ -49,7 +50,8 @@ const TOOL_NAMES = {
   animeFinder: 'Rekomendasi Anime',
   manhwaFinder: 'Rekomendasi Manhwa',
   ipChecker: 'IP & DNS Checker',
-  tiktokStalker: 'TikTok Stalker'
+  tiktokStalker: 'Social Media Stalker',
+  waViewOnce: 'WA View Once Vault'
 };
 
 export default function App() {
@@ -337,6 +339,14 @@ export default function App() {
 
           {currentScreen === 'tiktokStalker' && (
             <TiktokStalkerScreen
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'waViewOnce' && (
+            <WaViewOnceView
               onBack={() => handleNavigate('welcome')}
               onShowToast={handleShowToast}
               lang={settings.language || 'id'}

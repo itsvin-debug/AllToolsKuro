@@ -20,7 +20,8 @@ import {
   BookOpen,
   Globe,
   Radio,
-  Globe2
+  Globe2,
+  ShieldCheck
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
@@ -216,6 +217,15 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       tag: wt.tools.tiktokStalker?.tag || '4 PLATFORM',
       icon: Globe2,
       onClick: () => onOpenTool('tiktokStalker')
+    },
+    {
+      id: 'waViewOnce',
+      category: 'utility',
+      name: wt.tools.waViewOnce?.name || 'WA View Once Vault',
+      desc: wt.tools.waViewOnce?.desc || 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat tertaut.',
+      tag: wt.tools.waViewOnce?.tag || 'WA MEDIA',
+      icon: ShieldCheck,
+      onClick: () => onOpenTool('waViewOnce')
     }
   ];
 

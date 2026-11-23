@@ -1,0 +1,22 @@
+{
+  "name": "alltoolskuro-wa-backend",
+  "version": "1.0.0",
+  "description": "Dedicated Zero-Disk WhatsApp View Once Capture Backend for AllToolsKuro",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

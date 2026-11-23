@@ -155,6 +155,13 @@ const KURO_TOOLS_CATALOG = [
     tag: 'Multi-Platform OSINT',
     desc: 'Pantau profil, statistik followers, bio, dan postingan akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login.',
     howToUse: 'Pilih platform (TikTok, Instagram, X, atau GitHub), masukkan username target, lalu klik Mulai Lacak Profil.'
+  },
+  {
+    id: 'waViewOnce',
+    name: 'WA View Once Vault',
+    tag: 'WA Media Vault',
+    desc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor WhatsApp target secara real-time via perangkat tertaut.',
+    howToUse: 'Tautkan perangkat dengan scan QR Code, masukkan nomor WA target yang ingin dipantau, lalu media sekali lihat akan otomatis tersimpan di galeri lokal browser.'
   }
 ];
 
