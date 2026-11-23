@@ -13,6 +13,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   downloadContentFromMessage,
+  downloadMediaMessage,
   fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 
@@ -47,13 +48,15 @@ app.get('/', (req, res) => {
   });
 });
 
-// 1. Limit Payload Socket.io 50 MB agar transfer Base64 foto/video HD aman
+// 1. Limit Payload Socket.io 50 MB & Konfigurasi Heartbeat Anti-Drop
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: process.env.FRONTEND_URL || '*',
     methods: ['GET', 'POST']
   },
-  maxHttpBufferSize: 5e7 // 50 MB
+  maxHttpBufferSize: 5e7, // 50 MB
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // Map penyimpan sesi aktif: sessionId -> SessionData
@@ -70,6 +73,8 @@ function normalizeToDigits(raw) {
   }
   return digits;
 }
+
+const normalizePhone = normalizeToDigits;
 
 // Helper pembersih direktori auth sesi
 function removeSessionDir(sessionId) {
@@ -303,8 +308,10 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
       try {
         const qrDataUrl = await QRCode.toDataURL(qr, { margin: 1, scale: 7 });
         io.to(sessionId).emit('qr', { qr, qrDataUrl });
+        io.to(sessionId).emit('qr-code', { qr, qrDataUrl });
       } catch (_) {
         io.to(sessionId).emit('qr', { qr });
+        io.to(sessionId).emit('qr-code', { qr });
       }
     }
 
@@ -400,11 +407,26 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
         const caption = mediaObj.caption || '';
         const senderName = msg.pushName || '';
 
-        // Dekripsi langsung media stream tanpa perlu dibuka di HP
-        const stream = await downloadContentFromMessage(mediaObj, mediaType);
-        const chunks = [];
-        for await (const chunk of stream) chunks.push(chunk);
-        const buffer = Buffer.concat(chunks);
+        // Dekripsi media: Metode 1 (Utama) via downloadContentFromMessage, dengan Metode 2 (Fallback) via downloadMediaMessage
+        let buffer = null;
+        try {
+          const stream = await downloadContentFromMessage(mediaObj, mediaType);
+          const chunks = [];
+          for await (const chunk of stream) chunks.push(chunk);
+          buffer = Buffer.concat(chunks);
+        } catch (m1Err) {
+          console.warn(`[Session ${sessionId}] Metode 1 decrypt gagal (${m1Err.message}), mencoba Metode 2 fallback...`);
+          try {
+            buffer = await downloadMediaMessage(
+              { key: msg.key, message: unwrapped.unwrappedContent || msg.message },
+              'buffer',
+              {},
+              { logger: pinoLogger, reuploadRequest: sock.updateMediaMessage }
+            );
+          } catch (m2Err) {
+            console.error(`[Session ${sessionId}] Metode 2 decrypt juga gagal:`, m2Err.message);
+          }
+        }
 
         if (buffer && buffer.length > 0) {
           const base64Data = `data:${mimeType};base64,${buffer.toString('base64')}`;
