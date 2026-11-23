@@ -5,6 +5,8 @@
  * Menjamin tidak ada tabrakan data antar-perangkat yang berbeda.
  */
 
+import { isToxicText } from '../utils/toxicFilter';
+
 const SETTINGS_KEY = 'kuro_app_settings';
 
 // Menghasilkan ID unik permanen khusus untuk perangkat/browser ini
@@ -92,15 +94,8 @@ export function validateNickname(rawName) {
     return { isValid: false, error: 'Nama panggilan terlalu panjang (maksimal 12 huruf).' };
   }
 
-  // Filter nama binatang
-  const animalPattern = /\b(anjing|asu|asw|babi|monyet|kunyuk|kampret|kucing|tikus|ular|celeng|buaya|bebek|ayam|kuda|sapi|kambing|codot|buntal)\b/i;
-  if (animalPattern.test(trimmed)) {
-    return { isValid: false, error: 'Dilarang menggunakan nama binatang atau sebutan tidak wajar.' };
-  }
-
-  // Filter kata toxic, kelamin, rasisme, makian, dan singkatan slang kotor
-  const toxicPattern = /\b(kontol|kontl|kntl|memek|mmk|jembut|peler|pepek|itil|pantek|ngentot|ngntt|ngentd|bangsat|bgst|bngst|bajingan|goblok|gblk|tolol|bego|idiot|bodoh|bodo|pekok|tai|taik|bokep|porno|sange|lonte|perek|jablay|bencong|banci|fuck|shit|bitch|asshole|bastard|dick|pussy|cunt|nigga|nigger|negro|chink|spic|kike|faggot|retard|anj|anjr|anjir|kelamin|titit|tetek|toket|penis|vagina)\b/i;
-  if (toxicPattern.test(trimmed)) {
+  // Filter bahasa kasar, makian, dan kata toxic komprehensif (KBBI, Daerah, & Internasional)
+  if (isToxicText(trimmed)) {
     return { isValid: false, error: 'Nama mengandung kata tidak pantas atau dilarang. Harap gunakan nama yang sopan.' };
   }
 
