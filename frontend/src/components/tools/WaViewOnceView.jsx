@@ -758,17 +758,25 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           </div>
         </div>
 
-        {/* Baris Status Aktivitas Real-Time Vault */}
-        {vaultActivity && safeText(vaultActivity.text) && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 border-2 border-black rounded-lg text-xs font-mono shadow-[2px_2px_0px_#000] text-neutral-800">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
-            <Activity className="w-3.5 h-3.5 text-neutral-700 shrink-0" />
+        {/* Baris Status Aktivitas Real-Time Vault (Wajib Terlihat) */}
+        <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 border-2 border-black rounded-lg text-xs font-mono shadow-[2px_2px_0px_#000] text-neutral-800">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${vaultActivity ? 'bg-emerald-500 animate-ping' : connectionStatus === 'connected' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+          <Activity className="w-3.5 h-3.5 text-neutral-700 shrink-0" />
+          {vaultActivity && (
             <span className="font-bold text-neutral-500 shrink-0">
               {new Date(vaultActivity.time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}:
             </span>
-            <span className="truncate">{safeText(vaultActivity.text)}</span>
-          </div>
-        )}
+          )}
+          <span className="truncate font-semibold">
+            {vaultActivity && safeText(vaultActivity.text)
+              ? safeText(vaultActivity.text)
+              : connectionStatus === 'connected'
+                ? lockedTarget
+                  ? `Server aktif memantau pesan View Once dari +${safeText(lockedTarget)} (menunggu kiriman media...)`
+                  : 'WhatsApp terhubung. Silakan kunci 1 nomor target untuk mulai memantau.'
+                : 'Menghubungkan ke backend server WhatsApp...'}
+          </span>
+        </div>
 
         {/* Dialog Konfirmasi Clear All */}
         {showClearConfirm && (

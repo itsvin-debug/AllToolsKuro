@@ -315,42 +315,54 @@ async function startBaileys(sessionId, targetNumber = null) {
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    browser: ['Kuro Studio', 'Chrome', '120.0.0'],
-    syncFullHistory: false,
-    shouldSyncHistoryMessage: () => false,
-    markOnlineOnConnect: false,
-    connectTimeoutMs: 60000,
-    keepAliveIntervalMs: 25000,
-    logger: pinoLogger,
-    printQRInTerminal: false
-  });
-
   let session = sessions.get(sessionId);
   if (!session) {
     session = {
       sessionId,
-      sock,
+      sock: null,
       status: 'connecting',
       targetNumber: targetNumber ? normalizePhone(targetNumber) : null,
       targetJids: new Set(),
       lidMap: new Map(),
+      msgCache: new Map(),
       pendingMedia: [],
+      presenceInterval: null,
       lastActive: Date.now(),
       qrCode: null,
       qrDataUrl: null
     };
     sessions.set(sessionId, session);
   } else {
-    session.sock = sock;
+    if (!session.msgCache) session.msgCache = new Map();
     session.status = 'connecting';
     session.lastActive = Date.now();
     if (targetNumber) {
       session.targetNumber = normalizePhone(targetNumber);
     }
+    if (session.presenceInterval) {
+      clearInterval(session.presenceInterval);
+      session.presenceInterval = null;
+    }
   }
+
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    browser: ['Kuro Studio', 'Chrome', '120.0.0'],
+    syncFullHistory: false,
+    shouldSyncHistoryMessage: () => false,
+    markOnlineOnConnect: true,
+    connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 20000,
+    logger: pinoLogger,
+    printQRInTerminal: false,
+    getMessage: async (key) => {
+      const cached = session.msgCache?.get(key?.id);
+      return cached || undefined;
+    }
+  });
+
+  session.sock = sock;
 
   // Simpan kredensial setiap pembaruan
   sock.ev.on('creds.update', saveCreds);
@@ -447,6 +459,22 @@ async function startBaileys(sessionId, targetNumber = null) {
       session.qrDataUrl = null;
       session.lastActive = Date.now();
 
+      // Perangkat tertaut tetap aktif (ON) dan heartbeat presence setiap 45 detik
+      try {
+        await sock.sendPresenceUpdate('available');
+      } catch (_) {}
+
+      if (session.presenceInterval) {
+        clearInterval(session.presenceInterval);
+      }
+      session.presenceInterval = setInterval(async () => {
+        try {
+          if (session.sock) {
+            await session.sock.sendPresenceUpdate('available');
+          }
+        } catch (_) {}
+      }, 45000);
+
       if (session.targetNumber) {
         await resolveTargetIdentifiers(session);
       }
@@ -470,6 +498,11 @@ async function startBaileys(sessionId, targetNumber = null) {
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+
+      if (session.presenceInterval) {
+        clearInterval(session.presenceInterval);
+        session.presenceInterval = null;
+      }
 
       if (isLoggedOut) {
         removeSessionDir(sessionId);
@@ -500,13 +533,25 @@ async function startBaileys(sessionId, targetNumber = null) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' && type !== 'append') return;
 
+    const currentSession = sessions.get(sessionId);
+    if (!currentSession) return;
+
     for (const msg of messages) {
-      if (!msg.message || msg.key?.remoteJid === 'status@broadcast' || msg.key?.fromMe === true) {
-        continue;
+      if (!msg.message) continue;
+
+      // Simpan msg.message ke session.msgCache (maks 100 item, FIFO) untuk kebutuhan retry getMessage Baileys
+      if (msg.key?.id) {
+        if (!currentSession.msgCache) currentSession.msgCache = new Map();
+        if (currentSession.msgCache.size >= 100) {
+          const firstKey = currentSession.msgCache.keys().next().value;
+          currentSession.msgCache.delete(firstKey);
+        }
+        currentSession.msgCache.set(msg.key.id, msg.message);
       }
 
-      const currentSession = sessions.get(sessionId);
-      if (!currentSession) continue;
+      if (msg.key?.remoteJid === 'status@broadcast' || msg.key?.fromMe === true) {
+        continue;
+      }
 
       currentSession.lastActive = Date.now();
 
@@ -515,7 +560,7 @@ async function startBaileys(sessionId, targetNumber = null) {
 
       const matchedTarget = await isFromTarget(msg, currentSession);
 
-      // Log diagnostik singkat ke console Render
+      // Log diagnostik singkat
       console.log('[WA-VAULT]', {
         sessionId,
         remoteJid: msg.key?.remoteJid,
@@ -525,15 +570,19 @@ async function startBaileys(sessionId, targetNumber = null) {
         matchedTarget
       });
 
-      // Emit event diagnostik singkat ke frontend
+      // Status real-time ke frontend via event 'vault-activity'
+      if (!matchedTarget) {
+        io.to(sessionId).emit('vault-activity', {
+          time: Date.now(),
+          text: 'View Once masuk dari ' + (msg.key?.remoteJid || 'unknown') + ' (diabaikan, bukan target terkunci)'
+        });
+        continue;
+      }
+
       io.to(sessionId).emit('vault-activity', {
         time: Date.now(),
-        text: matchedTarget
-          ? 'Media View Once dari target terdeteksi, sedang mendekripsi...'
-          : 'Pesan View Once masuk dari ' + (msg.key?.remoteJid || 'unknown') + ' (bukan target terkunci)'
+        text: 'View Once dari target terdeteksi! Mengunduh media...'
       });
-
-      if (!matchedTarget) continue;
 
       const mediaObj = unwrapped.imageMessage || unwrapped.videoMessage;
       const mediaType = unwrapped.imageMessage ? 'image' : 'video';
@@ -541,8 +590,7 @@ async function startBaileys(sessionId, targetNumber = null) {
 
       // Dekripsi 2 Tahap (downloadContentFromMessage dengan fallback downloadMediaMessage)
       let buffer = null;
-      let m1Error = null;
-      let m2Error = null;
+      let errDetail = '';
 
       // Tahap 1: downloadContentFromMessage
       try {
@@ -551,7 +599,7 @@ async function startBaileys(sessionId, targetNumber = null) {
         for await (const chunk of stream) chunks.push(chunk);
         buffer = Buffer.concat(chunks);
       } catch (err1) {
-        m1Error = err1;
+        errDetail = err1.message;
         console.warn(`[WA-VAULT] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
       }
 
@@ -565,7 +613,7 @@ async function startBaileys(sessionId, targetNumber = null) {
             { logger: pinoLogger, reuploadRequest: sock.updateMediaMessage }
           );
         } catch (err2) {
-          m2Error = err2;
+          errDetail = err2.message;
           console.error('[WA-VAULT] Tahap 2 juga gagal:', err2.message);
         }
       }
@@ -573,7 +621,7 @@ async function startBaileys(sessionId, targetNumber = null) {
       if (!buffer || buffer.length === 0) {
         io.to(sessionId).emit('vault-activity', {
           time: Date.now(),
-          text: 'Gagal mendekripsi media View Once: ' + (m2Error?.message || m1Error?.message || 'Buffer kosong')
+          text: 'Gagal mendekripsi media: ' + (errDetail || 'Buffer kosong')
         });
         continue;
       }
@@ -604,7 +652,7 @@ async function startBaileys(sessionId, targetNumber = null) {
         text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once!'
       });
 
-      // Jika tidak ada socket client di room, simpan ke antrian pendingMedia
+      // Jika room sessionId sedang kosong (tab ditutup), simpan ke antrian pendingMedia (maks 10 item)
       const room = io.sockets.adapter.rooms.get(sessionId);
       if (!room || room.size === 0) {
         if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
@@ -770,6 +818,10 @@ io.on('connection', (socket) => {
 
       const session = sessions.get(sessionId);
       if (session) {
+        if (session.presenceInterval) {
+          clearInterval(session.presenceInterval);
+          session.presenceInterval = null;
+        }
         try {
           await session.sock?.logout();
         } catch (_) {
@@ -797,6 +849,10 @@ setInterval(() => {
     if (now - session.lastActive > IDLE_TIMEOUT_MS) {
       const room = io.sockets.adapter.rooms.get(sessionId);
       if (!room || room.size === 0) {
+        if (session.presenceInterval) {
+          clearInterval(session.presenceInterval);
+          session.presenceInterval = null;
+        }
         try {
           session.sock?.end();
         } catch (_) {}
