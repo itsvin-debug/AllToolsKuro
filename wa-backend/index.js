@@ -8,17 +8,25 @@ const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
 
+const baileysModule = require('@whiskeysockets/baileys');
+const makeWASocket =
+  baileysModule.default?.default ||
+  baileysModule.default ||
+  baileysModule.makeWASocket ||
+  baileysModule;
+
 const {
-  default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   downloadContentFromMessage,
   downloadMediaMessage,
-  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  Browsers,
-  proto
-} = require('@whiskeysockets/baileys');
+  Browsers
+} = baileysModule;
+
+const fetchLatestBaileysVersion =
+  baileysModule.fetchLatestBaileysVersion || baileysModule.fetchLatestWaWebVersion;
+const proto = baileysModule.proto || baileysModule.WAProto;
 const NodeCache = require('node-cache');
 
 const app = express();
@@ -1591,9 +1599,11 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
 
     let version = [2, 3000, 1015901307];
     try {
-      const fetched = await fetchLatestBaileysVersion();
-      if (fetched?.version) {
-        version = fetched.version;
+      if (typeof fetchLatestBaileysVersion === 'function') {
+        const fetched = await fetchLatestBaileysVersion();
+        if (fetched?.version) {
+          version = fetched.version;
+        }
       }
     } catch (verErr) {
       console.warn(`[Session ${sessionId}] fetchLatestBaileysVersion: ${verErr.message}, menggunakan fallback.`);
