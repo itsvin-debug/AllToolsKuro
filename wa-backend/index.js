@@ -657,6 +657,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
 
   // 1. Langsung abaikan dan JANGAN log pesan dari grup, status, atau newsletter
   if (
+    !remoteJid ||
     remoteJid.endsWith('@g.us') ||
     remoteJid === 'status@broadcast' ||
     remoteJid.endsWith('@newsletter')
@@ -751,6 +752,16 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
             }
           } catch (_) {
             decodedMsg = rawDecoded;
+          }
+
+          const peerRemoteJid = String(decodedMsg?.key?.remoteJid || '');
+          if (
+            !peerRemoteJid ||
+            peerRemoteJid.endsWith('@g.us') ||
+            peerRemoteJid === 'status@broadcast' ||
+            peerRemoteJid.endsWith('@newsletter')
+          ) {
+            continue;
           }
 
           learnLidPair(decodedMsg?.key, currentSession);
@@ -1600,6 +1611,10 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
       browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
       shouldSyncHistoryMessage: () => false,
+      shouldIgnoreJid: (jid) => {
+        if (!jid) return true;
+        return jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter');
+      },
       markOnlineOnConnect: true,
       connectTimeoutMs: 60000,
       keepAliveIntervalMs: 20000,
@@ -1844,6 +1859,15 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
       if (!currentSession) return;
 
       for (const msg of messages) {
+        const jid = String(msg?.key?.remoteJid || '');
+        if (
+          !jid ||
+          jid.endsWith('@g.us') ||
+          jid === 'status@broadcast' ||
+          jid.endsWith('@newsletter')
+        ) {
+          continue;
+        }
         learnLidPair(msg?.key, currentSession);
         await processIncomingMessage(msg, currentSession, sock, sessionId);
       }
@@ -1857,6 +1881,15 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
 
       for (const item of updates) {
         const key = item.key;
+        const jid = String(key?.remoteJid || '');
+        if (
+          !jid ||
+          jid.endsWith('@g.us') ||
+          jid === 'status@broadcast' ||
+          jid.endsWith('@newsletter')
+        ) {
+          continue;
+        }
         const msgUpdate = item.update || item;
         if (msgUpdate.message) {
           const reconstructedMsg = {
