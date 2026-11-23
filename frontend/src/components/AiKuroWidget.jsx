@@ -17,7 +17,8 @@ import KuroCharacter from './KuroCharacter';
 import { 
   getDeviceUserName, 
   getDeviceAngerState, 
-  recordDeviceStrike 
+  recordDeviceStrike,
+  resetDeviceAngerState 
 } from '../services/storageService';
 import { isToxicText } from '../utils/toxicFilter';
 
@@ -511,7 +512,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     });
   };
 
-  // Hapus riwayat chat di perangkat & reset
+  // Hapus riwayat chat di perangkat & reset total status ngambek
   const handleClearHistory = () => {
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
@@ -522,18 +523,43 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       localStorage.removeItem(DEVICE_CHAT_STORAGE_KEY);
     } catch (_) {}
 
+    resetDeviceAngerState();
+    setAngerState({ strikes: 0, angryUntil: 0, isAngry: false, remainingMs: 0 });
+    setRemainingCountdown('');
+
     setMessages([]);
     setDisplayedReply('');
     setIsTyping(false);
     setAnimState('wave');
 
     const userName = getDeviceUserName() || 'Kawan';
-    const welcomeReset = `Halo ${userName}! Aku KuroBot, asisten AI resmi AllToolsKuro. Riwayat obrolan telah dibersihkan. Ada yang ingin ditanyakan seputar fitur hari ini?`;
+    const welcomeReset = `Halo ${userName}! Aku KuroBot, asisten AI resmi AllToolsKuro. Riwayat obrolan dan status ngambek telah dibersihkan. Ada yang ingin ditanyakan seputar fitur hari ini?`;
     setTimeout(() => {
       streamText(welcomeReset, () => {
         setMessages([{ sender: 'ai', text: welcomeReset, animation: 'idle' }]);
       });
     }, 300);
+  };
+
+  // Membujuk KuroBot agar memaafkan user dan membatalkan status ngambek secara manis
+  const handleApologize = () => {
+    resetDeviceAngerState();
+    setAngerState({ strikes: 0, angryUntil: 0, isAngry: false, remainingMs: 0 });
+    setRemainingCountdown('');
+    setInputText('');
+    setDisplayedReply('');
+    setAnimState('wave');
+
+    const userName = getDeviceUserName() || 'Kawan';
+    const apologyReply = `Umm... Karena kamu berniat baik dan minta maaf dengan tulus, Kuro maafkan ya, ${userName}! Tapi jangan diulangi lagi, oke? Janji! ✨ Sekarang ada yang bisa Kuro bantu seputar utilitas Kuro Studio?`;
+    
+    streamText(apologyReply, () => {
+      setMessages(prev => [
+        ...prev,
+        { sender: 'user', text: 'Maaf ya Kuro, aku minta maaf 🙏' },
+        { sender: 'ai', text: apologyReply, animation: 'idle' }
+      ]);
+    }, 'idle');
   };
 
   // Rotasi cepat posisi widget menempel ke 4 sudut layar (kiri-atas, kanan-atas, kanan-bawah, kiri-bawah)
@@ -578,13 +604,19 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
     const userName = getDeviceUserName() || 'Kawan';
 
-    // 1. Cek status ngambek
+    // 1. Cek status ngambek & deteksi upaya minta maaf
     const currentAnger = getDeviceAngerState();
     if (currentAnger.isAngry) {
+      const isApology = /maaf|sorry|ampun|maafin|janji|peace|bujuk|jangan ngambek/i.test(textToSend);
+      if (isApology) {
+        handleApologize();
+        return;
+      }
+
       const totalSeconds = Math.max(0, Math.floor(currentAnger.remainingMs / 1000));
       const mins = Math.floor(totalSeconds / 60);
       const secs = totalSeconds % 60;
-      const angryRefusal = `Hmph! Aku masih ngambek sama kamu, ${userName}! Jangan ajak aku bicara dulu! (Sisa waktu ngambek: ${mins} menit ${secs} detik).`;
+      const angryRefusal = `Hmph! Kuro masih ngambek sama kamu, ${userName}! Minta maaf dulu dong secara tulus atau bujuk Kuro pakai permen! 💢 (Sisa waktu ngambek: ${mins}m ${secs}s)`;
 
       setInputText('');
       setAnimState('angry');
@@ -1168,14 +1200,24 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
           {/* Banner Peringatan Ngambek */}
           {angerState.isAngry && (
-            <div className="p-2.5 bg-rose-100 border-b-2 border-black text-rose-800 text-xs font-mono font-bold flex items-center justify-between px-3">
+            <div className="p-2.5 bg-rose-100 border-b-2 border-black text-rose-800 text-xs font-mono font-bold flex items-center justify-between px-3 gap-2 flex-wrap">
               <span className="flex items-center gap-1.5">
                 <Flame className="w-4 h-4 text-rose-600 animate-pulse stroke-[2.5]" />
                 <span>KuroBot Sedang Ngambek!</span>
               </span>
-              <span className="bg-rose-600 text-white px-2 py-0.5 rounded border border-black font-black text-[11px]">
-                {remainingCountdown || '30:00'}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleApologize}
+                  className="px-2.5 py-0.5 rounded border-2 border-black bg-amber-300 hover:bg-amber-400 text-neutral-900 font-sans font-bold text-[11px] shadow-[1.5px_1.5px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer flex items-center gap-1"
+                  title="Minta maaf dan bujuk Kuro agar tidak ngambek"
+                >
+                  <span>Bujuk Kuro 🍬</span>
+                </button>
+                <span className="bg-rose-600 text-white px-2 py-0.5 rounded border border-black font-black text-[11px]">
+                  {remainingCountdown || '30:00'}
+                </span>
+              </div>
             </div>
           )}
 
@@ -1352,14 +1394,14 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={angerState.isAngry ? `Kuro sedang ngambek... (${remainingCountdown})` : 'Tanya seputar fitur AllToolsKuro...'}
-              disabled={isTyping || angerState.isAngry}
+              placeholder={angerState.isAngry ? `Kuro sedang ngambek... (${remainingCountdown}) • Ketik maaf untuk membujuk` : 'Tanya seputar fitur AllToolsKuro...'}
+              disabled={isTyping}
               maxLength={200}
               className="flex-1 px-3 py-2 rounded-xl border-2 border-black bg-neutral-50 text-neutral-900 placeholder:text-neutral-400 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-black disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={isTyping || !inputText.trim() || angerState.isAngry}
+              disabled={isTyping || !inputText.trim()}
               className="p-2.5 rounded-xl border-2 border-black bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 shadow-[2px_2px_0px_#000000] active:translate-x-0.5 active:translate-y-0.5 active:shadow-none transition-all cursor-pointer shrink-0"
               title="Kirim Pesan"
               aria-label="Kirim Pesan"

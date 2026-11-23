@@ -176,17 +176,20 @@ export function parseInstagramHtml(html, username) {
   return isValidInstagramData(extracted) ? extracted : null;
 }
 
-// Jalur 1: Crawler OpenGraph Meta Bot
+// Jalur 1: Crawler OpenGraph Meta Bot (Discordbot, Slackbot, Twitterbot, WhatsApp, Facebook)
 async function fetchEngineCrawlerOpenGraph(username) {
   const crawlers = [
-    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-    'WhatsApp/2.23.20.0'
+    'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+    'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+    'Twitterbot/1.0',
+    'WhatsApp/2.23.20.0',
+    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
   ];
 
   for (const ua of crawlers) {
     try {
       const res = await axios.get(`https://www.instagram.com/${encodeURIComponent(username)}/`, {
-        timeout: 4000,
+        timeout: 4500,
         validateStatus: (s) => s < 500,
         headers: {
           'User-Agent': ua,
@@ -214,55 +217,51 @@ async function fetchEngineCrawlerOpenGraph(username) {
   throw new Error('Jalur Crawler did not yield valid profile data');
 }
 
-// Jalur 2: Google Edge Relay (Bypass blokir WAF IP Datacenter/AWS Vercel)
+// Jalur 2: Google Edge Relay (Bypass blokir WAF IP Datacenter/AWS Vercel tanpa memicu 429)
 async function fetchEngineGoogleRelay(username) {
-  const crawlers = [
-    'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
-    'WhatsApp/2.23.20.0',
-    'LinkedInBot/1.0 (compatible; +http://www.linkedin.com)'
+  const targetClean = encodeURIComponent(username);
+  const candidateUAs = [
+    'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+    'WhatsApp/2.23.20.0'
   ];
 
-  const targetClean = encodeURIComponent(username);
   const endpoints = [
-    `https://www-instagram-com.translate.goog/${targetClean}/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en`,
+    `https://www-instagram-com.translate.goog/${targetClean}/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=id`,
     `https://translate.google.com/translate?sl=auto&tl=en&u=https://www.instagram.com/${targetClean}/`
   ];
 
-  const tasks = [];
   for (const url of endpoints) {
-    for (const ua of crawlers) {
-      tasks.push(async () => {
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 4500);
-        try {
-          const res = await fetch(url, {
-            headers: {
-              'User-Agent': ua,
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              'Accept-Language': 'en-US,en;q=0.9'
-            },
-            signal: ctrl.signal
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    for (const ua of candidateUAs) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 5500);
+      try {
+        const res = await fetch(url, {
+          headers: {
+            'User-Agent': ua,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9'
+          },
+          signal: ctrl.signal
+        });
+
+        if (res.ok) {
           const html = await res.text();
-          if (!html || html.length < 1000) throw new Error('Short response');
-          const parsed = parseInstagramHtml(html, username);
-          if (parsed && isValidInstagramData(parsed)) {
-            return { source: 'google_edge_relay', data: parsed };
+          if (html && html.length > 1000) {
+            const parsed = parseInstagramHtml(html, username);
+            if (parsed && isValidInstagramData(parsed)) {
+              return { source: 'google_edge_relay', data: parsed };
+            }
           }
-          throw new Error('Invalid parse');
-        } finally {
-          clearTimeout(timer);
         }
-      });
+      } catch (_) {
+        // Lanjutkan ke kandidat berikutnya
+      } finally {
+        clearTimeout(timer);
+      }
     }
   }
 
-  try {
-    return await Promise.any(tasks.map(t => t()));
-  } catch (_) {
-    throw new Error('Google Relay did not yield valid profile data');
-  }
+  throw new Error('Google Relay did not yield valid profile data');
 }
 
 // Jalur 3: Direct Web Profile API
@@ -411,14 +410,34 @@ export async function scrapeInstagram(rawInput, options = {}) {
     };
   }
 
-  // Eksekusi paralel seluruh mesin scraper dengan batas waktu masing-masing
-  const [resCrawler, resRelay, resWebApi] = await Promise.allSettled([
-    fetchEngineCrawlerOpenGraph(username),
+  // Jalur cepat: jika crawler langsung mendapatkan data lengkap, kembalikan secepatnya (< 1s)
+  let dataCrawler = null;
+  try {
+    const resCrawler = await fetchEngineCrawlerOpenGraph(username);
+    dataCrawler = resCrawler?.data || null;
+  } catch (_) {}
+
+  if (dataCrawler && isValidInstagramData(dataCrawler) && (dataCrawler.followers > 0 || dataCrawler.following > 0 || dataCrawler.posts > 0 || dataCrawler.isPrivate)) {
+    profileCache.set(cacheKey, {
+      timestamp: Date.now(),
+      data: dataCrawler
+    });
+
+    return {
+      success: true,
+      platform: 'instagram',
+      source: 'crawler_link_preview',
+      cached: false,
+      data: dataCrawler
+    };
+  }
+
+  // Jika crawler dibatasi atau data kurang lengkap, panggil relay dan web api secara bersamaan
+  const [resRelay, resWebApi] = await Promise.allSettled([
     fetchEngineGoogleRelay(username),
     fetchEngineWebProfileApi(username)
   ]);
 
-  const dataCrawler = resCrawler.status === 'fulfilled' ? resCrawler.value?.data : null;
   const dataRelay = resRelay.status === 'fulfilled' ? resRelay.value?.data : null;
   const dataWebApi = resWebApi.status === 'fulfilled' ? resWebApi.value?.data : null;
 

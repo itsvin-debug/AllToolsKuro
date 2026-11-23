@@ -309,17 +309,37 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       };
     };
 
-    // Saluran 1: Backend API (/api/stalk/instagram) dengan batas waktu 14 detik
+    // Saluran 1: Backend API (/api/stalk/instagram) dengan batas waktu 14 detik & fallback GET
     const runBackend = async () => {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 14000);
       try {
-        const res = await fetch('/api/stalk/instagram', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh }),
-          signal: ctrl.signal
-        });
+        let res = null;
+        try {
+          res = await fetch('/api/stalk/instagram', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify({ username: cleanUsername, refresh: forceRefresh }),
+            signal: ctrl.signal
+          });
+        } catch (_) {
+          res = null;
+        }
+
+        // Jika POST gagal atau non-200 (misal terhambat proxy preview), coba GET
+        if (!res || !res.ok) {
+          try {
+            res = await fetch(`/api/stalk/instagram?username=${encodeURIComponent(cleanUsername)}&refresh=${forceRefresh}`, {
+              method: 'GET',
+              credentials: 'same-origin',
+              headers: { 'Accept': 'application/json' },
+              signal: ctrl.signal
+            });
+          } catch (_) {}
+        }
+
+        if (!res) throw new Error('Backend unreachable');
         const ct = res.headers.get('content-type') || '';
         if (!ct.includes('application/json')) throw new Error('Backend non-json');
         const text = await res.text();
@@ -334,10 +354,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       }
     };
 
-    // Saluran 2: Langsung ke Instagram via CORS proxy
+    // Saluran 2: Langsung ke Instagram via CORS proxy ke mirror Google Translate (kebal login wall)
     const runCorsProxy = async (proxyFn) => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 6500);
+      const timer = setTimeout(() => ctrl.abort(), 7500);
       try {
         const html = await proxyFn(ctrl.signal);
         if (!html || html.length < 500) throw new Error('Empty response');
@@ -349,26 +369,28 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       }
     };
 
-    // Proxy A: CodeTabs ke profil langsung
+    const targetMirror = `https://www-instagram-com.translate.goog/${encodeURIComponent(cleanUsername)}/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=id`;
+
+    // Proxy A: CodeTabs ke mirror Google Translate
     const runCodeTabs = () => runCorsProxy(async (signal) => {
-      const url = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(`https://www.instagram.com/${encodeURIComponent(cleanUsername)}/`)}`;
+      const url = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetMirror)}`;
       const r = await fetch(url, { signal });
       if (!r.ok) throw new Error(`CodeTabs ${r.status}`);
       return r.text();
     });
 
-    // Proxy B: AllOrigins ke profil langsung
+    // Proxy B: AllOrigins ke mirror Google Translate
     const runAllOrigins = () => runCorsProxy(async (signal) => {
-      const url = `https://api.allorigins.win/get?url=${encodeURIComponent(`https://www.instagram.com/${encodeURIComponent(cleanUsername)}/`)}`;
+      const url = `https://api.allorigins.win/get?url=${encodeURIComponent(targetMirror)}`;
       const r = await fetch(url, { signal });
       if (!r.ok) throw new Error(`AllOrigins ${r.status}`);
       const j = await r.json();
       return j?.contents || '';
     });
 
-    // Proxy C: corsproxy.io ke profil langsung
+    // Proxy C: corsproxy.io ke mirror Google Translate
     const runCorsproxy = () => runCorsProxy(async (signal) => {
-      const url = `https://corsproxy.io/?url=${encodeURIComponent(`https://www.instagram.com/${encodeURIComponent(cleanUsername)}/`)}`;
+      const url = `https://corsproxy.io/?url=${encodeURIComponent(targetMirror)}`;
       const r = await fetch(url, { signal });
       if (!r.ok) throw new Error(`corsproxy ${r.status}`);
       return r.text();
