@@ -31,6 +31,7 @@ import {
 
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
 const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
+const STORAGE_CONFIRMED_LIDS = 'wa_vault_confirmed_lids';
 
 // Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
 const safeText = (val) => {
@@ -113,6 +114,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const [connectedPhone, setConnectedPhone] = useState(null);
   const [backendError, setBackendError] = useState(null);
   const [vaultActivity, setVaultActivity] = useState(null); // Status aktivitas real-time deteksi/dekripsi
+  const [unmappedLidAlert, setUnmappedLidAlert] = useState(null); // Alert 1-klik jika ada View Once dari @lid belum terpetakan
+  const [confirmedLids, setConfirmedLids] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_CONFIRMED_LIDS);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // 3. Galeri Media Tersimpan di IndexedDB
   const [mediaList, setMediaList] = useState([]);
@@ -140,6 +150,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('target-updated');
         socketRef.current.off('view-once-media');
         socketRef.current.off('vault-activity');
+        socketRef.current.off('unmapped-lid-view-once');
         socketRef.current.off('session-error');
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -182,13 +193,18 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     socketRef.current = socket;
 
-    // Setiap kali terhubung, kirim 'resume-session' beserta targetNumber dari localStorage
+    // Setiap kali terhubung, kirim 'resume-session' beserta targetNumber dan confirmedLids dari localStorage
     socket.on('connect', () => {
       setBackendError(null);
       const savedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
+      let savedLids = [];
+      try {
+        savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
+      } catch (_) {}
       socket.emit('resume-session', {
         sessionId,
-        targetNumber: savedTarget ? normalizePhone(savedTarget) : null
+        targetNumber: savedTarget ? normalizePhone(savedTarget) : null,
+        confirmedLids: savedLids
       });
     });
 
@@ -222,12 +238,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         if (phone) setConnectedPhone(phone);
         triggerToast('WhatsApp berhasil terhubung!', 'success');
 
-        // Pastikan targetNumber tersinkronisasi kembali saat status connected
+        // Pastikan targetNumber dan confirmedLids tersinkronisasi kembali saat status connected
         const currentSavedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
+        let savedLids = [];
+        try {
+          savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
+        } catch (_) {}
         if (currentSavedTarget) {
           socket.emit('resume-session', {
             sessionId,
-            targetNumber: normalizePhone(currentSavedTarget)
+            targetNumber: normalizePhone(currentSavedTarget),
+            confirmedLids: savedLids
           });
         }
       } else if (status === 'qr_ready') {
@@ -309,6 +330,18 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
     });
 
+    // Jaring Pengaman 1-Klik: Notifikasi pesan View Once masuk dari ID kontak tersembunyi (@lid)
+    socket.on('unmapped-lid-view-once', (data) => {
+      if (data && data.lid) {
+        setUnmappedLidAlert({
+          lid: safeText(data.lid),
+          pushName: safeText(data.pushName) || 'Kontak WhatsApp',
+          mediaType: data.mediaType === 'video' ? 'video' : 'image',
+          sentAt: Number(data.sentAt) || Date.now()
+        });
+      }
+    });
+
     // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas Langsung Terbuka)
     socket.on('view-once-media', async (rawPayload) => {
       try {
@@ -377,7 +410,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     if (socketRef.current && socketRef.current.connected) {
       socketRef.current.emit('set-target', {
         sessionId,
-        targetNumber: normalized
+        targetNumber: normalized,
+        confirmedLids
       });
     }
 
@@ -388,15 +422,44 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const handleUnlockTarget = () => {
     setLockedTarget(null);
     localStorage.removeItem(STORAGE_LOCKED_TARGET);
+    setConfirmedLids([]);
+    localStorage.removeItem(STORAGE_CONFIRMED_LIDS);
+    setUnmappedLidAlert(null);
 
     if (socketRef.current && socketRef.current.connected) {
       socketRef.current.emit('set-target', {
         sessionId,
-        targetNumber: null
+        targetNumber: null,
+        confirmedLids: []
       });
     }
 
     triggerToast('Target dibuka. Silakan masukkan nomor target baru.', 'info');
+  };
+
+  // Konfirmasi 1-Klik: Ikat @lid kontak WhatsApp tersembunyi ke nomor target
+  const handleConfirmTargetLid = () => {
+    if (!unmappedLidAlert) return;
+    const lid = unmappedLidAlert.lid;
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('confirm-target-lid', { sessionId, lid });
+    }
+    const updated = Array.from(new Set([...confirmedLids, lid]));
+    setConfirmedLids(updated);
+    localStorage.setItem(STORAGE_CONFIRMED_LIDS, JSON.stringify(updated));
+    setUnmappedLidAlert(null);
+    triggerToast('ID kontak WhatsApp berhasil diikat ke nomor target!', 'success');
+  };
+
+  // Abaikan pesan dari ID tersembunyi non-target
+  const handleDismissUnmappedLid = () => {
+    if (!unmappedLidAlert) return;
+    const lid = unmappedLidAlert.lid;
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('dismiss-unmapped-lid', { sessionId, lid });
+    }
+    setUnmappedLidAlert(null);
+    triggerToast('Pesan diabaikan.', 'info');
   };
 
   // Unduh Media ke Perangkat Lokal (.jpg / .mp4)
@@ -777,6 +840,40 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 : 'Menghubungkan ke backend server WhatsApp...'}
           </span>
         </div>
+
+        {/* Banner Konfirmasi 1-Klik untuk ID Kontak Tersembunyi (@lid) */}
+        {unmappedLidAlert && (
+          <div className="bg-amber-100 border-2 border-black rounded-xl p-4 shadow-[4px_4px_0px_#000] space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-amber-400 border-2 border-black flex items-center justify-center shrink-0 shadow-[2px_2px_0px_#000]">
+                <ShieldAlert className="w-5 h-5 text-black" />
+              </div>
+              <div className="space-y-1 text-xs md:text-sm text-neutral-900">
+                <p className="font-black uppercase tracking-tight">
+                  Pesan Sekali Lihat Masuk Dari ID Kontak Tersembunyi
+                </p>
+                <p className="text-neutral-700 leading-relaxed text-xs">
+                  {unmappedLidAlert.mediaType === 'video' ? 'Video' : 'Foto'} View Once masuk dari: <b>{safeText(unmappedLidAlert.pushName)}</b> (<span className="font-mono text-[11px] font-bold">{safeText(unmappedLidAlert.lid)}</span>). Apakah ini nomor target <b>+{safeText(lockedTarget)}</b> Anda?
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-1 sm:pl-12">
+              <button
+                onClick={handleConfirmTargetLid}
+                className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Ya, Ini Target Saya (Buka Media)
+              </button>
+              <button
+                onClick={handleDismissUnmappedLid}
+                className="px-3.5 py-2 bg-white text-neutral-700 border-2 border-black rounded-xl font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px] transition-all"
+              >
+                Bukan Target (Abaikan)
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Dialog Konfirmasi Clear All */}
         {showClearConfirm && (

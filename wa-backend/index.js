@@ -106,11 +106,27 @@ function normalizePhone(raw) {
 }
 
 // 1. Resolusi 2 Arah @lid <-> Nomor HP (KUNCI UTAMA ANTI-GAGAL @lid)
-async function resolveJidToPhone(jid, session) {
+async function resolveJidToPhone(jid, session, msg = null) {
   if (!jid || typeof jid !== 'string') return null;
   const cleanJid = jid.trim();
 
-  // a) Jika jid berakhiran @s.whatsapp.net: ambil angka sebelum '@' dan ':', lalu normalisasi
+  // a) Periksa properti nomor alternatif di msg.key jika tersedia (Baileys v7)
+  if (msg?.key) {
+    const altCandidate = msg.key.senderPn || msg.key.participantPn || msg.key.remoteJidAlt || msg.key.participantAlt;
+    if (altCandidate) {
+      const rawAlt = typeof altCandidate === 'string' ? altCandidate.split('@')[0].split(':')[0] : String(altCandidate);
+      const phoneAlt = normalizePhone(rawAlt);
+      if (phoneAlt && phoneAlt.length >= 8) {
+        if (session?.lidMap) {
+          session.lidMap.set(cleanJid, phoneAlt);
+          session.lidMap.set(phoneAlt, cleanJid);
+        }
+        return phoneAlt;
+      }
+    }
+  }
+
+  // b) Jika jid berakhiran @s.whatsapp.net: ambil angka sebelum '@' dan ':', lalu normalisasi
   if (cleanJid.endsWith('@s.whatsapp.net') || (!cleanJid.includes('@lid') && cleanJid.includes('@'))) {
     const rawNumber = cleanJid.split('@')[0].split(':')[0];
     const phone = normalizePhone(rawNumber);
@@ -120,13 +136,36 @@ async function resolveJidToPhone(jid, session) {
     }
   }
 
-  // b) Jika jid berakhiran @lid: cek dulu di session.lidMap
-  if (cleanJid.endsWith('@lid')) {
+  // c) Jika jid berakhiran @lid
+  if (cleanJid.endsWith('@lid') || cleanJid.includes('@lid')) {
+    const lidId = cleanJid.split('@')[0].split(':')[0];
+
+    // 1) Cek session.lidMap
     if (session?.lidMap?.has(cleanJid)) {
       return session.lidMap.get(cleanJid);
     }
+    if (session?.lidMap?.has(lidId)) {
+      return session.lidMap.get(lidId);
+    }
 
-    // c) Jika belum ada di lidMap: panggil signalRepository.lidMapping.getPNForLID(jid)
+    // 2) Cek langsung store internal Baileys via session.authKeys
+    try {
+      if (session?.authKeys?.get) {
+        const reverseData = await session.authKeys.get('lid-mapping', [lidId + '_reverse']);
+        const reverseVal = reverseData?.[lidId + '_reverse'] || reverseData?.[lidId];
+        if (reverseVal) {
+          const rawPN = typeof reverseVal === 'string' ? reverseVal.split('@')[0].split(':')[0] : String(reverseVal);
+          const p = normalizePhone(rawPN);
+          if (p) {
+            session.lidMap?.set(cleanJid, p);
+            session.lidMap?.set(p, cleanJid);
+            return p;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 3) Cek via signalRepository.lidMapping
     try {
       if (session?.sock?.signalRepository?.lidMapping?.getPNForLID) {
         const pn = await session.sock.signalRepository.lidMapping.getPNForLID(cleanJid);
@@ -142,7 +181,7 @@ async function resolveJidToPhone(jid, session) {
       }
     } catch (_) {}
 
-    // d) Cek juga sock.authState?.creds
+    // 4) Cek sock.authState?.creds
     try {
       if (session?.sock?.authState?.creds?.me?.lid === cleanJid) {
         const myPhone = normalizePhone(session.sock.authState.creds.me.id?.split(':')[0]);
@@ -167,14 +206,41 @@ async function resolveJidToPhone(jid, session) {
 async function resolveTargetIdentifiers(session) {
   if (!session || !session.targetNumber) return;
   if (!session.targetJids) session.targetJids = new Set();
+  if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
+  if (!session.lidMap) session.lidMap = new Map();
 
   session.targetJids.clear();
   session.targetJids.add(session.targetNumber);
   session.targetJids.add(`${session.targetNumber}@s.whatsapp.net`);
 
+  // Masukkan semua LID target yang telah dikonfirmasi pengguna
+  for (const confirmedLid of session.confirmedTargetLids) {
+    session.targetJids.add(confirmedLid);
+    const lidDigits = confirmedLid.split('@')[0].split(':')[0];
+    session.targetJids.add(lidDigits);
+  }
+
+  // Cek langsung key store Baileys untuk nomor target
+  try {
+    if (session.authKeys?.get) {
+      const mapping = await session.authKeys.get('lid-mapping', [session.targetNumber]);
+      const foundLid = mapping?.[session.targetNumber];
+      if (foundLid) {
+        const cleanFound = String(foundLid);
+        session.targetJids.add(cleanFound);
+        if (!cleanFound.includes('@')) {
+          session.targetJids.add(`${cleanFound}@lid`);
+        }
+        session.lidMap.set(cleanFound, session.targetNumber);
+        session.lidMap.set(session.targetNumber, cleanFound);
+      }
+    }
+  } catch (_) {}
+
   if (session.sock) {
     try {
-      const [res] = await session.sock.onWhatsApp(session.targetNumber);
+      const results = await session.sock.onWhatsApp(session.targetNumber);
+      const res = Array.isArray(results) ? results[0] : results;
       if (res?.jid) {
         session.targetJids.add(res.jid);
         const p = normalizePhone(res.jid.split('@')[0]);
@@ -214,18 +280,23 @@ async function isFromTarget(msg, session) {
   const candidates = [
     msg.key?.remoteJid,
     msg.key?.remoteJidAlt,
+    msg.key?.senderPn,
     msg.key?.participant,
-    msg.key?.participantAlt
+    msg.key?.participantAlt,
+    msg.key?.participantPn
   ].filter(Boolean);
 
   for (const candidate of candidates) {
-    // 1) Cocokkan langsung dengan targetJids yang telah dipetakan
+    // 1) Cocokkan langsung dengan confirmedTargetLids dan targetJids
+    if (session.confirmedTargetLids && session.confirmedTargetLids.has(candidate)) {
+      return true;
+    }
     if (session.targetJids && session.targetJids.has(candidate)) {
       return true;
     }
 
     // 2) Resolusi JID/LID kandidat ke nomor HP murni
-    const phone = await resolveJidToPhone(candidate, session);
+    const phone = await resolveJidToPhone(candidate, session, msg);
     if (phone) {
       if (phone === session.targetNumber) {
         return true;
@@ -243,60 +314,52 @@ async function isFromTarget(msg, session) {
   return false;
 }
 
-// 2. Ekstraksi View Once Mengupas Hingga 6 Lapisan Pembungkus Baileys
-function extractViewOnce(rawMessage) {
-  if (!rawMessage || typeof rawMessage !== 'object') {
-    return { unwrapped: null, isViewOnce: false };
+// 2. Detektor View Once Rekursif Mendalam (Anti-Lolos Semua Format WA)
+function deepExtractViewOnce(obj, inheritedViewOnce = false, depth = 0) {
+  if (!obj || typeof obj !== 'object' || depth > 8) {
+    return null;
   }
 
-  let current = rawMessage;
-  let isViewOnce = false;
-  let depth = 0;
-
-  while (current && typeof current === 'object' && depth < 6) {
-    depth++;
-
-    if (current.ephemeralMessage?.message) {
-      current = current.ephemeralMessage.message;
-      continue;
-    }
-    if (current.viewOnceMessage?.message) {
-      isViewOnce = true;
-      current = current.viewOnceMessage.message;
-      continue;
-    }
-    if (current.viewOnceMessageV2?.message) {
-      isViewOnce = true;
-      current = current.viewOnceMessageV2.message;
-      continue;
-    }
-    if (current.viewOnceMessageV2Extension?.message) {
-      isViewOnce = true;
-      current = current.viewOnceMessageV2Extension.message;
-      continue;
-    }
-    if (current.deviceSentMessage?.message) {
-      current = current.deviceSentMessage.message;
-      continue;
-    }
-    if (current.editedMessage?.message) {
-      current = current.editedMessage.message;
-      continue;
-    }
-    if (current.documentWithCaptionMessage?.message) {
-      current = current.documentWithCaptionMessage.message;
-      continue;
-    }
-    break;
+  if (obj.imageMessage && (inheritedViewOnce || obj.imageMessage.viewOnce === true)) {
+    return {
+      mediaType: 'image',
+      mediaObj: obj.imageMessage,
+      unwrappedMessage: { imageMessage: obj.imageMessage }
+    };
   }
 
-  if (!current) return { unwrapped: null, isViewOnce: false };
-
-  if (current.imageMessage?.viewOnce === true || current.videoMessage?.viewOnce === true) {
-    isViewOnce = true;
+  if (obj.videoMessage && (inheritedViewOnce || obj.videoMessage.viewOnce === true)) {
+    return {
+      mediaType: 'video',
+      mediaObj: obj.videoMessage,
+      unwrappedMessage: { videoMessage: obj.videoMessage }
+    };
   }
 
-  return { unwrapped: current, isViewOnce };
+  const viewOnceWrappers = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'];
+  for (const key of viewOnceWrappers) {
+    if (obj[key]?.message) {
+      const res = deepExtractViewOnce(obj[key].message, true, depth + 1);
+      if (res) return res;
+    }
+  }
+
+  const commonWrappers = [
+    'ephemeralMessage',
+    'deviceSentMessage',
+    'editedMessage',
+    'documentWithCaptionMessage',
+    'associatedChildMessage',
+    'message'
+  ];
+  for (const key of commonWrappers) {
+    if (obj[key]?.message) {
+      const res = deepExtractViewOnce(obj[key].message, inheritedViewOnce, depth + 1);
+      if (res) return res;
+    }
+  }
+
+  return null;
 }
 
 // Inisialisasi & Penghubung Baileys Anti-Putus & Anti-Bad MAC
@@ -316,11 +379,14 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
       status: 'connecting',
       targetNumber: targetNumber ? normalizePhone(targetNumber) : null,
       targetJids: new Set(),
+      confirmedTargetLids: new Set(),
       lidMap: new Map(),
+      unmappedLidQueue: new Map(),
       msgCache: new Map(),
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
       pendingMedia: [],
       presenceInterval: null,
+      authKeys: null,
       isInitializing: true,
       lastActive: Date.now(),
       qrCode: null,
@@ -329,6 +395,8 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
     sessions.set(sessionId, session);
   } else {
     session.isInitializing = true;
+    if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
+    if (!session.unmappedLidQueue) session.unmappedLidQueue = new Map();
     if (!session.msgCache) session.msgCache = new Map();
     if (!session.msgRetryCounterCache) {
       session.msgRetryCounterCache = new NodeCache({ stdTTL: 600, useClones: false });
@@ -379,6 +447,7 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    session.authKeys = state.keys;
 
     const sock = makeWASocket({
       version,
@@ -446,6 +515,41 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
           }
         }
       }
+    });
+
+    sock.ev.on('lid-mapping.update', (update) => {
+      if (!update) return;
+      try {
+        if (Array.isArray(update)) {
+          for (const item of update) {
+            if (item?.lid && item?.pn) {
+              const p = normalizePhone(item.pn);
+              if (p) {
+                session.lidMap.set(item.lid, p);
+                session.lidMap.set(p, item.lid);
+              }
+            }
+          }
+        } else if (typeof update === 'object') {
+          if (update.lid && update.pn) {
+            const p = normalizePhone(update.pn);
+            if (p) {
+              session.lidMap.set(update.lid, p);
+              session.lidMap.set(p, update.lid);
+            }
+          } else {
+            for (const [k, v] of Object.entries(update)) {
+              if (typeof v === 'string') {
+                const p = normalizePhone(v.includes('@') ? v.split('@')[0] : v);
+                if (p) {
+                  session.lidMap.set(k, p);
+                  session.lidMap.set(p, k);
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
     });
 
     sock.ev.on('messaging-history.set', (payload) => {
@@ -580,18 +684,31 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
       if (!currentSession) return;
 
       for (const msg of messages) {
-        if (!msg.message) continue;
+        if (!msg.message && !msg.messageStubType) continue;
 
-        // Log diagnostik bersih membuktikan pesan berhasil didekripsi libsignal tanpa Bad MAC
-        console.log('[WA-VAULT][MSG]', {
+        const remoteJid = String(msg.key?.remoteJid || '');
+
+        // 1. Langsung abaikan dan JANGAN log pesan dari grup, status, atau newsletter
+        if (
+          remoteJid.endsWith('@g.us') ||
+          remoteJid === 'status@broadcast' ||
+          remoteJid.endsWith('@newsletter')
+        ) {
+          continue;
+        }
+
+        // Cetak 1 baris log bersih untuk SEMUA pesan chat pribadi
+        console.log('[WA-VAULT][PRIVATE]', {
           from: msg.key?.remoteJid,
-          alt: msg.key?.remoteJidAlt,
+          alt: msg.key?.remoteJidAlt || msg.key?.senderPn,
           fromMe: msg.key?.fromMe,
+          pushName: msg.pushName,
+          stub: msg.messageStubType,
           keys: Object.keys(msg.message || {})
         });
 
         // Simpan msg.message ke session.msgCache (maks 100 item, FIFO) untuk kebutuhan retry getMessage Baileys
-        if (msg.key?.id) {
+        if (msg.key?.id && msg.message) {
           if (!currentSession.msgCache) currentSession.msgCache = new Map();
           if (currentSession.msgCache.size >= 100) {
             const firstKey = currentSession.msgCache.keys().next().value;
@@ -600,117 +717,171 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
           currentSession.msgCache.set(msg.key.id, msg.message);
         }
 
-        if (msg.key?.remoteJid === 'status@broadcast' || msg.key?.fromMe === true) {
-          continue;
-        }
-
         currentSession.lastActive = Date.now();
 
-        const { unwrapped, isViewOnce } = extractViewOnce(msg.message);
-        if (!isViewOnce || !unwrapped) continue;
+        // Deteksi apakah pesan merupakan View Once (rekursif mendalam)
+        const viewOnceData = deepExtractViewOnce(msg.message);
 
-        const matchedTarget = await isFromTarget(msg, currentSession);
-
-        // Log diagnostik singkat
-        console.log('[WA-VAULT]', {
-          sessionId,
-          remoteJid: msg.key?.remoteJid,
-          remoteJidAlt: msg.key?.remoteJidAlt,
-          fromMe: msg.key?.fromMe,
-          isViewOnce,
-          matchedTarget
-        });
-
-        // Status real-time ke frontend via event 'vault-activity'
-        if (!matchedTarget) {
-          io.to(sessionId).emit('vault-activity', {
-            time: Date.now(),
-            text: 'View Once masuk dari ' + (msg.key?.remoteJid || 'unknown') + ' (diabaikan, bukan target terkunci)'
-          });
+        // Jika pesan keluar (fromMe === true)
+        if (msg.key?.fromMe === true) {
+          if (viewOnceData || msg.message?.protocolMessage) {
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: 'Terdeteksi pesan View Once KELUAR (fromMe). Kirim dari HP target ke akun yang tertaut agar bisa ditangkap.'
+            });
+          }
           continue;
         }
 
-        io.to(sessionId).emit('vault-activity', {
-          time: Date.now(),
-          text: 'View Once dari target terdeteksi! Mengunduh media...'
-        });
+        if (!viewOnceData) continue;
 
-        const mediaObj = unwrapped.imageMessage || unwrapped.videoMessage;
-        const mediaType = unwrapped.imageMessage ? 'image' : 'video';
-        if (!mediaObj) continue;
+        const { mediaType, mediaObj, unwrappedMessage } = viewOnceData;
+        const matched = await isFromTarget(msg, currentSession);
 
-        // Dekripsi 2 Tahap (downloadContentFromMessage dengan fallback downloadMediaMessage)
-        let buffer = null;
-        let errDetail = '';
+        // 4. Dekripsi View Once + Jaring Pengaman LID Belum Terpetakan
+        if (matched) {
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'Media View Once dari target terdeteksi! Mendekripsi...'
+          });
 
-        // Tahap 1: downloadContentFromMessage
-        try {
-          const stream = await downloadContentFromMessage(mediaObj, mediaType);
-          const chunks = [];
-          for await (const chunk of stream) chunks.push(chunk);
-          buffer = Buffer.concat(chunks);
-        } catch (err1) {
-          errDetail = err1.message;
-          console.warn(`[WA-VAULT] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
-        }
+          let buffer = null;
+          let errDetail = '';
 
-        // Tahap 2 (Fallback jika Tahap 1 error atau buffer kosong): downloadMediaMessage
-        if (!buffer || buffer.length === 0) {
           try {
-            buffer = await downloadMediaMessage(
-              { key: msg.key, message: unwrapped },
-              'buffer',
-              {},
-              { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
-            );
-          } catch (err2) {
-            errDetail = err2.message;
-            console.error('[WA-VAULT] Tahap 2 juga gagal:', err2.message);
+            const stream = await downloadContentFromMessage(mediaObj, mediaType);
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(chunk);
+            buffer = Buffer.concat(chunks);
+          } catch (err1) {
+            errDetail = err1.message;
+            console.warn(`[WA-VAULT] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
           }
-        }
 
-        if (!buffer || buffer.length === 0) {
+          if (!buffer || buffer.length === 0) {
+            try {
+              buffer = await downloadMediaMessage(
+                { key: msg.key, message: unwrappedMessage },
+                'buffer',
+                {},
+                { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
+              );
+            } catch (err2) {
+              errDetail = err2.message;
+              console.error('[WA-VAULT] Tahap 2 juga gagal:', err2.message);
+            }
+          }
+
+          if (!buffer || buffer.length === 0) {
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: 'Gagal mendekripsi media: ' + (errDetail || 'Buffer kosong')
+            });
+            continue;
+          }
+
+          const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+          const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+          const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+          const payload = {
+            id: String(msg.key?.id || Date.now()),
+            senderNumber: currentSession.targetNumber,
+            senderName: String(msg.pushName || ''),
+            mediaType: String(mediaType),
+            mimeType: String(mimeType),
+            caption: String(mediaObj.caption || ''),
+            sentAt: Number(sentAt),
+            base64Data
+          };
+
+          console.log(`[WA-VAULT Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
+
+          io.to(sessionId).emit('view-once-media', payload);
           io.to(sessionId).emit('vault-activity', {
             time: Date.now(),
-            text: 'Gagal mendekripsi media: ' + (errDetail || 'Buffer kosong')
+            text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once dari target!'
           });
-          continue;
-        }
 
-        const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-        const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-        const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
-
-        const payload = {
-          id: String(msg.key?.id || Date.now()),
-          senderNumber: currentSession.targetNumber,
-          senderName: String(msg.pushName || ''),
-          mediaType: String(mediaType),
-          mimeType: String(mimeType),
-          caption: String(mediaObj.caption || ''),
-          sentAt: Number(sentAt),
-          base64Data
-        };
-
-        console.log(`[WA-VAULT Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari +${currentSession.targetNumber}`);
-
-        // Kirim real-time ke room socket client
-        io.to(sessionId).emit('view-once-media', payload);
-
-        // Emit status aktivitas berhasil
-        io.to(sessionId).emit('vault-activity', {
-          time: Date.now(),
-          text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once!'
-        });
-
-        // Jika room sessionId sedang kosong (tab ditutup), simpan ke antrian pendingMedia (maks 10 item)
-        const room = io.sockets.adapter.rooms.get(sessionId);
-        if (!room || room.size === 0) {
-          if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
-          currentSession.pendingMedia.push(payload);
-          if (currentSession.pendingMedia.length > 10) {
-            currentSession.pendingMedia.shift();
+          const room = io.sockets.adapter.rooms.get(sessionId);
+          if (!room || room.size === 0) {
+            if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
+            currentSession.pendingMedia.push(payload);
+            if (currentSession.pendingMedia.length > 10) {
+              currentSession.pendingMedia.shift();
+            }
           }
+        } else if (remoteJid.endsWith('@lid')) {
+          // Matched false tapi pengirim berakhiran @lid (nomor disembunyikan WhatsApp)
+          let buffer = null;
+          try {
+            const stream = await downloadContentFromMessage(mediaObj, mediaType);
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(chunk);
+            buffer = Buffer.concat(chunks);
+          } catch (_) {
+            try {
+              buffer = await downloadMediaMessage(
+                { key: msg.key, message: unwrappedMessage },
+                'buffer',
+                {},
+                { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
+              );
+            } catch (_) {}
+          }
+
+          if (buffer && buffer.length > 0) {
+            const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+            const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+            const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+            const unmappedPayload = {
+              id: String(msg.key?.id || Date.now()),
+              senderNumber: currentSession.targetNumber,
+              senderName: String(msg.pushName || 'Kontak Tanpa Nama'),
+              mediaType: String(mediaType),
+              mimeType: String(mimeType),
+              caption: String(mediaObj.caption || ''),
+              sentAt: Number(sentAt),
+              base64Data
+            };
+
+            if (!currentSession.unmappedLidQueue) currentSession.unmappedLidQueue = new Map();
+            let list = currentSession.unmappedLidQueue.get(remoteJid) || [];
+            list.push({ payload: unmappedPayload, createdAt: Date.now() });
+            if (list.length > 5) list.shift();
+            currentSession.unmappedLidQueue.set(remoteJid, list);
+
+            setTimeout(() => {
+              if (currentSession.unmappedLidQueue?.has(remoteJid)) {
+                const items = currentSession.unmappedLidQueue.get(remoteJid) || [];
+                const fresh = items.filter((it) => Date.now() - it.createdAt < 5 * 60 * 1000);
+                if (fresh.length > 0) {
+                  currentSession.unmappedLidQueue.set(remoteJid, fresh);
+                } else {
+                  currentSession.unmappedLidQueue.delete(remoteJid);
+                }
+              }
+            }, 5 * 60 * 1000);
+
+            io.to(sessionId).emit('unmapped-lid-view-once', {
+              lid: remoteJid,
+              pushName: String(msg.pushName || 'Kontak Tanpa Nama'),
+              mediaType: String(mediaType),
+              sentAt
+            });
+
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: 'View Once masuk dari ID tersembunyi (' + (msg.pushName || remoteJid) + '). Konfirmasi jika itu nomor target Anda.'
+            });
+          }
+        } else {
+          // Matched false dan bukan @lid (nomor HP biasa @s.whatsapp.net yang bukan target)
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'View Once dari nomor lain (bukan target terkunci) diabaikan.'
+          });
         }
       }
     });
@@ -726,22 +897,40 @@ io.on('connection', (socket) => {
   // Event 'resume-session' (Sinkronisasi Otomatis saat Klien Masuk/Reconnect)
   socket.on('resume-session', async (payload) => {
     try {
-      const { sessionId, targetNumber } = payload || {};
+      const { sessionId, targetNumber, confirmedLids } = payload || {};
       if (!sessionId) return;
 
       socket.join(sessionId);
 
       let session = sessions.get(sessionId);
 
-      if (targetNumber) {
-        const clean = normalizePhone(targetNumber);
-        if (session) {
+      if (session) {
+        if (targetNumber) {
+          const clean = normalizePhone(targetNumber);
           session.targetNumber = clean;
+        }
+
+        if (Array.isArray(confirmedLids)) {
+          if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
+          for (const cl of confirmedLids) {
+            if (cl) {
+              const cleanL = String(cl).trim();
+              session.confirmedTargetLids.add(cleanL);
+              if (session.targetJids) {
+                session.targetJids.add(cleanL);
+                session.targetJids.add(cleanL.split('@')[0].split(':')[0]);
+              }
+              if (session.targetNumber && session.lidMap) {
+                session.lidMap.set(cleanL, session.targetNumber);
+              }
+            }
+          }
+        }
+
+        if (session.targetNumber) {
           await resolveTargetIdentifiers(session);
         }
-      }
 
-      if (session) {
         session.lastActive = Date.now();
 
         if (session.status === 'connected') {
@@ -776,6 +965,16 @@ io.on('connection', (socket) => {
       const credsFile = path.join(sessionDir, 'creds.json');
       if (fs.existsSync(credsFile)) {
         session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null);
+        if (Array.isArray(confirmedLids) && session) {
+          if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
+          for (const cl of confirmedLids) {
+            if (cl) {
+              const cleanL = String(cl).trim();
+              session.confirmedTargetLids.add(cleanL);
+              session.targetJids?.add(cleanL);
+            }
+          }
+        }
         return;
       }
 
@@ -789,7 +988,7 @@ io.on('connection', (socket) => {
   // Event 'set-target' (Kunci 1 Nomor Target Terpantau)
   socket.on('set-target', async (payload) => {
     try {
-      const { sessionId, targetNumber } = payload || {};
+      const { sessionId, targetNumber, confirmedLids } = payload || {};
       if (!sessionId) return;
 
       socket.join(sessionId);
@@ -800,6 +999,18 @@ io.on('connection', (socket) => {
       if (session) {
         session.targetNumber = clean;
         session.lastActive = Date.now();
+
+        if (Array.isArray(confirmedLids)) {
+          if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
+          for (const cl of confirmedLids) {
+            if (cl) {
+              const cleanL = String(cl).trim();
+              session.confirmedTargetLids.add(cleanL);
+              if (session.targetJids) session.targetJids.add(cleanL);
+            }
+          }
+        }
+
         await resolveTargetIdentifiers(session);
       }
 
@@ -808,6 +1019,71 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error set-target:', err.message);
       socket.emit('session-error', { message: 'Gagal memperbarui target: ' + err.message });
+    }
+  });
+
+  // Event 'confirm-target-lid' (Jaring Pengaman 1-Klik untuk ID Tersembunyi)
+  socket.on('confirm-target-lid', async (payload) => {
+    try {
+      const { sessionId, lid } = payload || {};
+      if (!sessionId || !lid) return;
+
+      const session = sessions.get(sessionId);
+      if (!session) return;
+
+      const cleanLid = String(lid).trim();
+      if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
+      session.confirmedTargetLids.add(cleanLid);
+
+      if (!session.targetJids) session.targetJids = new Set();
+      session.targetJids.add(cleanLid);
+      const lidDigits = cleanLid.split('@')[0].split(':')[0];
+      session.targetJids.add(lidDigits);
+
+      if (session.targetNumber) {
+        if (!session.lidMap) session.lidMap = new Map();
+        session.lidMap.set(cleanLid, session.targetNumber);
+        session.lidMap.set(lidDigits, session.targetNumber);
+        session.lidMap.set(session.targetNumber, cleanLid);
+      }
+
+      // Ambil semua media tertahan milik lid tersebut dari unmappedLidQueue dan buka langsung
+      if (session.unmappedLidQueue?.has(cleanLid)) {
+        const queuedList = session.unmappedLidQueue.get(cleanLid) || [];
+        for (const item of queuedList) {
+          const finalPayload = {
+            ...item.payload,
+            senderNumber: session.targetNumber || item.payload.senderNumber
+          };
+          io.to(sessionId).emit('view-once-media', finalPayload);
+        }
+        session.unmappedLidQueue.delete(cleanLid);
+      }
+
+      io.to(sessionId).emit('vault-activity', {
+        time: Date.now(),
+        text: 'ID target berhasil diikat permanen! Media View Once langsung dibuka.'
+      });
+    } catch (err) {
+      console.error('Error confirm-target-lid:', err.message);
+    }
+  });
+
+  // Event 'dismiss-unmapped-lid' (Abaikan media dari ID tersembunyi non-target)
+  socket.on('dismiss-unmapped-lid', (payload) => {
+    try {
+      const { sessionId, lid } = payload || {};
+      if (!sessionId || !lid) return;
+      const session = sessions.get(sessionId);
+      if (session?.unmappedLidQueue) {
+        session.unmappedLidQueue.delete(String(lid).trim());
+      }
+      io.to(sessionId).emit('vault-activity', {
+        time: Date.now(),
+        text: 'Pesan dari ID tersembunyi diabaikan.'
+      });
+    } catch (err) {
+      console.error('Error dismiss-unmapped-lid:', err.message);
     }
   });
 
