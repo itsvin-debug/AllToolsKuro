@@ -228,34 +228,41 @@ async function fetchEngineGoogleRelay(username) {
     `https://translate.google.com/translate?sl=auto&tl=en&u=https://www.instagram.com/${targetClean}/`
   ];
 
+  const tasks = [];
   for (const url of endpoints) {
     for (const ua of crawlers) {
-      try {
+      tasks.push(async () => {
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 5500);
-        const res = await fetch(url, {
-          headers: {
-            'User-Agent': ua,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9'
-          },
-          signal: ctrl.signal
-        });
-        clearTimeout(timer);
-
-        if (!res.ok) continue;
-        const html = await res.text();
-        if (!html || html.length < 1000) continue;
-
-        const parsed = parseInstagramHtml(html, username);
-        if (parsed && isValidInstagramData(parsed)) {
-          return { source: 'google_edge_relay', data: parsed };
+        const timer = setTimeout(() => ctrl.abort(), 4500);
+        try {
+          const res = await fetch(url, {
+            headers: {
+              'User-Agent': ua,
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9'
+            },
+            signal: ctrl.signal
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const html = await res.text();
+          if (!html || html.length < 1000) throw new Error('Short response');
+          const parsed = parseInstagramHtml(html, username);
+          if (parsed && isValidInstagramData(parsed)) {
+            return { source: 'google_edge_relay', data: parsed };
+          }
+          throw new Error('Invalid parse');
+        } finally {
+          clearTimeout(timer);
         }
-      } catch (_) {}
+      });
     }
   }
 
-  throw new Error('Google Relay did not yield valid profile data');
+  try {
+    return await Promise.any(tasks.map(t => t()));
+  } catch (_) {
+    throw new Error('Google Relay did not yield valid profile data');
+  }
 }
 
 // Jalur 3: Direct Web Profile API

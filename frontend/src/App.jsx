@@ -59,7 +59,7 @@ export default function App() {
   
   // Pengaturan dinamis aplikasi
   const [settings, setSettings] = useState(() => getSettings());
-  const [toastMessage, setToastMessage] = useState(null);
+  const [toast, setToast] = useState({ message: null, type: 'info' });
 
   // Menerapkan tema dinamis ke elemen root (HTML)
   useEffect(() => {
@@ -95,8 +95,8 @@ export default function App() {
     });
   };
 
-  const handleShowToast = (msg) => {
-    setToastMessage(msg);
+  const handleShowToast = (msg, type = 'info') => {
+    setToast({ message: msg, type });
   };
 
   // Navigasi layar & pencatatan riwayat alat
@@ -136,8 +136,9 @@ export default function App() {
       
       {/* Toast Notifikasi Feedback Instan */}
       <Toast 
-        message={toastMessage} 
-        onClose={() => setToastMessage(null)} 
+        message={toast.message} 
+        type={toast.type}
+        onClose={() => setToast({ message: null, type: 'info' })} 
       />
 
       {/* Background Visual FX: Sakura Falling, Cyber Grid, atau Off (juga dihormati oleh opsi hideAnimations) */}

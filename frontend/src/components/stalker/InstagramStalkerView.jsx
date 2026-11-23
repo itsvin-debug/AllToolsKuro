@@ -309,10 +309,10 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       };
     };
 
-    // Saluran 1: Backend API (/api/stalk/instagram) dengan batas waktu 8.5 detik
+    // Saluran 1: Backend API (/api/stalk/instagram) dengan batas waktu 14 detik
     const runBackend = async () => {
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8500);
+      const timer = setTimeout(() => ctrl.abort(), 14000);
       try {
         const res = await fetch('/api/stalk/instagram', {
           method: 'POST',

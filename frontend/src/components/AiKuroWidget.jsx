@@ -35,7 +35,7 @@ function cleanSpeechText(text) {
     .trim();
 }
 
-// Katalog 17 utilitas AllToolsKuro lengkap untuk penjelasan fitur interaktif
+// Katalog 17 utilitas AllToolsKuro lengkap berurutan 100% sesuai DAFTAR ALAT UTAMA (kiri ke kanan, atas ke bawah)
 const KURO_TOOLS_CATALOG = [
   {
     id: 'downloader',
@@ -43,34 +43,6 @@ const KURO_TOOLS_CATALOG = [
     tag: 'All-in-One HD',
     desc: 'Unduh video, album slide foto, dan audio MP3 tanpa watermark dari TikTok, Instagram, YouTube, dan medsos lainnya hingga kualitas 4K & Status WA Anti-Burik 1080p.',
     howToUse: 'Tempel URL video atau audio di kolom input, pilih format (Video/Audio/Slide) dan resolusi, lalu klik tombol download.'
-  },
-  {
-    id: 'tiktokStalker',
-    name: 'Social Media Stalker',
-    tag: 'Multi-Platform OSINT',
-    desc: 'Pantau profil, statistik followers, bio, dan postingan akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login.',
-    howToUse: 'Pilih platform (TikTok, Instagram, X, atau GitHub), masukkan username target, lalu klik Mulai Lacak Profil.'
-  },
-  {
-    id: 'resolver',
-    name: 'Safelink & Link Resolver',
-    tag: 'Bypass Link & Iklan',
-    desc: 'Lewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, dll) langsung ke direct download (Mediafire, GDrive, Mega) dan ekstrak seluruh tautan bio Linktree instan.',
-    howToUse: 'Tempel tautan safelink atau profil Linktree, klik Selesaikan Tautan, dan dapatkan link tujuan asli tanpa iklan jebakan.'
-  },
-  {
-    id: 'animeFinder',
-    name: 'Rekomendasi Anime',
-    tag: 'Database MyAnimeList',
-    desc: 'Jelajahi ribuan anime terbaik berdasarkan kombinasi genre favorit, skor rating MyAnimeList, poster visual HD, dan sinopsis lengkap.',
-    howToUse: 'Pilih satu atau beberapa genre favorit, atur urutan rating, lalu klik cari untuk melihat sinopsis bilingual dan detail episode.'
-  },
-  {
-    id: 'manhwaFinder',
-    name: 'Rekomendasi Manhwa',
-    tag: 'Komik Webtoon Korea',
-    desc: 'Temukan komik Korea (Manhwa) terpopuler dengan filter genre, skor pembaca, cover jernih, dan rangkuman alur cerita seru.',
-    howToUse: 'Pilih genre komik yang diminati, temukan judul populer dengan skor tertinggi, dan baca ringkasan sinopsisnya.'
   },
   {
     id: 'jjFinder',
@@ -150,11 +122,39 @@ const KURO_TOOLS_CATALOG = [
     howToUse: 'Unggah gambar apapun yang memiliki subjek jelas, tunggu AI memisahkan latar belakang, lalu unduh PNG transparan.'
   },
   {
+    id: 'resolver',
+    name: 'Safelink & Link Resolver',
+    tag: 'Bypass Link & Iklan',
+    desc: 'Lewati safelink bertingkat (Sfl.gl, SafelinkU, Ouo, dll) langsung ke direct download (Mediafire, GDrive, Mega) dan ekstrak seluruh tautan bio Linktree instan.',
+    howToUse: 'Tempel tautan safelink atau profil Linktree, klik Selesaikan Tautan, dan dapatkan link tujuan asli tanpa iklan jebakan.'
+  },
+  {
+    id: 'animeFinder',
+    name: 'Rekomendasi Anime',
+    tag: 'Database MyAnimeList',
+    desc: 'Jelajahi ribuan anime terbaik berdasarkan kombinasi genre favorit, skor rating MyAnimeList, poster visual HD, dan sinopsis lengkap.',
+    howToUse: 'Pilih satu atau beberapa genre favorit, atur urutan rating, lalu klik cari untuk melihat sinopsis bilingual dan detail episode.'
+  },
+  {
+    id: 'manhwaFinder',
+    name: 'Rekomendasi Manhwa',
+    tag: 'Komik Webtoon Korea',
+    desc: 'Temukan komik Korea (Manhwa) terpopuler dengan filter genre, skor pembaca, cover jernih, dan rangkuman alur cerita seru.',
+    howToUse: 'Pilih genre komik yang diminati, temukan judul populer dengan skor tertinggi, dan baca ringkasan sinopsisnya.'
+  },
+  {
     id: 'ipChecker',
     name: 'IP & DNS Checker',
     tag: 'Analisis Jaringan',
     desc: 'Cek telemetri IP publik, operator ISP, nomor ASN, koordinat lokasi, dan deteksi VPN/Proxy secara real-time.',
     howToUse: 'Buka fitur untuk melihat telemetri koneksimu secara otomatis, atau ketik alamat IP/domain lain untuk menganalisis jaringannya.'
+  },
+  {
+    id: 'tiktokStalker',
+    name: 'Social Media Stalker',
+    tag: 'Multi-Platform OSINT',
+    desc: 'Pantau profil, statistik followers, bio, dan postingan akun TikTok, Instagram, X (Twitter), dan GitHub secara 100% anonim tanpa login.',
+    howToUse: 'Pilih platform (TikTok, Instagram, X, atau GitHub), masukkan username target, lalu klik Mulai Lacak Profil.'
   }
 ];
 
@@ -163,7 +163,7 @@ const DEVICE_CHAT_STORAGE_KEY = 'kuro_device_ai_chat_history';
 
 // Hitung koordinat default yang aman menempel ke tepi kiri atau kanan
 function computeDefaultPosition(isPopup, dockSide = 'right') {
-  if (typeof window === 'undefined') return { x: 16, y: 100, dockSide: 'right' };
+  if (typeof window === 'undefined') return { x: 12, y: 100, dockSide: 'right' };
   const screenW = window.innerWidth;
   const screenH = window.innerHeight;
   const isMobile = screenW < 640;
@@ -171,21 +171,21 @@ function computeDefaultPosition(isPopup, dockSide = 'right') {
   if (isPopup) {
     const w = isMobile ? Math.floor(screenW * 0.92) : 385;
     const h = Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560);
-    const x = dockSide === 'left' ? 16 : Math.max(16, screenW - w - 16);
+    const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
     const y = isMobile ? Math.max(16, screenH - h - 100) : Math.max(16, screenH - h - 24);
     return { x, y, dockSide };
   }
 
-  const w = isMobile ? 48 : 56;
+  const w = isMobile ? 48 : 175;
   const h = isMobile ? 48 : 56;
-  const x = dockSide === 'left' ? 16 : Math.max(16, screenW - w - 16);
+  const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
   const y = isMobile ? Math.max(16, screenH - h - 100) : Math.max(16, screenH - h - 24);
   return { x, y, dockSide };
 }
 
 // Muat dan validasi koordinat tersimpan dengan jaminan edge-docked
 function getInitialPosition() {
-  if (typeof window === 'undefined') return { x: 16, y: 100, dockSide: 'right' };
+  if (typeof window === 'undefined') return { x: 12, y: 100, dockSide: 'right' };
   try {
     const raw = localStorage.getItem(POSITION_STORAGE_KEY);
     if (raw) {
@@ -193,8 +193,8 @@ function getInitialPosition() {
       if (typeof parsed.y === 'number' && !isNaN(parsed.y)) {
         const dockSide = parsed.dockSide === 'left' ? 'left' : 'right';
         const isMobile = window.innerWidth < 640;
-        const w = isMobile ? 48 : 56;
-        const x = dockSide === 'left' ? 16 : Math.max(16, window.innerWidth - w - 16);
+        const w = isMobile ? 48 : 175;
+        const x = dockSide === 'left' ? 12 : Math.max(12, window.innerWidth - w - 12);
         const y = Math.max(16, Math.min(parsed.y, window.innerHeight - 80));
         return { x, y, dockSide };
       }
@@ -212,7 +212,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   const [pos, setPos] = useState(getInitialPosition);
   const widgetRef = useRef(null);
 
-  // State gestur drag
+  // State gestur drag berbasis Universal Pointer Events
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStateRef = useRef({
@@ -221,6 +221,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     originX: 0,
     originY: 0,
     isDragging: false,
+    pointerId: null,
     startTime: 0,
     lastDx: 0,
     lastDy: 0
@@ -263,8 +264,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const el = widgetRef.current;
     const rect = el ? el.getBoundingClientRect() : null;
 
-    const widgetWidth = rect?.width || (openState ? Math.min(Math.floor(screenW * 0.92), 385) : (isMobile ? 48 : 56));
-    const widgetHeight = rect?.height || (openState ? Math.min(Math.floor(screenH * 0.82), 560) : (isMobile ? 48 : 56));
+    const widgetWidth = rect?.width || (openState ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 175));
+    const widgetHeight = rect?.height || (openState ? (isMobile ? 520 : 560) : (isMobile ? 48 : 56));
 
     const bottomClearance = isMobile ? 88 : 16;
     const topClearance = 16;
@@ -274,7 +275,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       (targetPos?.x !== undefined && (targetPos.x + widgetWidth / 2 < screenW / 2)) ? 'left' : 'right'
     );
 
-    const safeX = dockSide === 'left' ? 16 : Math.max(16, screenW - widgetWidth - 16);
+    const safeX = dockSide === 'left' ? 12 : Math.max(12, screenW - widgetWidth - 12);
     const rawY = typeof targetPos?.y === 'number' && !isNaN(targetPos.y) ? targetPos.y : (screenH - widgetHeight - bottomClearance);
     const safeY = Math.max(topClearance, Math.min(rawY, screenH - widgetHeight - bottomClearance));
 
@@ -534,15 +535,15 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const screenH = window.innerHeight;
     const isMobile = screenW < 640;
 
-    const w = isOpen ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 56);
+    const w = isOpen ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 175);
     const h = isOpen ? Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560) : (isMobile ? 48 : 56);
     const bottomClearance = isMobile ? 88 : 16;
 
     const corners = [
-      { x: screenW - w - 16, y: screenH - h - bottomClearance, dockSide: 'right' }, // Kanan-Bawah
-      { x: 16, y: screenH - h - bottomClearance, dockSide: 'left' },               // Kiri-Bawah
-      { x: 16, y: 16, dockSide: 'left' },                                         // Kiri-Atas
-      { x: screenW - w - 16, y: 16, dockSide: 'right' }                            // Kanan-Atas
+      { x: screenW - w - 12, y: screenH - h - bottomClearance, dockSide: 'right' }, // Kanan-Bawah
+      { x: 12, y: screenH - h - bottomClearance, dockSide: 'left' },               // Kiri-Bawah
+      { x: 12, y: 16, dockSide: 'left' },                                         // Kiri-Atas
+      { x: screenW - w - 12, y: 16, dockSide: 'right' }                            // Kanan-Atas
     ];
 
     let closestIndex = 0;
@@ -734,97 +735,194 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }
   };
 
-  // ─── GESTUR DRAGGING DENGAN STRICT LEFT/RIGHT MAGNETIC EDGE-DOCKING ───
-  const handleDragStart = (e) => {
-    if (e.target.closest('button') || e.target.closest('input')) return;
+  // ─── GESTUR DRAGGING DENGAN UNIVERSAL POINTER EVENTS & STRICT LEFT/RIGHT MAGNETIC SNAPPING ───
+  const handleLauncherPointerDown = (e) => {
     if (e.button !== undefined && e.button !== 0) return;
-
-    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const pointerId = e.pointerId;
+    try {
+      e.currentTarget.setPointerCapture(pointerId);
+    } catch (_) {}
 
     dragStateRef.current = {
-      startX: clientX,
-      startY: clientY,
+      startX: e.clientX,
+      startY: e.clientY,
       originX: pos.x,
       originY: pos.y,
       isDragging: false,
+      pointerId,
       lastDx: 0,
       lastDy: 0,
       startTime: Date.now()
     };
+  };
 
-    const handleMove = (moveEv) => {
-      const curX = moveEv.touches ? moveEv.touches[0].clientX : moveEv.clientX;
-      const curY = moveEv.touches ? moveEv.touches[0].clientY : moveEv.clientY;
-      const dx = curX - dragStateRef.current.startX;
-      const dy = curY - dragStateRef.current.startY;
-      dragStateRef.current.lastDx = dx;
-      dragStateRef.current.lastDy = dy;
+  const handleLauncherPointerMove = (e) => {
+    if (dragStateRef.current.pointerId === null || dragStateRef.current.pointerId === undefined) return;
+    const dx = e.clientX - dragStateRef.current.startX;
+    const dy = e.clientY - dragStateRef.current.startY;
+    dragStateRef.current.lastDx = dx;
+    dragStateRef.current.lastDy = dy;
+    const dist = Math.hypot(dx, dy);
 
-      if (!dragStateRef.current.isDragging && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
-        dragStateRef.current.isDragging = true;
-        setIsDragging(true);
-      }
+    if (!dragStateRef.current.isDragging && dist >= 6) {
+      dragStateRef.current.isDragging = true;
+      setIsDragging(true);
+    }
 
-      if (dragStateRef.current.isDragging) {
-        if (moveEv.cancelable) moveEv.preventDefault();
-        setDragOffset({ x: dx, y: dy });
-      }
+    if (dragStateRef.current.isDragging) {
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+      const isMobile = screenW < 640;
+      const el = widgetRef.current;
+      const rect = el ? el.getBoundingClientRect() : null;
+      const widgetW = rect?.width || (isMobile ? 48 : 175);
+      const widgetH = rect?.height || (isMobile ? 48 : 56);
+      const bottomClearance = isMobile ? 88 : 16;
+      const topClearance = 16;
+
+      const proposedX = dragStateRef.current.originX + dx;
+      const proposedY = dragStateRef.current.originY + dy;
+
+      const clampedX = Math.max(0, Math.min(proposedX, screenW - widgetW));
+      const clampedY = Math.max(topClearance, Math.min(proposedY, screenH - widgetH - bottomClearance));
+
+      setDragOffset({ x: clampedX - dragStateRef.current.originX, y: clampedY - dragStateRef.current.originY });
+    }
+  };
+
+  const handleLauncherPointerUp = (e) => {
+    if (dragStateRef.current.pointerId === null || dragStateRef.current.pointerId === undefined) return;
+    const pointerId = dragStateRef.current.pointerId;
+    try {
+      e.currentTarget.releasePointerCapture(pointerId);
+    } catch (_) {}
+    dragStateRef.current.pointerId = null;
+
+    const wasDragging = dragStateRef.current.isDragging;
+    setIsDragging(false);
+    setDragOffset({ x: 0, y: 0 });
+
+    // Jika pergerakan pointer kurang dari 6px, aksi dihitung sebagai klik biasa
+    if (!wasDragging) {
+      handleOpenWidget();
+      return;
+    }
+
+    // Drag selesai: magnetik snap tegas ke sisi kiri atau kanan layar
+    const rawNewX = dragStateRef.current.originX + (dragStateRef.current.lastDx || 0);
+    const rawNewY = dragStateRef.current.originY + (dragStateRef.current.lastDy || 0);
+
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+    const isMobile = screenW < 640;
+    const el = widgetRef.current;
+    const rect = el ? el.getBoundingClientRect() : null;
+    const widgetW = rect?.width || (isMobile ? 48 : 175);
+    const widgetH = rect?.height || (isMobile ? 48 : 56);
+    const bottomClearance = isMobile ? 88 : 16;
+    const topClearance = 16;
+
+    const centerX = rawNewX + widgetW / 2;
+    const newDockSide = centerX < screenW / 2 ? 'left' : 'right';
+    const snappedX = newDockSide === 'left' ? 12 : Math.max(12, screenW - widgetW - 12);
+    const clampedY = Math.max(topClearance, Math.min(rawNewY, screenH - widgetH - bottomClearance));
+
+    const nextPos = { x: Math.round(snappedX), y: Math.round(clampedY), dockSide: newDockSide };
+    setPos(nextPos);
+    try {
+      localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(nextPos));
+    } catch (_) {}
+  };
+
+  // Drag handle untuk memindahkan header popup obrolan saat terbuka
+  const handleHeaderPointerDown = (e) => {
+    if (e.target.closest('button')) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    const pointerId = e.pointerId;
+    try {
+      e.currentTarget.setPointerCapture(pointerId);
+    } catch (_) {}
+    dragStateRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: pos.x,
+      originY: pos.y,
+      isDragging: false,
+      pointerId,
+      lastDx: 0,
+      lastDy: 0,
+      startTime: Date.now()
     };
+  };
 
-    const handleEnd = () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleEnd);
-      window.removeEventListener('touchmove', handleMove);
-      window.removeEventListener('touchend', handleEnd);
-      window.removeEventListener('touchcancel', handleEnd);
+  const handleHeaderPointerMove = (e) => {
+    if (dragStateRef.current.pointerId === null || dragStateRef.current.pointerId === undefined) return;
+    const dx = e.clientX - dragStateRef.current.startX;
+    const dy = e.clientY - dragStateRef.current.startY;
+    dragStateRef.current.lastDx = dx;
+    dragStateRef.current.lastDy = dy;
+    const dist = Math.hypot(dx, dy);
 
-      const { isDragging: wasDragging, originX, originY, startTime } = dragStateRef.current;
-      const duration = Date.now() - startTime;
+    if (!dragStateRef.current.isDragging && dist >= 6) {
+      dragStateRef.current.isDragging = true;
+      setIsDragging(true);
+    }
 
-      setIsDragging(false);
-      setDragOffset({ x: 0, y: 0 });
+    if (dragStateRef.current.isDragging) {
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+      const el = widgetRef.current;
+      const rect = el ? el.getBoundingClientRect() : null;
+      const widgetW = rect?.width || 385;
+      const widgetH = rect?.height || 560;
+      const bottomClearance = 16;
+      const topClearance = 16;
 
-      // Jika hanya ketukan singkat tanpa drag pada tombol launcher, buka chat
-      if (!wasDragging && !isOpen && duration < 350) {
-        handleOpenWidget();
-        return;
-      }
+      const proposedX = dragStateRef.current.originX + dx;
+      const proposedY = dragStateRef.current.originY + dy;
 
-      if (wasDragging) {
-        const rawNewX = originX + (dragStateRef.current.lastDx || 0);
-        const rawNewY = originY + (dragStateRef.current.lastDy || 0);
+      const clampedX = Math.max(12, Math.min(proposedX, screenW - widgetW - 12));
+      const clampedY = Math.max(topClearance, Math.min(proposedY, screenH - widgetH - bottomClearance));
 
-        const el = widgetRef.current;
-        const rect = el ? el.getBoundingClientRect() : null;
-        const widgetW = rect?.width || (isOpen ? 385 : 56);
-        const widgetH = rect?.height || (isOpen ? 560 : 56);
+      setDragOffset({ x: clampedX - dragStateRef.current.originX, y: clampedY - dragStateRef.current.originY });
+    }
+  };
 
-        const screenW = window.innerWidth;
-        const screenH = window.innerHeight;
-        const isMobile = screenW < 640;
-        const bottomClearance = isMobile ? 88 : 16;
-        const topClearance = 16;
+  const handleHeaderPointerUp = (e) => {
+    if (dragStateRef.current.pointerId === null || dragStateRef.current.pointerId === undefined) return;
+    const pointerId = dragStateRef.current.pointerId;
+    try {
+      e.currentTarget.releasePointerCapture(pointerId);
+    } catch (_) {}
+    dragStateRef.current.pointerId = null;
 
-        // Strict Left/Right Magnetic Snapping
-        const centerX = rawNewX + widgetW / 2;
-        const newDockSide = centerX < screenW / 2 ? 'left' : 'right';
-        const snappedX = newDockSide === 'left' ? 16 : Math.max(16, screenW - widgetW - 16);
-        const clampedY = Math.max(topClearance, Math.min(rawNewY, screenH - widgetH - bottomClearance));
+    const wasDragging = dragStateRef.current.isDragging;
+    setIsDragging(false);
+    setDragOffset({ x: 0, y: 0 });
 
-        const nextPos = { x: snappedX, y: clampedY, dockSide: newDockSide };
-        setPos(nextPos);
-        try {
-          localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(nextPos));
-        } catch (_) {}
-      }
-    };
+    if (wasDragging) {
+      const rawNewX = dragStateRef.current.originX + (dragStateRef.current.lastDx || 0);
+      const rawNewY = dragStateRef.current.originY + (dragStateRef.current.lastDy || 0);
 
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleEnd);
-    window.addEventListener('touchmove', handleMove, { passive: false });
-    window.addEventListener('touchend', handleEnd);
-    window.addEventListener('touchcancel', handleEnd);
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+      const el = widgetRef.current;
+      const rect = el ? el.getBoundingClientRect() : null;
+      const widgetW = rect?.width || 385;
+      const widgetH = rect?.height || 560;
+      const bottomClearance = 16;
+      const topClearance = 16;
+
+      const clampedX = Math.max(12, Math.min(rawNewX, screenW - widgetW - 12));
+      const clampedY = Math.max(topClearance, Math.min(rawNewY, screenH - widgetH - bottomClearance));
+      const dockSide = clampedX + widgetW / 2 < screenW / 2 ? 'left' : 'right';
+
+      const nextPos = { x: Math.round(clampedX), y: Math.round(clampedY), dockSide };
+      setPos(nextPos);
+      try {
+        localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(nextPos));
+      } catch (_) {}
+    }
   };
 
   // Posisi render visual saat ini (posisi dasar + offset pergeseran selama drag)
@@ -871,27 +969,28 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {!isOpen && (
         <div 
           ref={widgetRef}
-          onMouseDown={handleDragStart}
-          onTouchStart={handleDragStart}
+          onPointerDown={handleLauncherPointerDown}
+          onPointerMove={handleLauncherPointerMove}
+          onPointerUp={handleLauncherPointerUp}
+          onPointerCancel={handleLauncherPointerUp}
           style={{
             position: 'fixed',
             left: `${currentRenderX}px`,
             top: `${currentRenderY}px`,
             zIndex: 50,
+            touchAction: 'none',
             transition: isDragging 
               ? 'none' 
-              : 'left 0.25s cubic-bezier(0.22, 1, 0.36, 1), top 0.25s cubic-bezier(0.22, 1, 0.36, 1)'
+              : 'left 0.28s cubic-bezier(0.22, 1, 0.36, 1), top 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
           }}
-          className={`flex items-center gap-2 select-none touch-none ${
+          className={`flex items-center gap-2 select-none ${
             isDragging ? 'cursor-grabbing' : 'cursor-grab'
           }`}
         >
           {/* Posisi Kiri: Maskot di kiri, Label di kanan */}
           {isDockedLeft ? (
             <>
-              <button
-                type="button"
-                onClick={handleOpenWidget}
+              <div
                 className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white border-2 border-black ${
                   isDragging 
                     ? 'shadow-[4px_4px_0px_#000000] scale-105' 
@@ -909,7 +1008,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 <div className="absolute bottom-1 inset-x-0 flex justify-center items-center pointer-events-none opacity-40">
                   <div className="w-3.5 h-0.5 rounded-full bg-black" />
                 </div>
-              </button>
+              </div>
 
               <div className="hidden sm:flex items-center gap-1.5 bg-white text-black border-2 border-black px-3 py-1.5 rounded-xl shadow-[3px_3px_0px_#000000] text-xs font-bold font-mono pointer-events-none select-none">
                 <Sparkles className="w-3.5 h-3.5 text-blue-600" />
@@ -924,9 +1023,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 <span>Tanya KuroBot</span>
               </div>
 
-              <button
-                type="button"
-                onClick={handleOpenWidget}
+              <div
                 className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-white border-2 border-black ${
                   isDragging 
                     ? 'shadow-[4px_4px_0px_#000000] scale-105' 
@@ -944,7 +1041,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                 <div className="absolute bottom-1 inset-x-0 flex justify-center items-center pointer-events-none opacity-40">
                   <div className="w-3.5 h-0.5 rounded-full bg-black" />
                 </div>
-              </button>
+              </div>
             </>
           )}
         </div>
@@ -954,24 +1051,35 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       {isOpen && (
         <div 
           ref={widgetRef}
-          style={{
-            position: 'fixed',
-            left: `${currentRenderX}px`,
-            top: `${currentRenderY}px`,
-            zIndex: 50,
-            transition: isDragging 
-              ? 'none' 
-              : 'left 0.25s cubic-bezier(0.22, 1, 0.36, 1), top 0.25s cubic-bezier(0.22, 1, 0.36, 1)'
-          }}
-          className={`w-[92vw] sm:w-[385px] max-h-[82vh] sm:max-h-[560px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150 ${
-            isDragging ? 'select-none' : ''
-          }`}
+          style={
+            typeof window !== 'undefined' && window.innerWidth < 640
+              ? undefined
+              : {
+                  position: 'fixed',
+                  left: `${currentRenderX}px`,
+                  top: `${currentRenderY}px`,
+                  zIndex: 50,
+                  transition: isDragging 
+                    ? 'none' 
+                    : 'left 0.28s cubic-bezier(0.22, 1, 0.36, 1), top 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
+                }
+          }
+          className={
+            typeof window !== 'undefined' && window.innerWidth < 640
+              ? "fixed left-3 right-3 mx-auto bottom-20 z-50 w-[calc(100vw-24px)] max-w-[380px] max-h-[72vh] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150"
+              : `sm:w-[385px] max-h-[82vh] sm:max-h-[560px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150 ${
+                  isDragging ? 'select-none' : ''
+                }`
+          }
         >
           {/* Header Popup: Drag Handle, Karakter, Nama, & Kontrol Minimalkan */}
           <div 
-            onMouseDown={handleDragStart}
-            onTouchStart={handleDragStart}
-            className={`p-3 bg-neutral-50 text-black border-b-2 border-black flex items-center justify-between select-none touch-none ${
+            onPointerDown={handleHeaderPointerDown}
+            onPointerMove={handleHeaderPointerMove}
+            onPointerUp={handleHeaderPointerUp}
+            onPointerCancel={handleHeaderPointerUp}
+            style={{ touchAction: 'none' }}
+            className={`p-3 bg-neutral-50 text-black border-b-2 border-black flex items-center justify-between select-none ${
               isDragging ? 'cursor-grabbing bg-neutral-100' : 'cursor-grab'
             }`}
           >
