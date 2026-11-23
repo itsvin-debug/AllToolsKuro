@@ -1,7 +1,7 @@
-// Helper IndexedDB lokal untuk menyimpan media View Once langsung di browser pengguna
+// Helper IndexedDB lokal untuk menyimpan media View Once secara permanen di browser pengguna
 
 const DB_NAME = 'AllToolsKuro_WaVault';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Naikkan versi untuk index sentAt yang akurat
 const STORE_NAME = 'view_once_media';
 
 function openWaDB() {
@@ -15,9 +15,20 @@ function openWaDB() {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
+      let store;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      } else {
+        store = event.target.transaction.objectStore(STORE_NAME);
+      }
+
+      if (!store.indexNames.contains('sentAt')) {
+        store.createIndex('sentAt', 'sentAt', { unique: false });
+      }
+      if (!store.indexNames.contains('timestamp')) {
         store.createIndex('timestamp', 'timestamp', { unique: false });
+      }
+      if (!store.indexNames.contains('senderNumber')) {
         store.createIndex('senderNumber', 'senderNumber', { unique: false });
       }
     };
@@ -40,7 +51,7 @@ export async function saveMediaItem(item) {
   });
 }
 
-// Ambil seluruh media tersimpan (diurutkan dari yang terbaru)
+// Ambil seluruh media tersimpan (diurutkan dari yang terbaru berdasarkan waktu kirim asli WA)
 export async function getAllMediaItems() {
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
@@ -50,8 +61,12 @@ export async function getAllMediaItems() {
 
     request.onsuccess = () => {
       const items = request.result || [];
-      // Urutkan dari timestamp terbaru
-      items.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      // Urutkan dari waktu kirim asli WA terbaru
+      items.sort((a, b) => {
+        const timeA = a.sentAt || a.timestamp || 0;
+        const timeB = b.sentAt || b.timestamp || 0;
+        return timeB - timeA;
+      });
       resolve(items);
     };
     request.onerror = () => reject(request.error);
@@ -83,3 +98,6 @@ export async function clearAllMediaItems() {
     request.onerror = () => reject(request.error);
   });
 }
+
+// Export alias untuk fleksibilitas pemanggilan
+export { deleteMediaItem as deleteMediaById, clearAllMediaItems as clearAllMedia };

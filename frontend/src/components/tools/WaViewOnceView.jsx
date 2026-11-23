@@ -6,7 +6,8 @@ import {
   ShieldCheck,
   QrCode,
   Smartphone,
-  Plus,
+  Lock,
+  Unlock,
   Trash2,
   Download,
   Eye,
@@ -19,18 +20,23 @@ import {
   Film,
   Image as ImageIcon,
   ExternalLink,
-  ShieldAlert
+  ShieldAlert,
+  Calendar,
+  X
 } from 'lucide-react';
 import {
   saveMediaItem,
   getAllMediaItems,
   deleteMediaItem,
-  clearAllMediaItems
+  deleteMediaById,
+  clearAllMediaItems,
+  clearAllMedia
 } from '../../utils/waMediaDB';
 
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
 const STORAGE_SESSION_TOKEN = 'wa_vault_session_token';
-const STORAGE_TARGETS = 'wa_vault_target_numbers';
+const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
+const STORAGE_OLD_TARGETS = 'wa_vault_target_numbers';
 
 // Helper generator kunci acak 32-byte hexadecimal
 function generateSecretToken() {
@@ -39,7 +45,7 @@ function generateSecretToken() {
   return Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-// Helper normalisasi nomor WA Indonesia/Internasional ke digit murni
+// Helper normalisasi nomor WA Indonesia/Internasional ke digit murni (628xxx)
 function normalizeTargetNumber(raw) {
   if (!raw) return '';
   let digits = String(raw).replace(/\D/g, '');
@@ -51,12 +57,32 @@ function normalizeTargetNumber(raw) {
   return digits;
 }
 
+// Format waktu pengiriman asli dari WhatsApp
+function formatWaDate(timestamp) {
+  if (!timestamp) return '-';
+  const date = new Date(Number(timestamp));
+  if (isNaN(date.getTime())) return '-';
+
+  const datePart = date.toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+  const timePart = date.toLocaleTimeString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+  return `${datePart} • ${timePart} WIB`;
+}
+
 export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
-  // Identitas sesi multi-user terisolasi
+  // 1. Identitas sesi unik terisolasi
   const [sessionId] = useState(() => {
     let id = localStorage.getItem(STORAGE_SESSION_ID);
     if (!id) {
-      id = window.crypto?.randomUUID ? window.crypto.randomUUID() : `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      id = window.crypto?.randomUUID
+        ? window.crypto.randomUUID()
+        : `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
       localStorage.setItem(STORAGE_SESSION_ID, id);
     }
     return id;
@@ -71,23 +97,33 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     return token;
   });
 
-  // Target nomor WA yang dipantau
-  const [targetNumbers, setTargetNumbers] = useState(() => {
+  // 2. Kunci HANYA 1 nomor target aktif (Single Locked Target)
+  const [lockedTarget, setLockedTarget] = useState(() => {
+    const saved = localStorage.getItem(STORAGE_LOCKED_TARGET);
+    if (saved) return saved;
+    // Migrasi dari format lama jika ada
     try {
-      const saved = localStorage.getItem(STORAGE_TARGETS);
-      return saved ? JSON.parse(saved) : [];
-    } catch (_) {
-      return [];
-    }
+      const old = localStorage.getItem(STORAGE_OLD_TARGETS);
+      if (old) {
+        const parsed = JSON.parse(old);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const first = parsed[0];
+          localStorage.setItem(STORAGE_LOCKED_TARGET, first);
+          return first;
+        }
+      }
+    } catch (_) {}
+    return null;
   });
 
   const [inputTarget, setInputTarget] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState(null);
-  const [connectionStatus, setConnectionStatus] = useState('disconnected'); // disconnected | connecting | qr_ready | connected | reconnecting
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | qr_ready | connected | reconnecting
+  const [connectedPhone, setConnectedPhone] = useState(null);
   const [backendError, setBackendError] = useState(null);
   const [isServerStarting, setIsServerStarting] = useState(false);
 
-  // Galeri Media IndexedDB
+  // 3. Galeri Media Tersimpan di IndexedDB
   const [mediaList, setMediaList] = useState([]);
   const [mediaFilter, setMediaFilter] = useState('all'); // all | image | video
   const [previewMedia, setPreviewMedia] = useState(null);
@@ -96,9 +132,17 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
   const socketRef = useRef(null);
   const backendUrl = import.meta.env.VITE_WA_BACKEND_URL || 'http://localhost:4000';
 
-  // Muat riwayat media tersimpan di IndexedDB saat pertama kali dibuka
+  // Muat galeri dari IndexedDB dan otomatis hubungkan sesi saat halaman dibuka
   useEffect(() => {
     loadSavedMedia();
+    initSocketConnection();
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
   }, []);
 
   async function loadSavedMedia() {
@@ -110,44 +154,32 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     }
   }
 
-  // Simpan perubahan nomor target ke LocalStorage & sinkronkan ke backend jika socket aktif
-  const syncTargetsToBackend = (newList) => {
-    localStorage.setItem(STORAGE_TARGETS, JSON.stringify(newList));
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('set-targets', {
-        sessionId,
-        sessionToken,
-        targets: newList
-      });
-    }
-  };
-
-  // Inisialisasi koneksi Socket.io ke backend Render
-  const handleStartSession = () => {
-    if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('start-session', { sessionId, sessionToken });
-      return;
-    }
+  // Inisialisasi koneksi Socket.IO & Auto-Resume sesi (Anti-Scan Ulang)
+  function initSocketConnection() {
+    if (socketRef.current && socketRef.current.connected) return;
 
     setConnectionStatus('connecting');
     setBackendError(null);
-    setIsServerStarting(true);
 
     const socket = io(backendUrl, {
       transports: ['websocket', 'polling'],
       timeout: 25000,
-      reconnectionAttempts: 5
+      reconnectionAttempts: 8,
+      reconnectionDelay: 1500
     });
 
     socketRef.current = socket;
 
     socket.on('connect', () => {
       setIsServerStarting(false);
-      socket.emit('start-session', { sessionId, sessionToken });
-      // Kirim target nomor yang sudah tersimpan
-      if (targetNumbers.length > 0) {
-        socket.emit('set-targets', { sessionId, sessionToken, targets: targetNumbers });
-      }
+      setBackendError(null);
+
+      // Otomatis kirim resume-session agar sesi yang sudah pernah ditautkan tidak perlu scan QR lagi
+      socket.emit('resume-session', {
+        sessionId,
+        sessionToken,
+        targetNumber: lockedTarget
+      });
     });
 
     socket.on('connect_error', (err) => {
@@ -159,6 +191,42 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       );
     });
 
+    // Event status sesi terkini dari backend
+    socket.on('session-status', ({ status, phone, targetNumber, reason, statusCode }) => {
+      setConnectionStatus(status);
+      setIsServerStarting(false);
+
+      if (status === 'connected') {
+        setQrCodeDataUrl(null);
+        setBackendError(null);
+        if (phone) setConnectedPhone(phone);
+        if (onShowToast) onShowToast({ message: 'WhatsApp berhasil terhubung!', type: 'success' });
+      } else if (status === 'qr_ready') {
+        setConnectedPhone(null);
+      } else if (status === 'reconnecting') {
+        setQrCodeDataUrl(null);
+      } else if (status === 'disconnected') {
+        setQrCodeDataUrl(null);
+        setConnectedPhone(null);
+        if (reason === 'logged_out' && onShowToast) {
+          onShowToast({ message: 'Sesi WhatsApp dikeluarkan dari perangkat.', type: 'info' });
+        }
+      }
+    });
+
+    // Kompatibilitas dengan event status biasa
+    socket.on('status', ({ status, phone, reason }) => {
+      setConnectionStatus(status);
+      if (status === 'connected') {
+        setQrCodeDataUrl(null);
+        if (phone) setConnectedPhone(phone);
+      } else if (status === 'disconnected') {
+        setQrCodeDataUrl(null);
+        setConnectedPhone(null);
+      }
+    });
+
+    // Event penerimaan QR Code tajam
     socket.on('qr', async ({ qr, qrDataUrl }) => {
       setConnectionStatus('qr_ready');
       setIsServerStarting(false);
@@ -175,85 +243,105 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       }
     });
 
-    socket.on('status', ({ status, reason }) => {
-      setConnectionStatus(status);
-      setIsServerStarting(false);
-      if (status === 'connected') {
-        setQrCodeDataUrl(null);
-        setBackendError(null);
-        if (onShowToast) onShowToast({ message: 'WhatsApp berhasil terhubung!', type: 'success' });
-      } else if (status === 'disconnected') {
-        setQrCodeDataUrl(null);
-        if (reason === 'logged_out' && onShowToast) {
-          onShowToast({ message: 'Sesi WhatsApp telah dikeluarkan dari perangkat.', type: 'info' });
-        }
-      }
-    });
-
     socket.on('session-error', ({ message }) => {
-      setBackendError(message || 'Terjadi kesalahan pada sesi.');
+      setBackendError(message || 'Terjadi kendala pada sesi WhatsApp.');
       if (onShowToast) onShowToast({ message: message || 'Sesi bermasalah', type: 'error' });
     });
 
+    // Tangkap Media View Once Real-Time
     socket.on('view-once-media', async (mediaPayload) => {
       try {
         await saveMediaItem(mediaPayload);
+        // Tampilkan media baru di urutan paling atas secara real-time
         setMediaList((prev) => [mediaPayload, ...prev.filter((m) => m.id !== mediaPayload.id)]);
         if (onShowToast) {
           onShowToast({
-            message: `Media Sekali Lihat baru ditangkap dari ${mediaPayload.senderNumber}!`,
+            message: `Media Sekali Lihat baru ditangkap dari +${mediaPayload.senderNumber}!`,
             type: 'success'
           });
         }
       } catch (err) {
-        console.error('Gagal menyimpan media sekali lihat:', err);
+        console.error('Gagal menyimpan media sekali lihat ke IndexedDB:', err);
       }
     });
+  }
+
+  // Tombol Mulai & Buat QR Code Baru secara manual
+  const handleStartSession = () => {
+    if (!socketRef.current || !socketRef.current.connected) {
+      initSocketConnection();
+    }
+    setConnectionStatus('connecting');
+    setBackendError(null);
+    if (socketRef.current) {
+      socketRef.current.emit('start-session', {
+        sessionId,
+        sessionToken,
+        targetNumber: lockedTarget
+      });
+    }
   };
 
-  // Putuskan sesi WhatsApp & bersihkan data sesi di Render
+  // Putuskan Sesi WhatsApp (Logout)
   const handleLogoutSession = () => {
     if (socketRef.current) {
       socketRef.current.emit('logout-session', { sessionId, sessionToken });
-      socketRef.current.disconnect();
-      socketRef.current = null;
     }
     setConnectionStatus('disconnected');
     setQrCodeDataUrl(null);
+    setConnectedPhone(null);
     setBackendError(null);
     if (onShowToast) onShowToast({ message: 'Sesi WhatsApp berhasil diputuskan.', type: 'info' });
   };
 
-  // Tambah nomor target
-  const handleAddTarget = (e) => {
+  // Kunci 1 Nomor Target
+  const handleLockTarget = (e) => {
     e.preventDefault();
     const normalized = normalizeTargetNumber(inputTarget);
     if (!normalized || normalized.length < 8) {
       if (onShowToast) onShowToast({ message: 'Masukkan nomor WhatsApp valid (minimal 8 digit).', type: 'error' });
       return;
     }
-    if (targetNumbers.includes(normalized)) {
-      if (onShowToast) onShowToast({ message: 'Nomor ini sudah ada dalam daftar target.', type: 'info' });
-      setInputTarget('');
-      return;
+
+    setLockedTarget(normalized);
+    localStorage.setItem(STORAGE_LOCKED_TARGET, normalized);
+    setInputTarget('');
+
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('set-target', {
+        sessionId,
+        sessionToken,
+        targetNumber: normalized
+      });
     }
 
-    const updated = [...targetNumbers, normalized];
-    setTargetNumbers(updated);
-    syncTargetsToBackend(updated);
-    setInputTarget('');
-    if (onShowToast) onShowToast({ message: `Nomor +${normalized} ditambahkan ke target.`, type: 'success' });
+    if (onShowToast) {
+      onShowToast({
+        message: `Nomor target +${normalized} berhasil dikunci!`,
+        type: 'success'
+      });
+    }
   };
 
-  // Hapus nomor target
-  const handleRemoveTarget = (targetToRemove) => {
-    const updated = targetNumbers.filter((n) => n !== targetToRemove);
-    setTargetNumbers(updated);
-    syncTargetsToBackend(updated);
-    if (onShowToast) onShowToast({ message: `Nomor +${targetToRemove} dihapus dari target.`, type: 'info' });
+  // Buka Kunci / Ganti Nomor Target
+  const handleUnlockTarget = () => {
+    setLockedTarget(null);
+    localStorage.removeItem(STORAGE_LOCKED_TARGET);
+
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('set-target', {
+        sessionId,
+        sessionToken,
+        targetNumber: null
+      });
+    }
+
+    if (onShowToast) {
+      onShowToast({ message: 'Target dibuka. Silakan masukkan nomor target baru.', type: 'info' });
+    }
   };
 
-  // Unduh media ke perangkat lokal pengguna
+  // Unduh Media ke Perangkat Lokal
   const handleDownloadMedia = (item) => {
     try {
       const link = document.createElement('a');
@@ -264,16 +352,16 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      if (onShowToast) onShowToast({ message: 'Mengunduh berkas media...', type: 'success' });
+      if (onShowToast) onShowToast({ message: 'Mengunduh media...', type: 'success' });
     } catch (err) {
-      if (onShowToast) onShowToast({ message: 'Gagal mengunduh berkas.', type: 'error' });
+      if (onShowToast) onShowToast({ message: 'Gagal mengunduh media.', type: 'error' });
     }
   };
 
-  // Hapus satu item media dari IndexedDB
+  // Hapus Satu Item Media dari UI & IndexedDB
   const handleDeleteMedia = async (id) => {
     try {
-      await deleteMediaItem(id);
+      await deleteMediaById(id);
       setMediaList((prev) => prev.filter((item) => item.id !== id));
       if (onShowToast) onShowToast({ message: 'Item berhasil dihapus dari galeri.', type: 'info' });
     } catch (err) {
@@ -281,10 +369,10 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Bersihkan semua media di IndexedDB
+  // Bersihkan Seluruh Galeri Media di UI & IndexedDB (Clear All)
   const handleClearAllMedia = async () => {
     try {
-      await clearAllMediaItems();
+      await clearAllMedia();
       setMediaList([]);
       setShowClearConfirm(false);
       if (onShowToast) onShowToast({ message: 'Seluruh galeri berhasil dibersihkan.', type: 'info' });
@@ -293,7 +381,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Filter media yang tampil
+  // Filter Media
   const filteredMedia = mediaList.filter((item) => {
     if (mediaFilter === 'image') return item.mediaType === 'image';
     if (mediaFilter === 'video') return item.mediaType === 'video';
@@ -329,8 +417,8 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             </div>
           </div>
           <p className="text-xs md:text-sm text-neutral-700 max-w-2xl leading-relaxed">
-            Tangkap dan simpan foto/video sekali lihat (View Once) dari kontak WhatsApp target secara otomatis via
-            perangkat tertaut. Media disimpan langsung ke penyimpanan lokal browser (IndexedDB) secara pribadi.
+            Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat
+            tertaut. Sesi tersimpan permanen dan media disimpan langsung ke IndexedDB browser Anda.
           </p>
         </div>
 
@@ -341,7 +429,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             {connectionStatus === 'connected' && (
               <span className="px-2.5 py-1 bg-emerald-400 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-black animate-ping" />
-                Terhubung
+                Terhubung {connectedPhone ? `(+${connectedPhone})` : ''}
               </span>
             )}
             {connectionStatus === 'qr_ready' && (
@@ -356,15 +444,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 Menghubungkan...
               </span>
             )}
-            {connectionStatus === 'disconnected' && (
-              <span className="px-2.5 py-1 bg-neutral-200 text-neutral-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000]">
-                Terputus
-              </span>
-            )}
             {connectionStatus === 'reconnecting' && (
               <span className="px-2.5 py-1 bg-yellow-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 Menyambung Ulang...
+              </span>
+            )}
+            {connectionStatus === 'disconnected' && (
+              <span className="px-2.5 py-1 bg-neutral-200 text-neutral-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000]">
+                Terputus
               </span>
             )}
           </div>
@@ -385,7 +473,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
         </div>
       )}
 
-      {/* Grid 2 Kolom Panel Kontrol (Tautkan Perangkat & Nomor Target) */}
+      {/* Grid 2 Kolom Panel Kontrol (Tautkan Perangkat & Kunci 1 Nomor Target) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
         {/* Panel 1: Tautkan Perangkat (QR Code) */}
@@ -422,7 +510,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 <div className="text-center space-y-1">
                   <p className="font-black text-xs text-neutral-900">Pindai QR ini di aplikasi WhatsApp HP kamu</p>
                   <ol className="text-[11px] text-neutral-600 space-y-0.5 text-left list-decimal list-inside bg-white p-2.5 border border-black rounded">
-                    <li>Buka WhatsApp di HP target/kamu</li>
+                    <li>Buka WhatsApp di HP Anda</li>
                     <li>Ketuk <b>Titik Tiga</b> atau <b>Pengaturan</b></li>
                     <li>Pilih <b>Perangkat Tertaut</b> &gt; <b>Tautkan Perangkat</b></li>
                   </ol>
@@ -435,15 +523,20 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 </div>
                 <h3 className="font-black text-sm text-neutral-900">Perangkat Berhasil Ditautkan!</h3>
                 <p className="text-xs text-neutral-600 max-w-sm">
-                  WhatsApp aktif memantau pesan sekali lihat yang masuk dari daftar nomor target yang ditentukan.
+                  Sesi WhatsApp aktif memantau pesan sekali lihat yang masuk dari nomor target yang terkunci.
                 </p>
+                <div className="pt-2">
+                  <span className="px-3 py-1 bg-white border-2 border-black rounded-lg text-xs font-mono font-bold shadow-[2px_2px_0px_#000] text-emerald-800">
+                    Auto-Resume Aktif • Anti-Scan Ulang
+                  </span>
+                </div>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center py-8 px-4 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center space-y-2">
                 <Smartphone className="w-10 h-10 text-neutral-400" />
                 <p className="font-bold text-xs text-neutral-700">Perangkat belum terhubung</p>
                 <p className="text-[11px] text-neutral-500 max-w-xs">
-                  Tekan tombol di bawah untuk membuat sesi baru dan menampilkan kode QR WhatsApp.
+                  Tekan tombol di bawah untuk meminta kode QR penautan WhatsApp.
                 </p>
               </div>
             )}
@@ -471,81 +564,89 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           )}
         </div>
 
-        {/* Panel 2: Manajemen Nomor Target */}
+        {/* Panel 2: Kunci 1 Nomor Target Terpantau */}
         <div className="bg-white border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b-2 border-black pb-3">
               <div className="flex items-center gap-2">
-                <Smartphone className="w-5 h-5 text-neutral-900" />
+                <Lock className="w-5 h-5 text-neutral-900" />
                 <h2 className="font-black text-sm md:text-base uppercase tracking-tight">
-                  Nomor Target Terpantau
+                  Kunci 1 Nomor Target
                 </h2>
               </div>
-              <span className="px-2 py-0.5 bg-neutral-100 border border-black rounded text-[11px] font-black">
-                {targetNumbers.length} TARGET
+              <span className={`px-2 py-0.5 border border-black rounded text-[11px] font-black ${lockedTarget ? 'bg-emerald-300 text-black' : 'bg-neutral-100 text-neutral-600'}`}>
+                {lockedTarget ? '1 TARGET TERKUNCI' : 'BELUM TERKUNCI'}
               </span>
             </div>
 
             <p className="text-xs text-neutral-600">
-              Hanya pesan <i>View Once</i> dari nomor di bawah yang akan ditangkap &amp; disimpan. Nomor lain diabaikan secara total.
+              Sistem akan <b>mengunci 1 nomor target saja</b> untuk akurasi maksimal. Hanya pesan <i>View Once</i> dari nomor ini yang akan ditangkap &amp; disimpan.
             </p>
 
-            {/* Form Input Tambah Nomor */}
-            <form onSubmit={handleAddTarget} className="flex gap-2">
-              <input
-                type="text"
-                value={inputTarget}
-                onChange={(e) => setInputTarget(e.target.value)}
-                placeholder="Contoh: 08123456789 atau 628xxx"
-                className="flex-1 px-3 py-2 bg-neutral-50 border-2 border-black rounded-xl text-xs font-mono font-medium outline-none focus:bg-white focus:ring-2 focus:ring-black"
-              />
-              <button
-                type="submit"
-                className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1"
-              >
-                <Plus className="w-4 h-4" />
-                Tambah
-              </button>
-            </form>
-
-            {/* Daftar Chip Nomor Target */}
-            <div className="min-h-[140px] p-3 bg-neutral-50 border-2 border-black rounded-xl flex flex-wrap gap-2 items-start content-start">
-              {targetNumbers.length === 0 ? (
-                <div className="w-full flex flex-col items-center justify-center py-6 text-neutral-400 text-xs text-center space-y-1">
-                  <Info className="w-6 h-6 text-neutral-300" />
-                  <p className="font-semibold text-neutral-600">Belum ada target yang ditambahkan</p>
-                  <p className="text-[11px] text-neutral-400">Masukkan nomor WA target di atas untuk mulai memantau.</p>
-                </div>
-              ) : (
-                targetNumbers.map((num) => (
-                  <div
-                    key={num}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-white border-2 border-black rounded-lg text-xs font-mono font-bold shadow-[2px_2px_0px_#000]"
-                  >
-                    <span className="text-emerald-700">+{num}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveTarget(num)}
-                      className="text-neutral-400 hover:text-rose-600 ml-1"
-                      title="Hapus Target"
-                    >
-                      &times;
-                    </button>
+            {/* Jika Nomor Target Sudah Terkunci */}
+            {lockedTarget ? (
+              <div className="p-4 bg-emerald-50 border-2 border-black rounded-xl shadow-[3px_3px_0px_#000] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-lg bg-emerald-400 border-2 border-black flex items-center justify-center shadow-[1.5px_1.5px_0px_#000]">
+                      <Lock className="w-5 h-5 text-black" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-black text-emerald-800 tracking-wider">Target Terkunci</span>
+                      <p className="font-mono font-black text-base text-neutral-900 tracking-tight">
+                        +{lockedTarget}
+                      </p>
+                    </div>
                   </div>
-                ))
-              )}
-            </div>
+                  <button
+                    onClick={handleUnlockTarget}
+                    className="px-3 py-1.5 bg-white text-rose-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-50 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    Ganti Target
+                  </button>
+                </div>
+                <div className="p-2 bg-white/80 border border-emerald-300 rounded text-[11px] text-emerald-900 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Target aktif terpantau secara real-time. Tersimpan otomatis di browser.</span>
+                </div>
+              </div>
+            ) : (
+              /* Jika Belum Ada Target Terkunci */
+              <form onSubmit={handleLockTarget} className="space-y-3">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={inputTarget}
+                    onChange={(e) => setInputTarget(e.target.value)}
+                    placeholder="Contoh: 08123456789 atau 628xxx"
+                    className="flex-1 px-3 py-2 bg-neutral-50 border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:bg-white focus:ring-2 focus:ring-black"
+                  />
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    Kunci Target
+                  </button>
+                </div>
+                <div className="p-2.5 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center py-4 text-neutral-500 text-xs">
+                  <Info className="w-5 h-5 mx-auto mb-1 text-neutral-400" />
+                  Masukkan nomor WhatsApp target di atas dan klik <b>Kunci Target</b>.
+                </div>
+              </form>
+            )}
           </div>
 
           <div className="p-2.5 bg-blue-50 border border-black rounded-lg flex items-start gap-2 text-[11px] text-blue-900">
             <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
-            <span>Format otomatis: nomor lokal berawalan <b>08xx</b> diubah menjadi kode internasional <b>628xx</b>.</span>
+            <span>Format otomatis: nomor awalan <b>08xx</b> langsung diubah ke <b>628xx</b>.</span>
           </div>
         </div>
 
       </div>
 
-      {/* Panel 3: Galeri Media Tersimpan (IndexedDB) */}
+      {/* Panel 3: Galeri Media Tersimpan (IndexedDB Permanen & Real-Time) */}
       <div className="bg-white border-2 border-black rounded-xl p-5 md:p-6 shadow-[4px_4px_0px_#000] space-y-4">
         
         {/* Header Galeri & Tombol Aksi */}
@@ -558,7 +659,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
               </h2>
             </div>
             <p className="text-xs text-neutral-600">
-              Media foto/video sekali lihat yang berhasil ditangkap tersimpan aman di IndexedDB browser perangkat Anda.
+              Media foto/video sekali lihat yang berhasil ditangkap tersimpan permanen di IndexedDB browser Anda.
             </p>
           </div>
 
@@ -585,37 +686,37 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
               </button>
             </div>
 
-            {/* Tombol Bersihkan Galeri */}
+            {/* Tombol Clear All / Hapus Semua */}
             {mediaList.length > 0 && (
               <button
                 onClick={() => setShowClearConfirm(true)}
-                className="px-3 py-1 bg-rose-100 text-rose-800 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
+                className="px-3 py-1 bg-rose-100 text-rose-800 border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                Bersihkan Galeri
+                Clear All / Hapus Semua
               </button>
             )}
           </div>
         </div>
 
-        {/* Dialog Konfirmasi Hapus Semua */}
+        {/* Dialog Konfirmasi Clear All */}
         {showClearConfirm && (
-          <div className="p-4 bg-rose-50 border-2 border-rose-500 rounded-xl space-y-2">
+          <div className="p-4 bg-rose-50 border-2 border-rose-500 rounded-xl space-y-2 shadow-[3px_3px_0px_#000]">
             <div className="flex items-center gap-2 text-rose-900 font-bold text-xs md:text-sm">
-              <ShieldAlert className="w-4 h-4 text-rose-600" />
-              Yakin ingin mengosongkan semua media tersimpan di IndexedDB?
+              <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
+              Yakin ingin mengosongkan seluruh galeri media di browser ini?
             </div>
-            <p className="text-xs text-rose-700">Tindakan ini permanen dan tidak dapat dibatalkan.</p>
+            <p className="text-xs text-rose-700">Semua foto dan video sekali lihat yang tersimpan di IndexedDB akan dihapus permanen.</p>
             <div className="flex gap-2 pt-1">
               <button
                 onClick={handleClearAllMedia}
-                className="px-3 py-1 bg-rose-600 text-white border border-black rounded font-bold text-xs hover:bg-rose-700"
+                className="px-3 py-1.5 bg-rose-600 text-white border-2 border-black rounded-lg font-black text-xs hover:bg-rose-700 shadow-[2px_2px_0px_#000]"
               >
-                Ya, Kosongkan
+                Ya, Hapus Semua
               </button>
               <button
                 onClick={() => setShowClearConfirm(false)}
-                className="px-3 py-1 bg-white border border-black rounded font-bold text-xs hover:bg-neutral-100"
+                className="px-3 py-1.5 bg-white text-black border-2 border-black rounded-lg font-bold text-xs hover:bg-neutral-100 shadow-[2px_2px_0px_#000]"
               >
                 Batal
               </button>
@@ -631,7 +732,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             </div>
             <h3 className="font-bold text-sm text-neutral-800">Belum ada media View Once yang tertangkap</h3>
             <p className="text-xs text-neutral-500 max-w-sm">
-              Ketika kontak di daftar target mengirimkan foto atau video sekali lihat, media akan otomatis muncul di sini.
+              Saat nomor target yang terkunci mengirimkan foto atau video sekali lihat, media akan otomatis muncul di sini.
             </p>
           </div>
         ) : (
@@ -639,8 +740,36 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             {filteredMedia.map((item) => (
               <div
                 key={item.id}
-                className="bg-neutral-50 border-2 border-black rounded-xl p-3 shadow-[3px_3px_0px_#000] flex flex-col justify-between space-y-3"
+                className="bg-white border-2 border-black rounded-xl p-3 shadow-[3px_3px_0px_#000] flex flex-col justify-between space-y-3"
               >
+                {/* Header Metadata Kartu: Badge Nomor Pengirim Mencolok */}
+                <div className="flex items-center justify-between gap-2 border-b-2 border-black pb-2">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px]">
+                    <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate font-mono">+{item.senderNumber}</span>
+                    {item.senderName && (
+                      <span className="text-[11px] font-sans font-bold text-neutral-800 truncate">
+                        • {item.senderName}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {/* Badge Jenis Media */}
+                  <span className={`px-2 py-0.5 border-2 border-black rounded text-[10px] font-black uppercase tracking-wider shadow-[1px_1px_0px_#000] flex items-center gap-1 ${
+                    item.mediaType === 'video' ? 'bg-purple-200 text-purple-900' : 'bg-cyan-200 text-cyan-900'
+                  }`}>
+                    {item.mediaType === 'video' ? (
+                      <>
+                        <Film className="w-3 h-3" /> VIDEO
+                      </>
+                    ) : (
+                      <>
+                        <ImageIcon className="w-3 h-3" /> FOTO
+                      </>
+                    )}
+                  </span>
+                </div>
+
                 {/* Visual Media Preview */}
                 <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
                   {item.mediaType === 'video' ? (
@@ -657,52 +786,27 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                       onClick={() => setPreviewMedia(item)}
                     />
                   )}
-
-                  <span className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 text-white rounded text-[10px] font-black uppercase tracking-wider border border-white/20 flex items-center gap-1">
-                    {item.mediaType === 'video' ? (
-                      <>
-                        <Film className="w-3 h-3 text-amber-400" /> Video
-                      </>
-                    ) : (
-                      <>
-                        <ImageIcon className="w-3 h-3 text-cyan-400" /> Foto
-                      </>
-                    )}
-                  </span>
                 </div>
 
-                {/* Metadata Pengirim & Waktu */}
-                <div className="space-y-1 text-xs">
-                  <div className="flex items-center justify-between font-bold text-neutral-900">
-                    <span className="truncate max-w-[170px]" title={item.senderName || item.senderNumber}>
-                      {item.senderName || item.senderNumber}
-                    </span>
-                    <span className="text-[10px] text-neutral-500 font-mono">
-                      +{item.senderNumber}
-                    </span>
+                {/* Metadata Tanggal & Jam Asli WhatsApp */}
+                <div className="space-y-1.5 text-xs bg-neutral-50 p-2 border border-black rounded-lg">
+                  <div className="flex items-center gap-1.5 font-bold text-neutral-800 text-[11px]">
+                    <Clock className="w-3.5 h-3.5 text-neutral-600 shrink-0" />
+                    <span>Waktu Kirim Asli WA:</span>
                   </div>
-
-                  <div className="flex items-center gap-1 text-[11px] text-neutral-500">
-                    <Clock className="w-3 h-3" />
-                    <span>
-                      {new Date(item.timestamp).toLocaleString(lang === 'id' ? 'id-ID' : 'en-US', {
-                        day: 'numeric',
-                        month: 'short',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </span>
-                  </div>
+                  <p className="font-mono text-[11px] text-neutral-900 font-bold pl-5">
+                    {formatWaDate(item.sentAt || item.timestamp)}
+                  </p>
 
                   {item.caption && (
-                    <p className="text-[11px] text-neutral-700 italic line-clamp-2 pt-1 border-t border-neutral-200">
+                    <div className="pt-1.5 border-t border-neutral-200 text-[11px] text-neutral-700 italic">
                       "{item.caption}"
-                    </p>
+                    </div>
                   )}
                 </div>
 
-                {/* Tombol Aksi Item */}
-                <div className="flex items-center gap-2 pt-2 border-t border-neutral-200">
+                {/* Tombol Aksi: Unduh & Hapus Satuan */}
+                <div className="flex items-center gap-2 pt-2 border-t-2 border-black">
                   <button
                     onClick={() => handleDownloadMedia(item)}
                     className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-1.5"
@@ -712,7 +816,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                   </button>
                   <button
                     onClick={() => handleDeleteMedia(item.id)}
-                    className="p-1.5 bg-white text-rose-600 border-2 border-black rounded-lg hover:bg-rose-50 active:translate-x-[1px] active:translate-y-[1px]"
+                    className="p-1.5 bg-rose-100 text-rose-700 border-2 border-black rounded-lg hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000]"
                     title="Hapus dari Penyimpanan"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -725,7 +829,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
 
       </div>
 
-      {/* Modal Pratinjau Gambar Penuh */}
+      {/* Modal Pratinjau Foto Penuh */}
       {previewMedia && (
         <div
           className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm"
@@ -737,7 +841,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           >
             <div className="flex items-center justify-between border-b-2 border-black pb-2">
               <span className="font-bold text-xs text-neutral-800">
-                Pratinjau Foto Sekali Lihat - +{previewMedia.senderNumber}
+                Pratinjau Foto Sekali Lihat • +{previewMedia.senderNumber}
               </span>
               <button
                 onClick={() => setPreviewMedia(null)}
@@ -753,7 +857,10 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 className="max-h-[68vh] object-contain"
               />
             </div>
-            <div className="flex justify-end gap-2 pt-1">
+            <div className="flex justify-between items-center pt-1 text-xs">
+              <span className="text-neutral-500 font-mono text-[11px]">
+                {formatWaDate(previewMedia.sentAt || previewMedia.timestamp)}
+              </span>
               <button
                 onClick={() => handleDownloadMedia(previewMedia)}
                 className="px-4 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300"
