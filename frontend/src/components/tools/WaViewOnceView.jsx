@@ -841,6 +841,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           </span>
         </div>
 
+        {/* Tip Bypass WA ala Bot */}
+        <div className="flex items-start gap-2.5 px-3.5 py-2.5 bg-emerald-50 border-2 border-black rounded-lg text-xs shadow-[2px_2px_0px_#000] text-emerald-950">
+          <Info className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+          <span className="font-semibold leading-relaxed">
+            <b className="font-black text-black">Tip Bypass WA:</b> Media View Once otomatis tertangkap tanpa dibuka. Jika ditahan oleh HP, cukup balas (reply) pesan View Once target dengan chat/emoji biasa tanpa membukanya — media langsung muncul di sini.
+          </span>
+        </div>
+
         {/* Banner Konfirmasi 1-Klik untuk ID Kontak Tersembunyi (@lid) */}
         {unmappedLidAlert && (
           <div className="bg-amber-100 border-2 border-black rounded-xl p-4 shadow-[4px_4px_0px_#000] space-y-3 animate-in fade-in slide-in-from-top-2 duration-200">

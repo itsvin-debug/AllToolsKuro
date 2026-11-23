@@ -16,7 +16,8 @@ const {
   downloadMediaMessage,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-  Browsers
+  Browsers,
+  proto
 } = require('@whiskeysockets/baileys');
 const NodeCache = require('node-cache');
 
@@ -381,7 +382,7 @@ function deepExtractViewOnce(obj, inheritedViewOnce = false, depth = 0) {
   return null;
 }
 
-// Handler Terpadu Pemrosesan Pesan Masuk & Retry
+// Handler Terpadu Pemrosesan Pesan Masuk & Retry (3 Jalur View Once Vault)
 async function processIncomingMessage(msg, currentSession, sock, sessionId) {
   if (!msg || !msg.key) return;
 
@@ -404,8 +405,28 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     hasMessage: Boolean(msg.message),
     stubType: msg.messageStubType,
     stubParams: msg.messageStubParameters,
+    protocolType: msg.message?.protocolMessage?.type,
     keys: Object.keys(msg.message || {})
   });
+
+  // JALUR 3: Bedah protocolMessage (peerDataOperation / placeholderMessageResendResponse)
+  const peerResults = msg.message?.protocolMessage?.peerDataOperationRequestResponseMessage?.peerDataOperationResult;
+  if (Array.isArray(peerResults)) {
+    for (const res of peerResults) {
+      const bytes = res?.placeholderMessageResendResponse?.webMessageInfoBytes;
+      if (bytes && proto?.WebMessageInfo?.decode) {
+        try {
+          const decoded = proto.WebMessageInfo.decode(bytes);
+          if (decoded?.message) {
+            console.log('[WA-VAULT][PEER-DATA-RESEND] Berhasil men-decode WebMessageInfo dari peer response:', decoded.key?.id);
+            await processIncomingMessage(decoded, currentSession, sock, sessionId);
+          }
+        } catch (decErr) {
+          console.warn('[WA-VAULT][PEER-DATA-RESEND] Gagal decode bytes:', decErr.message);
+        }
+      }
+    }
+  }
 
   // Simpan msg.message ke session.msgCache (maks 100 item, FIFO) untuk kebutuhan retry getMessage Baileys
   if (msg.key?.id && msg.message) {
@@ -426,20 +447,161 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     if (matched) {
       io.to(sessionId).emit('vault-activity', {
         time: Date.now(),
-        text: 'Pesan terenkripsi masuk dari target (stub ' + msg.messageStubType + '), menunggu sinkronisasi kunci...'
+        text: 'Pesan terenkripsi masuk dari target (stub ' + msg.messageStubType + '), meminta sinkronisasi kunci...'
       });
+      try {
+        if (typeof sock?.requestPlaceholderResend === 'function') {
+          console.log('[WA-VAULT] Meminta placeholder resend untuk stub key:', msg.key?.id);
+          await sock.requestPlaceholderResend(msg.key);
+        }
+      } catch (reqErr) {
+        console.warn('[WA-VAULT] requestPlaceholderResend gagal:', reqErr.message);
+      }
     }
     return;
   }
 
-  if (!msg.message) return;
+  if (!msg.message) {
+    if (matched && !msg.key?.fromMe) {
+      try {
+        if (typeof sock?.requestPlaceholderResend === 'function') {
+          await sock.requestPlaceholderResend(msg.key);
+        }
+      } catch (_) {}
+    }
+    return;
+  }
 
-  // Deteksi apakah pesan merupakan View Once (rekursif mendalam)
-  const viewOnceData = deepExtractViewOnce(msg.message);
-
-  // Jika pesan keluar (fromMe === true)
+  // JALUR 2: Bypass "Reply / Quoted Message" ala bot WA (.rvo tanpa perintah khusus)
   if (msg.key?.fromMe === true) {
-    if (viewOnceData || msg.message?.protocolMessage) {
+    const innerMsg =
+      msg.message?.ephemeralMessage?.message ||
+      msg.message?.viewOnceMessage?.message ||
+      msg.message;
+    const ctx =
+      innerMsg?.extendedTextMessage?.contextInfo ||
+      innerMsg?.imageMessage?.contextInfo ||
+      innerMsg?.videoMessage?.contextInfo ||
+      innerMsg?.stickerMessage?.contextInfo ||
+      innerMsg?.reactionMessage?.contextInfo ||
+      null;
+
+    if (ctx?.quotedMessage && matched) {
+      let quotedViewOnce = deepExtractViewOnce(ctx.quotedMessage);
+      if (!quotedViewOnce) {
+        if (
+          ctx.quotedMessage?.imageMessage &&
+          (ctx.quotedMessage.imageMessage.viewOnce === true ||
+            ctx.quotedMessage.viewOnceMessage ||
+            ctx.quotedMessage.viewOnceMessageV2 ||
+            (ctx.quotedMessage.imageMessage.mediaKey && ctx.quotedMessage.imageMessage.url))
+        ) {
+          quotedViewOnce = {
+            mediaType: 'image',
+            mediaObj: ctx.quotedMessage.imageMessage,
+            unwrappedMessage: { imageMessage: ctx.quotedMessage.imageMessage }
+          };
+        } else if (
+          ctx.quotedMessage?.videoMessage &&
+          (ctx.quotedMessage.videoMessage.viewOnce === true ||
+            ctx.quotedMessage.viewOnceMessage ||
+            ctx.quotedMessage.viewOnceMessageV2 ||
+            (ctx.quotedMessage.videoMessage.mediaKey && ctx.quotedMessage.videoMessage.url))
+        ) {
+          quotedViewOnce = {
+            mediaType: 'video',
+            mediaObj: ctx.quotedMessage.videoMessage,
+            unwrappedMessage: { videoMessage: ctx.quotedMessage.videoMessage }
+          };
+        }
+      }
+
+      if (quotedViewOnce) {
+        const { mediaType, mediaObj, unwrappedMessage } = quotedViewOnce;
+        io.to(sessionId).emit('vault-activity', {
+          time: Date.now(),
+          text: 'Terdeteksi balasan (reply) pesan View Once target! Mendekripsi via jalur Reply Bypass...'
+        });
+
+        let buffer = null;
+        let errDetail = '';
+
+        try {
+          const stream = await downloadContentFromMessage(mediaObj, mediaType);
+          const chunks = [];
+          for await (const chunk of stream) chunks.push(chunk);
+          buffer = Buffer.concat(chunks);
+        } catch (err1) {
+          errDetail = err1.message;
+          console.warn(`[WA-VAULT][REPLY-BYPASS] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
+        }
+
+        if (!buffer || buffer.length === 0) {
+          try {
+            buffer = await downloadMediaMessage(
+              {
+                key: {
+                  remoteJid,
+                  id: ctx.stanzaId || msg.key?.id,
+                  fromMe: false
+                },
+                message: unwrappedMessage
+              },
+              'buffer',
+              {},
+              { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
+            );
+          } catch (err2) {
+            errDetail = err2.message;
+            console.error('[WA-VAULT][REPLY-BYPASS] Tahap 2 juga gagal:', err2.message);
+          }
+        }
+
+        if (buffer && buffer.length > 0) {
+          const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+          const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+          const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+          const payload = {
+            id: String(ctx.stanzaId || msg.key?.id || Date.now()),
+            senderNumber: currentSession.targetNumber,
+            senderName: String(currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target'),
+            mediaType: String(mediaType),
+            mimeType: String(mimeType),
+            caption: String(mediaObj.caption || ''),
+            sentAt: Number(sentAt),
+            base64Data
+          };
+
+          console.log(`[WA-VAULT Captured via Reply Bypass] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
+
+          io.to(sessionId).emit('view-once-media', payload);
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'Berhasil membuka View Once via jalur Reply Bypass!'
+          });
+
+          const room = io.sockets.adapter.rooms.get(sessionId);
+          if (!room || room.size === 0) {
+            if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
+            currentSession.pendingMedia.push(payload);
+            if (currentSession.pendingMedia.length > 10) {
+              currentSession.pendingMedia.shift();
+            }
+          }
+          return;
+        } else {
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'Gagal mendekripsi media quoted reply: ' + (errDetail || 'Buffer kosong')
+          });
+          return;
+        }
+      }
+    }
+
+    const viewOnceOut = deepExtractViewOnce(msg.message);
+    if (viewOnceOut || msg.message?.protocolMessage) {
       io.to(sessionId).emit('vault-activity', {
         time: Date.now(),
         text: 'Terdeteksi pesan View Once KELUAR (fromMe). Kirim dari HP target ke akun yang tertaut agar bisa ditangkap.'
@@ -448,11 +610,36 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     return;
   }
 
-  if (!viewOnceData) return;
+  // JALUR 1: Tangkap otomatis pesan masuk (fromMe: false)
+  const viewOnceData = deepExtractViewOnce(msg.message);
+
+  if (!viewOnceData) {
+    // Khusus pesan foto/video BIASA (non-View Once) yang masuk dari target (fromMe: false)
+    if (matched) {
+      const isRegularMedia = Boolean(
+        msg.message?.imageMessage ||
+        msg.message?.videoMessage ||
+        msg.message?.audioMessage ||
+        msg.message?.documentMessage
+      );
+      if (isRegularMedia) {
+        console.log('[WA-VAULT][TARGET-REGULAR-MEDIA]', {
+          id: msg.key?.id,
+          target: currentSession.targetNumber,
+          types: Object.keys(msg.message || {})
+        });
+        io.to(sessionId).emit('vault-activity', {
+          time: Date.now(),
+          text: 'Info: Foto/video biasa dari target terdeteksi (koneksi media target aktif normal).'
+        });
+      }
+    }
+    return;
+  }
 
   const { mediaType, mediaObj, unwrappedMessage } = viewOnceData;
 
-  // 4. Dekripsi View Once + Jaring Pengaman LID Belum Terpetakan
+  // Dekripsi View Once + Jaring Pengaman LID Belum Terpetakan
   if (matched) {
     io.to(sessionId).emit('vault-activity', {
       time: Date.now(),
@@ -696,7 +883,7 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, baileysLogger)
       },
-      browser: Browsers.macOS('Desktop'),
+      browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
       shouldSyncHistoryMessage: () => false,
       markOnlineOnConnect: true,
