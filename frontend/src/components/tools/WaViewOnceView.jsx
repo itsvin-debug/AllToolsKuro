@@ -24,16 +24,12 @@ import {
 import {
   saveMediaItem,
   getAllMediaItems,
-  deleteMediaItem,
   deleteMediaById,
-  clearAllMediaItems,
   clearAllMedia
 } from '../../utils/waMediaDB';
 
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
-const STORAGE_SESSION_TOKEN = 'wa_vault_session_token';
 const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
-const STORAGE_OLD_TARGETS = 'wa_vault_target_numbers';
 
 // Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
 const safeText = (val) => {
@@ -43,30 +39,23 @@ const safeText = (val) => {
   return '';
 };
 
-// Helper generator kunci acak 32-byte hexadecimal
-function generateSecretToken() {
-  const array = new Uint8Array(32);
-  window.crypto.getRandomValues(array);
-  return Array.from(array, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-// Helper normalisasi nomor WA Indonesia/Internasional ke digit murni (628xxx)
-function normalizeTargetNumber(raw) {
+// Helper normalisasi nomor WA ke format digit standar WhatsApp (628xxx)
+function normalizePhone(raw) {
   if (!raw) return '';
   let digits = String(raw).replace(/\D/g, '');
-  if (digits.startsWith('08')) {
-    digits = '628' + digits.slice(2);
+  if (digits.startsWith('0')) {
+    digits = '62' + digits.slice(1);
   } else if (digits.startsWith('8')) {
-    digits = '628' + digits.slice(1);
+    digits = '62' + digits;
   }
   return digits;
 }
 
-// Format waktu pengiriman asli dari WhatsApp
+// Format waktu pengiriman asli dari WhatsApp (format lokal Indonesia: 23 Nov 2026 • 14:20 WIB)
 function formatWaDate(timestamp) {
   if (!timestamp) return '-';
   const num = Number(timestamp);
-  if (isNaN(num)) return '-';
+  if (isNaN(num) || num <= 0) return '-';
   const date = new Date(num);
   if (isNaN(date.getTime())) return '-';
 
@@ -82,8 +71,8 @@ function formatWaDate(timestamp) {
   return `${datePart} • ${timePart} WIB`;
 }
 
-export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
-  // Bridge helper toast aman untuk mencegah lewatnya object {message, type} sebagai React child
+export default function WaViewOnceView({ onBack, onShowToast }) {
+  // Bridge helper toast aman untuk mencegah lewatnya object sebagai React child
   const triggerToast = (msg, type = 'info') => {
     if (!onShowToast) return;
     const cleanMsg = safeText(msg);
@@ -94,7 +83,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // 1. Identitas sesi unik terisolasi
+  // 1. Identitas sesi unik terisolasi per browser
   const [sessionId] = useState(() => {
     let id = localStorage.getItem(STORAGE_SESSION_ID);
     if (!id) {
@@ -106,31 +95,10 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     return id;
   });
 
-  const [sessionToken] = useState(() => {
-    let token = localStorage.getItem(STORAGE_SESSION_TOKEN);
-    if (!token) {
-      token = generateSecretToken();
-      localStorage.setItem(STORAGE_SESSION_TOKEN, token);
-    }
-    return token;
-  });
-
   // 2. Kunci HANYA 1 nomor target aktif (Single Locked Target)
   const [lockedTarget, setLockedTarget] = useState(() => {
     const saved = localStorage.getItem(STORAGE_LOCKED_TARGET);
-    if (saved) return safeText(saved);
-    try {
-      const old = localStorage.getItem(STORAGE_OLD_TARGETS);
-      if (old) {
-        const parsed = JSON.parse(old);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const first = safeText(parsed[0]);
-          localStorage.setItem(STORAGE_LOCKED_TARGET, first);
-          return first;
-        }
-      }
-    } catch (_) {}
-    return null;
+    return saved ? normalizePhone(saved) : null;
   });
 
   const lockedTargetRef = useRef(lockedTarget);
@@ -143,7 +111,6 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | qr_ready | connected | reconnecting
   const [connectedPhone, setConnectedPhone] = useState(null);
   const [backendError, setBackendError] = useState(null);
-  const [isServerStarting, setIsServerStarting] = useState(false);
 
   // 3. Galeri Media Tersimpan di IndexedDB
   const [mediaList, setMediaList] = useState([]);
@@ -154,13 +121,23 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
   const socketRef = useRef(null);
   const backendUrl = import.meta.env.VITE_WA_BACKEND_URL || 'http://localhost:4000';
 
-  // Muat galeri dari IndexedDB dan otomatis hubungkan sesi saat halaman dibuka
+  // Muat galeri dari IndexedDB dan otomatis inisialisasi koneksi saat halaman dibuka
   useEffect(() => {
     loadSavedMedia();
     initSocketConnection();
 
     return () => {
       if (socketRef.current) {
+        socketRef.current.off('connect');
+        socketRef.current.off('connect_error');
+        socketRef.current.off('session-status');
+        socketRef.current.off('status');
+        socketRef.current.off('qr-code');
+        socketRef.current.off('qr');
+        socketRef.current.off('target-synced');
+        socketRef.current.off('target-updated');
+        socketRef.current.off('view-once-media');
+        socketRef.current.off('session-error');
         socketRef.current.disconnect();
         socketRef.current = null;
       }
@@ -171,14 +148,13 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     try {
       const items = await getAllMediaItems();
       const sanitizedItems = (items || []).map((item) => ({
-        id: safeText(item?.id) || `vo_${Date.now()}_${Math.random()}`,
+        id: safeText(item?.id) || `vo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         senderNumber: safeText(item?.senderNumber),
         senderName: safeText(item?.senderName),
         mediaType: item?.mediaType === 'video' ? 'video' : 'image',
         mimeType: safeText(item?.mimeType) || (item?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
         caption: safeText(item?.caption),
         sentAt: Number(item?.sentAt || item?.timestamp) || Date.now(),
-        timestamp: Number(item?.timestamp || item?.sentAt) || Date.now(),
         base64Data: typeof item?.base64Data === 'string' ? item.base64Data : ''
       }));
       setMediaList(sanitizedItems);
@@ -196,31 +172,28 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
 
     const socket = io(backendUrl, {
       transports: ['websocket', 'polling'],
-      timeout: 25000,
-      reconnectionAttempts: 8,
+      timeout: 30000,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1500
     });
 
     socketRef.current = socket;
 
+    // Setiap kali terhubung, kirim 'resume-session' beserta targetNumber dari localStorage
     socket.on('connect', () => {
-      setIsServerStarting(false);
       setBackendError(null);
-
-      // Otomatis kirim resume-session dengan target terbaru
+      const savedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
       socket.emit('resume-session', {
         sessionId,
-        sessionToken,
-        targetNumber: lockedTargetRef.current
+        targetNumber: savedTarget ? normalizePhone(savedTarget) : null
       });
     });
 
     socket.on('connect_error', (err) => {
       console.warn('Socket connect error:', err?.message || err);
-      setIsServerStarting(true);
       setConnectionStatus('connecting');
       setBackendError(
-        'Menghubungkan ke server backend Render... (jika backend sedang bangun dari mode tidur, proses membutuhkan waktu ~30 detik).'
+        'Menghubungkan ke backend server... (jika backend Render sedang bangun dari mode tidur, proses membutuhkan waktu ~30 detik).'
       );
     });
 
@@ -229,14 +202,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       const status = safeText(payload?.status) || 'connecting';
       const phone = safeText(payload?.phone);
       const reason = safeText(payload?.reason);
+      const message = safeText(payload?.message);
       const targetNumber = safeText(payload?.targetNumber);
 
       setConnectionStatus(status);
-      setIsServerStarting(false);
 
       if (targetNumber && !lockedTargetRef.current) {
-        setLockedTarget(targetNumber);
-        localStorage.setItem(STORAGE_LOCKED_TARGET, targetNumber);
+        const clean = normalizePhone(targetNumber);
+        setLockedTarget(clean);
+        localStorage.setItem(STORAGE_LOCKED_TARGET, clean);
       }
 
       if (status === 'connected') {
@@ -244,6 +218,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
         setBackendError(null);
         if (phone) setConnectedPhone(phone);
         triggerToast('WhatsApp berhasil terhubung!', 'success');
+
+        // Pastikan targetNumber tersinkronisasi kembali saat status connected
+        const currentSavedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
+        if (currentSavedTarget) {
+          socket.emit('resume-session', {
+            sessionId,
+            targetNumber: normalizePhone(currentSavedTarget)
+          });
+        }
       } else if (status === 'qr_ready') {
         setConnectedPhone(null);
       } else if (status === 'reconnecting') {
@@ -251,30 +234,13 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       } else if (status === 'disconnected') {
         setQrCodeDataUrl(null);
         setConnectedPhone(null);
-        if (reason === 'logged_out') {
-          triggerToast('Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
+        if (reason === 'logged_out' || message) {
+          triggerToast(message || 'Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
         }
       }
     });
 
-    // Event sinkronisasi nomor target dari server
-    socket.on('target-synced', (payload) => {
-      const synced = safeText(payload?.targetNumber);
-      if (synced) {
-        setLockedTarget(synced);
-        localStorage.setItem(STORAGE_LOCKED_TARGET, synced);
-      }
-    });
-
-    socket.on('target-updated', (payload) => {
-      const synced = safeText(payload?.targetNumber);
-      if (synced) {
-        setLockedTarget(synced);
-        localStorage.setItem(STORAGE_LOCKED_TARGET, synced);
-      }
-    });
-
-    // Kompatibilitas dengan event status biasa
+    // Kompatibilitas event status biasa
     socket.on('status', (payload) => {
       const status = safeText(payload?.status);
       const phone = safeText(payload?.phone);
@@ -288,13 +254,12 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       }
     });
 
-    // Event penerimaan QR Code
-    socket.on('qr', async (payload) => {
+    // Penerimaan QR Code
+    const handleQrReceive = async (payload) => {
       const qr = typeof payload?.qr === 'string' ? payload.qr : '';
       const qrDataUrl = typeof payload?.qrDataUrl === 'string' ? payload.qrDataUrl : '';
 
       setConnectionStatus('qr_ready');
-      setIsServerStarting(false);
       setBackendError(null);
 
       if (qrDataUrl) {
@@ -307,7 +272,23 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           setQrCodeDataUrl(null);
         }
       }
-    });
+    };
+
+    socket.on('qr-code', handleQrReceive);
+    socket.on('qr', handleQrReceive);
+
+    // Sinkronisasi nomor target dari server
+    const handleTargetSync = (payload) => {
+      const synced = safeText(payload?.targetNumber);
+      if (synced) {
+        const clean = normalizePhone(synced);
+        setLockedTarget(clean);
+        localStorage.setItem(STORAGE_LOCKED_TARGET, clean);
+      }
+    };
+
+    socket.on('target-synced', handleTargetSync);
+    socket.on('target-updated', handleTargetSync);
 
     socket.on('session-error', (payload) => {
       const message = safeText(payload?.message) || 'Terjadi kendala pada sesi WhatsApp.';
@@ -315,7 +296,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       triggerToast(message, 'error');
     });
 
-    // Tangkap Media View Once Real-Time (dengan normalisasi ketat ke tipe primitif & penanganan instan)
+    // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas)
     socket.on('view-once-media', async (rawPayload) => {
       try {
         const mediaPayload = {
@@ -325,15 +306,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           mediaType: rawPayload?.mediaType === 'video' ? 'video' : 'image',
           mimeType: safeText(rawPayload?.mimeType) || (rawPayload?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
           caption: safeText(rawPayload?.caption),
-          sentAt: Number(rawPayload?.sentAt || rawPayload?.timestamp) || Date.now(),
-          timestamp: Number(rawPayload?.sentAt || rawPayload?.timestamp) || Date.now(),
+          sentAt: Number(rawPayload?.sentAt) || Date.now(),
           base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : ''
         };
 
-        await saveMediaItem(mediaPayload);
-        // Tampilkan media baru di urutan paling atas secara real-time
-        setMediaList((prev) => [mediaPayload, ...prev.filter((m) => m.id !== mediaPayload.id)]);
-        triggerToast(`Media Sekali Lihat baru ditangkap dari +${mediaPayload.senderNumber}!`, 'success');
+        if (mediaPayload.base64Data) {
+          await saveMediaItem(mediaPayload);
+          setMediaList((prev) => [mediaPayload, ...prev.filter((m) => m.id !== mediaPayload.id)]);
+          triggerToast(`Media Sekali Lihat baru ditangkap dari +${mediaPayload.senderNumber}!`, 'success');
+        }
       } catch (err) {
         console.error('Gagal menyimpan media sekali lihat ke IndexedDB:', err);
       }
@@ -350,7 +331,6 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     if (socketRef.current) {
       socketRef.current.emit('start-session', {
         sessionId,
-        sessionToken,
         targetNumber: lockedTargetRef.current
       });
     }
@@ -359,7 +339,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
   // Putuskan Sesi WhatsApp (Logout)
   const handleLogoutSession = () => {
     if (socketRef.current) {
-      socketRef.current.emit('logout-session', { sessionId, sessionToken });
+      socketRef.current.emit('logout-session', { sessionId });
     }
     setConnectionStatus('disconnected');
     setQrCodeDataUrl(null);
@@ -368,12 +348,12 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     triggerToast('Sesi WhatsApp berhasil diputuskan.', 'info');
   };
 
-  // Kunci 1 Nomor Target
+  // Kunci 1 Nomor Target (Validasi ketat minimal 9 digit & normalisasi)
   const handleLockTarget = (e) => {
     e.preventDefault();
-    const normalized = normalizeTargetNumber(inputTarget);
-    if (!normalized || normalized.length < 8) {
-      triggerToast('Masukkan nomor WhatsApp valid (minimal 8 digit).', 'error');
+    const normalized = normalizePhone(inputTarget);
+    if (!normalized || normalized.length < 9) {
+      triggerToast('Masukkan nomor WhatsApp valid (minimal 9 digit).', 'error');
       return;
     }
 
@@ -384,7 +364,6 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     if (socketRef.current && socketRef.current.connected) {
       socketRef.current.emit('set-target', {
         sessionId,
-        sessionToken,
         targetNumber: normalized
       });
     }
@@ -400,7 +379,6 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     if (socketRef.current && socketRef.current.connected) {
       socketRef.current.emit('set-target', {
         sessionId,
-        sessionToken,
         targetNumber: null
       });
     }
@@ -408,7 +386,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     triggerToast('Target dibuka. Silakan masukkan nomor target baru.', 'info');
   };
 
-  // Unduh Media ke Perangkat Lokal
+  // Unduh Media ke Perangkat Lokal (.jpg / .mp4)
   const handleDownloadMedia = (item) => {
     try {
       const link = document.createElement('a');
@@ -426,7 +404,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Hapus Satu Item Media dari UI & IndexedDB
+  // Hapus Satu Item Media dari UI & IndexedDB (Ikon tempat sampah merah)
   const handleDeleteMedia = async (id) => {
     try {
       await deleteMediaById(id);
@@ -480,13 +458,13 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 WA View Once Vault
               </h1>
               <span className="inline-block px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-black rounded text-[11px] font-bold">
-                WA MEDIA • ZERO-DISK VAULT
+                REAL-TIME CAPTURE • ZERO-DISK VAULT
               </span>
             </div>
           </div>
           <p className="text-xs md:text-sm text-neutral-700 max-w-2xl leading-relaxed">
             Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat
-            tertaut. Sesi tersimpan permanen dan media disimpan langsung ke IndexedDB browser Anda.
+            tertaut tanpa perlu dibuka di HP. Media tersimpan permanen di IndexedDB browser Anda.
           </p>
         </div>
 
@@ -530,7 +508,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
         </div>
       </div>
 
-      {/* Banner Peringatan / Status Cold-Start Render */}
+      {/* Banner Informasi Koneksi / Cold-Start Render */}
       {backendError && (
         <div className="bg-amber-50 border-2 border-black rounded-xl p-4 shadow-[3px_3px_0px_#000] flex items-start gap-3 text-xs md:text-sm text-amber-900">
           <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
@@ -544,7 +522,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       {/* Grid 2 Kolom Panel Kontrol (Tautkan Perangkat & Kunci 1 Nomor Target) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
-        {/* Panel 1: Tautkan Perangkat (QR Code) */}
+        {/* Panel 1: Tautkan Perangkat WhatsApp (QR Code) */}
         <div className="bg-white border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b-2 border-black pb-3">
@@ -591,7 +569,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 </div>
                 <h3 className="font-black text-sm text-neutral-900">Perangkat Berhasil Ditautkan!</h3>
                 <p className="text-xs text-neutral-600 max-w-sm">
-                  Sesi WhatsApp aktif memantau pesan sekali lihat yang masuk dari nomor target yang terkunci.
+                  Sesi WhatsApp aktif memantau pesan sekali lihat yang masuk dari nomor target terkunci.
                 </p>
                 <div className="pt-2">
                   <span className="px-3 py-1 bg-white border-2 border-black rounded-lg text-xs font-mono font-bold shadow-[2px_2px_0px_#000] text-emerald-800">
@@ -676,7 +654,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 </div>
                 <div className="p-2 bg-white/80 border border-emerald-300 rounded text-[11px] text-emerald-900 flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Target aktif terpantau secara real-time. Tersimpan otomatis di browser.</span>
+                  <span>Target aktif terpantau secara real-time. Tersinkronisasi otomatis dengan server.</span>
                 </div>
               </div>
             ) : (
@@ -708,7 +686,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
 
           <div className="p-2.5 bg-blue-50 border border-black rounded-lg flex items-start gap-2 text-[11px] text-blue-900">
             <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
-            <span>Format otomatis: nomor awalan <b>08xx</b> langsung diubah ke <b>628xx</b>.</span>
+            <span>Format otomatis: nomor awalan <b>08xx</b> langsung diubah ke <b>628xx</b> (minimal 9 digit).</span>
           </div>
         </div>
 
@@ -761,7 +739,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 className="px-3 py-1 bg-rose-100 text-rose-800 border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                Clear All / Hapus Semua
+                Clear All
               </button>
             )}
           </div>
@@ -800,7 +778,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             </div>
             <h3 className="font-bold text-sm text-neutral-800">Belum ada media View Once yang tertangkap</h3>
             <p className="text-xs text-neutral-500 max-w-sm">
-              Saat nomor target yang terkunci mengirimkan foto atau video sekali lihat, media akan otomatis muncul di sini.
+              Saat nomor target yang terkunci mengirimkan foto atau video sekali lihat, media akan otomatis muncul di sini secara real-time.
             </p>
           </div>
         ) : (
@@ -838,7 +816,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                   </span>
                 </div>
 
-                {/* Visual Media Preview */}
+                {/* Visual Media Preview (Langsung terbuka tanpa klik di HP) */}
                 <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
                   {item.mediaType === 'video' ? (
                     <video
@@ -876,7 +854,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                   )}
                 </div>
 
-                {/* Tombol Aksi: Unduh & Hapus Satuan */}
+                {/* Tombol Aksi: Unduh Langsung & Hapus Satuan */}
                 <div className="flex items-center gap-2 pt-2 border-t-2 border-black">
                   <button
                     onClick={() => handleDownloadMedia(item)}

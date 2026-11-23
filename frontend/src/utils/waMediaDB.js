@@ -1,12 +1,12 @@
 // Helper IndexedDB lokal untuk menyimpan media View Once secara permanen di browser pengguna
 
 const DB_NAME = 'AllToolsKuro_WaVault';
-const DB_VERSION = 2; // Naikkan versi untuk index sentAt yang akurat
+const DB_VERSION = 2; // Versi database untuk schema View Once Vault
 const STORE_NAME = 'view_once_media';
 
 function openWaDB() {
   return new Promise((resolve, reject) => {
-    if (!('indexedDB' in window)) {
+    if (typeof window === 'undefined' || !('indexedDB' in window)) {
       reject(new Error('IndexedDB tidak didukung pada browser ini.'));
       return;
     }
@@ -34,20 +34,25 @@ function openWaDB() {
     };
 
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject(request.error || new Error('Gagal membuka IndexedDB.'));
   });
 }
 
 // Simpan media baru ke penyimpanan lokal IndexedDB
 export async function saveMediaItem(item) {
+  if (!item || typeof item !== 'object') return null;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    const request = store.put(item);
+    const sanitizedItem = {
+      ...item,
+      id: String(item.id || Date.now())
+    };
+    const request = store.put(sanitizedItem);
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(sanitizedItem);
+    request.onerror = () => reject(request.error || new Error('Gagal menyimpan media.'));
   });
 }
 
@@ -61,28 +66,28 @@ export async function getAllMediaItems() {
 
     request.onsuccess = () => {
       const items = request.result || [];
-      // Urutkan dari waktu kirim asli WA terbaru
       items.sort((a, b) => {
-        const timeA = a.sentAt || a.timestamp || 0;
-        const timeB = b.sentAt || b.timestamp || 0;
+        const timeA = Number(a?.sentAt || a?.timestamp) || 0;
+        const timeB = Number(b?.sentAt || b?.timestamp) || 0;
         return timeB - timeA;
       });
       resolve(items);
     };
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject(request.error || new Error('Gagal mengambil data media.'));
   });
 }
 
 // Hapus satu item media dari IndexedDB berdasarkan ID
 export async function deleteMediaItem(id) {
+  if (!id) return true;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    const request = store.delete(id);
+    const request = store.delete(String(id));
 
     request.onsuccess = () => resolve(true);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject(request.error || new Error('Gagal menghapus media.'));
   });
 }
 
@@ -95,7 +100,7 @@ export async function clearAllMediaItems() {
     const request = store.clear();
 
     request.onsuccess = () => resolve(true);
-    request.onerror = () => reject(request.error);
+    request.onerror = () => reject(request.error || new Error('Gagal membersihkan galeri.'));
   });
 }
 
