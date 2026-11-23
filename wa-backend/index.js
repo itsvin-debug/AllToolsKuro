@@ -12,7 +12,7 @@ const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  downloadMediaMessage,
+  downloadContentFromMessage,
   fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 
@@ -43,11 +43,11 @@ app.get('/', (req, res) => {
   res.json({
     service: 'AllToolsKuro WhatsApp View Once Vault Backend',
     status: 'online',
-    version: '1.2.0'
+    version: '1.3.0'
   });
 });
 
-// 1. Naikkan Limit Payload Socket.io ke 50 MB agar transfer Base64 foto/video HD aman
+// 1. Limit Payload Socket.io 50 MB agar transfer Base64 foto/video HD aman
 const io = new Server(server, {
   cors: {
     origin: '*',
@@ -84,13 +84,13 @@ function removeSessionDir(sessionId) {
 }
 
 // 2. Helper unwrap pesan View Once secara rekursif mengupas semua lapisan Baileys
-function unwrapViewOnceMessage(rawMessage) {
+function extractViewOnceMedia(rawMessage) {
   if (!rawMessage || typeof rawMessage !== 'object') return null;
   let current = rawMessage;
   let isViewOnce = false;
 
-  // Kupas berlapis jika dibungkus pesan ephemeral / viewOnce / documentWithCaption
-  for (let depth = 0; depth < 5; depth++) {
+  // Kupas berlapis jika dibungkus pesan ephemeral / viewOnce / documentWithCaption / deviceSent
+  for (let depth = 0; depth < 6; depth++) {
     if (!current || typeof current !== 'object') break;
 
     if (current.ephemeralMessage?.message) {
@@ -110,6 +110,10 @@ function unwrapViewOnceMessage(rawMessage) {
     if (current.viewOnceMessageV2Extension?.message) {
       isViewOnce = true;
       current = current.viewOnceMessageV2Extension.message;
+      continue;
+    }
+    if (current.deviceSentMessage?.message) {
+      current = current.deviceSentMessage.message;
       continue;
     }
     if (current.documentWithCaptionMessage?.message) {
@@ -135,54 +139,76 @@ function unwrapViewOnceMessage(rawMessage) {
   return {
     unwrappedContent: current,
     mediaType: imageMsg ? 'image' : 'video',
-    targetMedia: imageMsg || videoMsg,
+    mediaObj: imageMsg || videoMsg,
     isViewOnce: true
   };
 }
 
-// 3. Helper ekstraksi nomor pengirim (Mendukung @lid dan nomor WhatsApp biasa)
-function extractSenderDigits(msg, lidToPhoneMap) {
-  const candidates = [
-    msg.key?.remoteJid,
-    msg.key?.remoteJidAlt,
-    msg.key?.participant,
-    msg.key?.participantAlt
-  ].filter(Boolean);
+// Resolusi nomor target & @lid proaktif via onWhatsApp & signalRepository
+async function resolveTargetLid(sock, sessionData) {
+  if (!sock || !sessionData?.targetNumber) return;
+  const targetNumber = sessionData.targetNumber;
 
-  const resultDigits = new Set();
+  try {
+    const results = await sock.onWhatsApp(targetNumber);
+    if (Array.isArray(results) && results[0]) {
+      const res = results[0];
+      if (res.jid) {
+        sessionData.targetJid = res.jid;
+        const phone = normalizeToDigits(res.jid);
+        if (phone) sessionData.lidToPhoneMap.set(res.jid, phone);
+      }
+      if (res.lid) {
+        sessionData.targetLid = res.lid;
+        sessionData.lidToPhoneMap.set(res.lid, targetNumber);
+      }
+    }
+  } catch (_) {}
 
-  for (const rawJid of candidates) {
-    const jidStr = String(rawJid).trim();
+  try {
+    if (sock.signalRepository?.lidMapping?.getLIDForPN) {
+      const lid = await sock.signalRepository.lidMapping.getLIDForPN(targetNumber);
+      if (lid) {
+        sessionData.targetLid = lid;
+        sessionData.lidToPhoneMap.set(lid, targetNumber);
+      }
+    }
+  } catch (_) {}
+}
 
-    // Jika berakhiran @lid, cari nomor aslinya di map
-    if (jidStr.endsWith('@lid') && lidToPhoneMap) {
-      const mapped = lidToPhoneMap.get(jidStr);
-      if (mapped) {
-        resultDigits.add(mapped);
+// Helper pencocokan nomor pengirim terhadap target terkunci (Mendukung @lid dan digit nomor)
+function isTargetMatch(candidateJids, sessionData) {
+  if (!sessionData?.targetNumber || !candidateJids || candidateJids.length === 0) return false;
+  const targetNumber = sessionData.targetNumber;
+  const targetLast9 = targetNumber.slice(-9);
+  const targetLid = sessionData.targetLid;
+  const targetJid = sessionData.targetJid;
+
+  for (const raw of candidateJids) {
+    if (!raw) continue;
+    const str = String(raw).trim();
+
+    // 1. Cocokkan LID langsung
+    if (targetLid && str === targetLid) return true;
+    if (str.endsWith('@lid') && sessionData.lidToPhoneMap.has(str)) {
+      const mapped = sessionData.lidToPhoneMap.get(str);
+      if (mapped === targetNumber || (targetLast9.length >= 9 && mapped.slice(-9) === targetLast9)) {
+        return true;
       }
     }
 
-    // Bersihkan dari domain WhatsApp (@s.whatsapp.net, @c.us, dll.)
-    const cleanNumber = jidStr.split('@')[0];
+    // 2. Cocokkan targetJid
+    if (targetJid && str === targetJid) return true;
+
+    // 3. Cocokkan digit nomor telepon
+    const cleanNumber = str.split('@')[0];
     const digits = normalizeToDigits(cleanNumber);
     if (digits) {
-      resultDigits.add(digits);
+      if (digits === targetNumber) return true;
+      if (targetLast9.length >= 9 && digits.slice(-9) === targetLast9) return true;
     }
   }
 
-  return Array.from(resultDigits);
-}
-
-// Helper pencocokan nomor target (Eksak atau 9-10 digit terakhir)
-function isTargetMatch(candidateDigitsList, targetNumber) {
-  if (!targetNumber || !candidateDigitsList || candidateDigitsList.length === 0) return false;
-  const cleanTarget = normalizeToDigits(targetNumber);
-  const targetLast9 = cleanTarget.slice(-9);
-
-  for (const candidate of candidateDigitsList) {
-    if (candidate === cleanTarget) return true;
-    if (targetLast9.length >= 9 && candidate.slice(-9) === targetLast9) return true;
-  }
   return false;
 }
 
@@ -225,8 +251,10 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
       token: sessionToken,
       sock,
       targetNumber: targetNumber ? normalizeToDigits(targetNumber) : null,
+      targetJid: null,
+      targetLid: null,
       lidToPhoneMap: new Map(),
-      pendingMedia: [], // Antrian in-memory untuk media saat browser offline
+      pendingMedia: [],
       connectedSockets: new Set(),
       disconnectTimer: null,
       qrCode: null,
@@ -250,9 +278,7 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
     for (const c of contacts) {
       if (c.lid && c.id) {
         const phone = normalizeToDigits(c.id);
-        if (phone) {
-          sessionData.lidToPhoneMap.set(c.lid, phone);
-        }
+        if (phone) sessionData.lidToPhoneMap.set(c.lid, phone);
       }
     }
   });
@@ -262,9 +288,7 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
     for (const u of updates) {
       if (u.lid && u.id) {
         const phone = normalizeToDigits(u.id);
-        if (phone) {
-          sessionData.lidToPhoneMap.set(u.lid, phone);
-        }
+        if (phone) sessionData.lidToPhoneMap.set(u.lid, phone);
       }
     }
   });
@@ -290,6 +314,11 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
       sessionData.lastActive = Date.now();
       const phone = sock.user?.id ? sock.user.id.split(':')[0] : '';
 
+      // Resolusi target JID & LID otomatis jika nomor target sudah ada
+      if (sessionData.targetNumber) {
+        await resolveTargetLid(sock, sessionData);
+      }
+
       io.to(sessionId).emit('session-status', {
         status: 'connected',
         phone,
@@ -297,7 +326,7 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
       });
       io.to(sessionId).emit('status', { status: 'connected', phone });
 
-      // Jika ada pending media, kirimkan langsung saat terhubung
+      // Jika ada pending media saat pengguna baru terhubung, kirimkan langsung
       if (sessionData.pendingMedia && sessionData.pendingMedia.length > 0) {
         while (sessionData.pendingMedia.length > 0) {
           const item = sessionData.pendingMedia.shift();
@@ -309,7 +338,6 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
-      const isRestartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515;
 
       if (!isLoggedOut) {
         sessionData.status = 'reconnecting';
@@ -334,14 +362,12 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
     }
   });
 
-  // Interseptor Pesan: Tangkap View Once dari 1 Nomor Target Terkunci
+  // Interseptor Pesan: Tangkap & Dekripsi View Once Menggunakan downloadContentFromMessage
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    // Tangani baik pesan 'notify' maupun 'append'
     if (type !== 'notify' && type !== 'append') return;
 
     for (const msg of messages) {
       if (!msg.message) continue;
-      if (msg.key?.fromMe) continue;
       if (msg.key?.remoteJid === 'status@broadcast') continue;
 
       const currentSession = sessions.get(sessionId);
@@ -349,46 +375,44 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
         continue;
       }
 
-      // Ekstrak semua kandidat nomor pengirim (termasuk mapping @lid)
-      const senderCandidates = extractSenderDigits(msg, currentSession.lidToPhoneMap);
-      const isMatched = isTargetMatch(senderCandidates, currentSession.targetNumber);
+      const candidateJids = [
+        msg.key?.remoteJid,
+        msg.key?.remoteJidAlt,
+        msg.key?.participant,
+        msg.key?.participantAlt
+      ].filter(Boolean);
 
-      // Kupas berlapis pesan View Once
-      const unwrapped = unwrapViewOnceMessage(msg.message);
+      const isTargetMatched = isTargetMatch(candidateJids, currentSession);
+      const unwrapped = extractViewOnceMedia(msg.message);
+      const isViewOnce = !!unwrapped;
 
-      // Diagnostic logging ringkas (tanpa payload Base64)
+      // Log singkat diagnostik di Render Logs
       console.log(
-        `[WA Msg] Session: ${sessionId.slice(0, 8)} | JID: ${msg.key?.remoteJid} | Senders: [${senderCandidates.join(',')}] | Target: ${currentSession.targetNumber} | Matched: ${isMatched} | isViewOnce: ${!!unwrapped}`
+        `[WA Msg] remoteJid: ${msg.key?.remoteJid} | alt: ${msg.key?.remoteJidAlt || '-'} | fromMe: ${msg.key?.fromMe} | isViewOnce: ${isViewOnce} | isTargetMatch: ${isTargetMatched}`
       );
 
-      if (!isMatched || !unwrapped) continue;
+      // Hanya proses jika target cocok dan pesan merupakan View Once
+      if (!isTargetMatched || !isViewOnce) continue;
 
       try {
-        const { unwrappedContent, mediaType, targetMedia } = unwrapped;
-        const mimeType = targetMedia.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-        const caption = targetMedia.caption || '';
+        const { mediaType, mediaObj } = unwrapped;
+        const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+        const caption = mediaObj.caption || '';
         const senderName = msg.pushName || '';
-        const senderNumber = senderCandidates[0] || currentSession.targetNumber;
 
-        const sentAt = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now();
-
-        // Download dengan konten yang sudah dikupas langsung
-        let buffer = await downloadMediaMessage(
-          { key: msg.key, message: unwrappedContent },
-          'buffer',
-          {},
-          {
-            logger: pinoLogger,
-            reuploadRequest: sock.updateMediaMessage
-          }
-        );
+        // Dekripsi langsung media stream tanpa perlu dibuka di HP
+        const stream = await downloadContentFromMessage(mediaObj, mediaType);
+        const chunks = [];
+        for await (const chunk of stream) chunks.push(chunk);
+        const buffer = Buffer.concat(chunks);
 
         if (buffer && buffer.length > 0) {
           const base64Data = `data:${mimeType};base64,${buffer.toString('base64')}`;
+          const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
           const payload = {
-            id: msg.key?.id || `vo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-            senderNumber,
+            id: msg.key?.id || String(Date.now()),
+            senderNumber: currentSession.targetNumber,
             senderName,
             mediaType,
             mimeType,
@@ -398,24 +422,19 @@ async function startBaileys(sessionId, sessionToken, targetNumber = null) {
             base64Data
           };
 
-          console.log(`[WA ViewOnce Downloaded] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari +${senderNumber}`);
+          console.log(`[WA ViewOnce Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari +${currentSession.targetNumber}`);
 
-          // Kirim langsung ke browser jika ada tab yang aktif
+          // Kirim real-time ke room client
           if (currentSession.connectedSockets && currentSession.connectedSockets.size > 0) {
             io.to(sessionId).emit('view-once-media', payload);
           } else {
-            // Simpan ke pending antrian in-memory jika browser sedang offline/refresh
             if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
             currentSession.pendingMedia.push(payload);
-            if (currentSession.pendingMedia.length > 10) {
-              currentSession.pendingMedia.shift();
-            }
+            if (currentSession.pendingMedia.length > 10) currentSession.pendingMedia.shift();
           }
-
-          buffer = null;
         }
       } catch (mediaErr) {
-        console.error(`[Session ${sessionId}] Gagal download media View Once:`, mediaErr.message);
+        console.error(`[Session ${sessionId}] Gagal unduh media View Once:`, mediaErr.message);
       }
     }
   });
@@ -451,6 +470,9 @@ io.on('connection', (socket) => {
         sessionData.lastActive = Date.now();
         if (targetNumber) {
           sessionData.targetNumber = normalizeToDigits(targetNumber);
+          if (sessionData.sock) {
+            await resolveTargetLid(sessionData.sock, sessionData);
+          }
         }
 
         socket.emit('session-status', {
@@ -516,6 +538,9 @@ io.on('connection', (socket) => {
         sessionData.lastActive = Date.now();
         if (targetNumber) {
           sessionData.targetNumber = normalizeToDigits(targetNumber);
+          if (sessionData.sock) {
+            await resolveTargetLid(sessionData.sock, sessionData);
+          }
         }
 
         const phone = sessionData.sock?.user?.id ? sessionData.sock.user.id.split(':')[0] : '';
@@ -574,7 +599,7 @@ io.on('connection', (socket) => {
   });
 
   // Mengunci 1 nomor target terpantau
-  socket.on('set-target', (payload) => {
+  socket.on('set-target', async (payload) => {
     try {
       const { sessionId, sessionToken, targetNumber } = payload || {};
       const sessionData = sessions.get(sessionId);
@@ -588,6 +613,10 @@ io.on('connection', (socket) => {
       const clean = targetNumber ? normalizeToDigits(targetNumber) : null;
       sessionData.targetNumber = clean;
       sessionData.lastActive = Date.now();
+
+      if (clean && sessionData.sock) {
+        await resolveTargetLid(sessionData.sock, sessionData);
+      }
 
       io.to(sessionId).emit('target-synced', {
         targetNumber: clean
@@ -651,5 +680,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`[AllToolsKuro] WA Backend v1.2.0 aktif di port ${PORT}`);
+  console.log(`[AllToolsKuro] WA Backend v1.3.0 aktif di port ${PORT}`);
 });
