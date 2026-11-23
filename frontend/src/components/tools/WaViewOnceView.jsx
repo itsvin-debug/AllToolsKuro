@@ -19,10 +19,7 @@ import {
   Clock,
   Film,
   Image as ImageIcon,
-  ExternalLink,
-  ShieldAlert,
-  Calendar,
-  X
+  ShieldAlert
 } from 'lucide-react';
 import {
   saveMediaItem,
@@ -37,6 +34,14 @@ const STORAGE_SESSION_ID = 'wa_vault_session_id';
 const STORAGE_SESSION_TOKEN = 'wa_vault_session_token';
 const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
 const STORAGE_OLD_TARGETS = 'wa_vault_target_numbers';
+
+// Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
+const safeText = (val) => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'string' || typeof val === 'number') return String(val);
+  if (typeof val === 'object' && 'message' in val) return String(val.message || '');
+  return '';
+};
 
 // Helper generator kunci acak 32-byte hexadecimal
 function generateSecretToken() {
@@ -60,7 +65,9 @@ function normalizeTargetNumber(raw) {
 // Format waktu pengiriman asli dari WhatsApp
 function formatWaDate(timestamp) {
   if (!timestamp) return '-';
-  const date = new Date(Number(timestamp));
+  const num = Number(timestamp);
+  if (isNaN(num)) return '-';
+  const date = new Date(num);
   if (isNaN(date.getTime())) return '-';
 
   const datePart = date.toLocaleDateString('id-ID', {
@@ -76,6 +83,17 @@ function formatWaDate(timestamp) {
 }
 
 export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
+  // Bridge helper toast aman untuk mencegah lewatnya object {message, type} sebagai React child
+  const triggerToast = (msg, type = 'info') => {
+    if (!onShowToast) return;
+    const cleanMsg = safeText(msg);
+    try {
+      onShowToast(cleanMsg, type);
+    } catch (_) {
+      onShowToast({ message: cleanMsg, type });
+    }
+  };
+
   // 1. Identitas sesi unik terisolasi
   const [sessionId] = useState(() => {
     let id = localStorage.getItem(STORAGE_SESSION_ID);
@@ -100,14 +118,13 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
   // 2. Kunci HANYA 1 nomor target aktif (Single Locked Target)
   const [lockedTarget, setLockedTarget] = useState(() => {
     const saved = localStorage.getItem(STORAGE_LOCKED_TARGET);
-    if (saved) return saved;
-    // Migrasi dari format lama jika ada
+    if (saved) return safeText(saved);
     try {
       const old = localStorage.getItem(STORAGE_OLD_TARGETS);
       if (old) {
         const parsed = JSON.parse(old);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const first = parsed[0];
+          const first = safeText(parsed[0]);
           localStorage.setItem(STORAGE_LOCKED_TARGET, first);
           return first;
         }
@@ -148,7 +165,18 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
   async function loadSavedMedia() {
     try {
       const items = await getAllMediaItems();
-      setMediaList(items);
+      const sanitizedItems = (items || []).map((item) => ({
+        id: safeText(item?.id) || `vo_${Date.now()}_${Math.random()}`,
+        senderNumber: safeText(item?.senderNumber),
+        senderName: safeText(item?.senderName),
+        mediaType: item?.mediaType === 'video' ? 'video' : 'image',
+        mimeType: safeText(item?.mimeType) || 'image/jpeg',
+        caption: safeText(item?.caption),
+        sentAt: Number(item?.sentAt || item?.timestamp) || Date.now(),
+        timestamp: Number(item?.timestamp || item?.sentAt) || Date.now(),
+        base64Data: typeof item?.base64Data === 'string' ? item.base64Data : ''
+      }));
+      setMediaList(sanitizedItems);
     } catch (err) {
       console.error('Gagal membaca IndexedDB:', err);
     }
@@ -183,7 +211,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     });
 
     socket.on('connect_error', (err) => {
-      console.warn('Socket connect error:', err.message);
+      console.warn('Socket connect error:', err?.message || err);
       setIsServerStarting(true);
       setConnectionStatus('connecting');
       setBackendError(
@@ -191,8 +219,12 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       );
     });
 
-    // Event status sesi terkini dari backend
-    socket.on('session-status', ({ status, phone, targetNumber, reason, statusCode }) => {
+    // Event status sesi terkini dari backend (dengan sanitasi nilai primitif ketat)
+    socket.on('session-status', (payload) => {
+      const status = safeText(payload?.status) || 'connecting';
+      const phone = safeText(payload?.phone);
+      const reason = safeText(payload?.reason);
+
       setConnectionStatus(status);
       setIsServerStarting(false);
 
@@ -200,7 +232,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
         setQrCodeDataUrl(null);
         setBackendError(null);
         if (phone) setConnectedPhone(phone);
-        if (onShowToast) onShowToast({ message: 'WhatsApp berhasil terhubung!', type: 'success' });
+        triggerToast('WhatsApp berhasil terhubung!', 'success');
       } else if (status === 'qr_ready') {
         setConnectedPhone(null);
       } else if (status === 'reconnecting') {
@@ -208,15 +240,17 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       } else if (status === 'disconnected') {
         setQrCodeDataUrl(null);
         setConnectedPhone(null);
-        if (reason === 'logged_out' && onShowToast) {
-          onShowToast({ message: 'Sesi WhatsApp dikeluarkan dari perangkat.', type: 'info' });
+        if (reason === 'logged_out') {
+          triggerToast('Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
         }
       }
     });
 
     // Kompatibilitas dengan event status biasa
-    socket.on('status', ({ status, phone, reason }) => {
-      setConnectionStatus(status);
+    socket.on('status', (payload) => {
+      const status = safeText(payload?.status);
+      const phone = safeText(payload?.phone);
+      if (status) setConnectionStatus(status);
       if (status === 'connected') {
         setQrCodeDataUrl(null);
         if (phone) setConnectedPhone(phone);
@@ -226,11 +260,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       }
     });
 
-    // Event penerimaan QR Code tajam
-    socket.on('qr', async ({ qr, qrDataUrl }) => {
+    // Event penerimaan QR Code
+    socket.on('qr', async (payload) => {
+      const qr = typeof payload?.qr === 'string' ? payload.qr : '';
+      const qrDataUrl = typeof payload?.qrDataUrl === 'string' ? payload.qrDataUrl : '';
+
       setConnectionStatus('qr_ready');
       setIsServerStarting(false);
       setBackendError(null);
+
       if (qrDataUrl) {
         setQrCodeDataUrl(qrDataUrl);
       } else if (qr) {
@@ -243,23 +281,31 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       }
     });
 
-    socket.on('session-error', ({ message }) => {
-      setBackendError(message || 'Terjadi kendala pada sesi WhatsApp.');
-      if (onShowToast) onShowToast({ message: message || 'Sesi bermasalah', type: 'error' });
+    socket.on('session-error', (payload) => {
+      const message = safeText(payload?.message) || 'Terjadi kendala pada sesi WhatsApp.';
+      setBackendError(message);
+      triggerToast(message, 'error');
     });
 
-    // Tangkap Media View Once Real-Time
-    socket.on('view-once-media', async (mediaPayload) => {
+    // Tangkap Media View Once Real-Time (dengan normalisasi ketat ke tipe primitif)
+    socket.on('view-once-media', async (rawPayload) => {
       try {
+        const mediaPayload = {
+          id: safeText(rawPayload?.id) || `vo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          senderNumber: safeText(rawPayload?.senderNumber),
+          senderName: safeText(rawPayload?.senderName),
+          mediaType: rawPayload?.mediaType === 'video' ? 'video' : 'image',
+          mimeType: safeText(rawPayload?.mimeType) || 'image/jpeg',
+          caption: safeText(rawPayload?.caption),
+          sentAt: Number(rawPayload?.sentAt || rawPayload?.timestamp) || Date.now(),
+          timestamp: Number(rawPayload?.sentAt || rawPayload?.timestamp) || Date.now(),
+          base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : ''
+        };
+
         await saveMediaItem(mediaPayload);
         // Tampilkan media baru di urutan paling atas secara real-time
         setMediaList((prev) => [mediaPayload, ...prev.filter((m) => m.id !== mediaPayload.id)]);
-        if (onShowToast) {
-          onShowToast({
-            message: `Media Sekali Lihat baru ditangkap dari +${mediaPayload.senderNumber}!`,
-            type: 'success'
-          });
-        }
+        triggerToast(`Media Sekali Lihat baru ditangkap dari +${mediaPayload.senderNumber}!`, 'success');
       } catch (err) {
         console.error('Gagal menyimpan media sekali lihat ke IndexedDB:', err);
       }
@@ -291,7 +337,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     setQrCodeDataUrl(null);
     setConnectedPhone(null);
     setBackendError(null);
-    if (onShowToast) onShowToast({ message: 'Sesi WhatsApp berhasil diputuskan.', type: 'info' });
+    triggerToast('Sesi WhatsApp berhasil diputuskan.', 'info');
   };
 
   // Kunci 1 Nomor Target
@@ -299,7 +345,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     e.preventDefault();
     const normalized = normalizeTargetNumber(inputTarget);
     if (!normalized || normalized.length < 8) {
-      if (onShowToast) onShowToast({ message: 'Masukkan nomor WhatsApp valid (minimal 8 digit).', type: 'error' });
+      triggerToast('Masukkan nomor WhatsApp valid (minimal 8 digit).', 'error');
       return;
     }
 
@@ -315,12 +361,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       });
     }
 
-    if (onShowToast) {
-      onShowToast({
-        message: `Nomor target +${normalized} berhasil dikunci!`,
-        type: 'success'
-      });
-    }
+    triggerToast(`Nomor target +${normalized} berhasil dikunci!`, 'success');
   };
 
   // Buka Kunci / Ganti Nomor Target
@@ -336,9 +377,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       });
     }
 
-    if (onShowToast) {
-      onShowToast({ message: 'Target dibuka. Silakan masukkan nomor target baru.', type: 'info' });
-    }
+    triggerToast('Target dibuka. Silakan masukkan nomor target baru.', 'info');
   };
 
   // Unduh Media ke Perangkat Lokal
@@ -347,14 +386,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       const link = document.createElement('a');
       link.href = item.base64Data;
       const ext = item.mediaType === 'video' ? 'mp4' : 'jpg';
-      const cleanSender = item.senderNumber || 'target';
-      link.download = `WA_ViewOnce_${cleanSender}_${item.id}.${ext}`;
+      const cleanSender = safeText(item.senderNumber) || 'target';
+      const cleanId = safeText(item.id) || Date.now();
+      link.download = `WA_ViewOnce_${cleanSender}_${cleanId}.${ext}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      if (onShowToast) onShowToast({ message: 'Mengunduh media...', type: 'success' });
+      triggerToast('Mengunduh media...', 'success');
     } catch (err) {
-      if (onShowToast) onShowToast({ message: 'Gagal mengunduh media.', type: 'error' });
+      triggerToast('Gagal mengunduh media.', 'error');
     }
   };
 
@@ -363,9 +403,9 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     try {
       await deleteMediaById(id);
       setMediaList((prev) => prev.filter((item) => item.id !== id));
-      if (onShowToast) onShowToast({ message: 'Item berhasil dihapus dari galeri.', type: 'info' });
+      triggerToast('Item berhasil dihapus dari galeri.', 'info');
     } catch (err) {
-      if (onShowToast) onShowToast({ message: 'Gagal menghapus item.', type: 'error' });
+      triggerToast('Gagal menghapus item.', 'error');
     }
   };
 
@@ -375,9 +415,9 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       await clearAllMedia();
       setMediaList([]);
       setShowClearConfirm(false);
-      if (onShowToast) onShowToast({ message: 'Seluruh galeri berhasil dibersihkan.', type: 'info' });
+      triggerToast('Seluruh galeri berhasil dibersihkan.', 'info');
     } catch (err) {
-      if (onShowToast) onShowToast({ message: 'Gagal membersihkan galeri.', type: 'error' });
+      triggerToast('Gagal membersihkan galeri.', 'error');
     }
   };
 
@@ -429,7 +469,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             {connectionStatus === 'connected' && (
               <span className="px-2.5 py-1 bg-emerald-400 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-black animate-ping" />
-                Terhubung {connectedPhone ? `(+${connectedPhone})` : ''}
+                Terhubung {safeText(connectedPhone) ? `(+${safeText(connectedPhone)})` : ''}
               </span>
             )}
             {connectionStatus === 'qr_ready' && (
@@ -457,7 +497,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
             )}
           </div>
           <span className="text-[10px] text-neutral-500 font-mono">
-            Sesi ID: {sessionId.slice(0, 8)}...
+            Sesi ID: {safeText(sessionId).slice(0, 8)}...
           </span>
         </div>
       </div>
@@ -468,7 +508,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
           <div className="space-y-1">
             <p className="font-bold">Informasi Koneksi Server:</p>
-            <p className="text-amber-800 leading-relaxed">{backendError}</p>
+            <p className="text-amber-800 leading-relaxed">{safeText(backendError)}</p>
           </div>
         </div>
       )}
@@ -594,7 +634,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                     <div>
                       <span className="text-[10px] uppercase font-black text-emerald-800 tracking-wider">Target Terkunci</span>
                       <p className="font-mono font-black text-base text-neutral-900 tracking-tight">
-                        +{lockedTarget}
+                        +{safeText(lockedTarget)}
                       </p>
                     </div>
                   </div>
@@ -746,10 +786,10 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                 <div className="flex items-center justify-between gap-2 border-b-2 border-black pb-2">
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px]">
                     <Smartphone className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate font-mono">+{item.senderNumber}</span>
-                    {item.senderName && (
+                    <span className="truncate font-mono">+{safeText(item.senderNumber)}</span>
+                    {safeText(item.senderName) && (
                       <span className="text-[11px] font-sans font-bold text-neutral-800 truncate">
-                        • {item.senderName}
+                        • {safeText(item.senderName)}
                       </span>
                     )}
                   </div>
@@ -781,7 +821,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                   ) : (
                     <img
                       src={item.base64Data}
-                      alt={item.caption || 'View Once Image'}
+                      alt={safeText(item.caption) || 'View Once Image'}
                       className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
                       onClick={() => setPreviewMedia(item)}
                     />
@@ -798,9 +838,9 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                     {formatWaDate(item.sentAt || item.timestamp)}
                   </p>
 
-                  {item.caption && (
+                  {safeText(item.caption) && (
                     <div className="pt-1.5 border-t border-neutral-200 text-[11px] text-neutral-700 italic">
-                      "{item.caption}"
+                      "{safeText(item.caption)}"
                     </div>
                   )}
                 </div>
@@ -841,7 +881,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           >
             <div className="flex items-center justify-between border-b-2 border-black pb-2">
               <span className="font-bold text-xs text-neutral-800">
-                Pratinjau Foto Sekali Lihat • +{previewMedia.senderNumber}
+                Pratinjau Foto Sekali Lihat • +{safeText(previewMedia.senderNumber)}
               </span>
               <button
                 onClick={() => setPreviewMedia(null)}

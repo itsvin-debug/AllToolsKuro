@@ -98,7 +98,14 @@ export default function App() {
   };
 
   const handleShowToast = (msg, type = 'info') => {
-    setToast({ message: msg, type });
+    if (typeof msg === 'object' && msg !== null) {
+      setToast({
+        message: msg.message ? String(msg.message) : JSON.stringify(msg),
+        type: msg.type || type
+      });
+    } else {
+      setToast({ message: msg ? String(msg) : null, type });
+    }
   };
 
   // Navigasi layar & pencatatan riwayat alat

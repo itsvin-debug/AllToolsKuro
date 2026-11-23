@@ -36,7 +36,11 @@ export default function Toast({ message, type = 'info', onClose, duration = 3000
         type === 'error' ? 'border-rose-500' : ''
       }`}>
         {renderIcon()}
-        <span className="flex-1 font-sans">{message}</span>
+        <span className="flex-1 font-sans">
+          {typeof message === 'object' && message !== null
+            ? (message.message || JSON.stringify(message))
+            : String(message || '')}
+        </span>
         <button
           type="button"
           onClick={onClose}
