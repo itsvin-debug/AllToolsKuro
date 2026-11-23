@@ -91,6 +91,34 @@ export async function deleteMediaItem(id) {
   });
 }
 
+// Perbarui parsial item yang sudah ada (misal status isDeleted atau editedText)
+export async function updateMediaItem(id, patch) {
+  if (!id || !patch || typeof patch !== 'object') return null;
+  const db = await openWaDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const getReq = store.get(String(id));
+
+    getReq.onsuccess = () => {
+      const existing = getReq.result;
+      if (!existing) {
+        resolve(null);
+        return;
+      }
+      const updated = {
+        ...existing,
+        ...patch,
+        id: String(id)
+      };
+      const putReq = store.put(updated);
+      putReq.onsuccess = () => resolve(updated);
+      putReq.onerror = () => reject(putReq.error || new Error('Gagal memperbarui item IndexedDB.'));
+    };
+    getReq.onerror = () => reject(getReq.error || new Error('Gagal mencari item IndexedDB.'));
+  });
+}
+
 // Bersihkan seluruh galeri media di IndexedDB
 export async function clearAllMediaItems() {
   const db = await openWaDB();
@@ -105,4 +133,8 @@ export async function clearAllMediaItems() {
 }
 
 // Export alias untuk fleksibilitas pemanggilan
-export { deleteMediaItem as deleteMediaById, clearAllMediaItems as clearAllMedia };
+export {
+  deleteMediaItem as deleteMediaById,
+  clearAllMediaItems as clearAllMedia,
+  getAllMediaItems as getAllMedia
+};

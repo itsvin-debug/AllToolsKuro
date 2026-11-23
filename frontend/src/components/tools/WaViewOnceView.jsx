@@ -20,13 +20,21 @@ import {
   Film,
   Image as ImageIcon,
   ShieldAlert,
-  Activity
+  Activity,
+  FileText,
+  Mic,
+  Copy,
+  Check,
+  Paperclip,
+  MessageSquare,
+  Edit3
 } from 'lucide-react';
 import {
   saveMediaItem,
   getAllMediaItems,
   deleteMediaById,
-  clearAllMedia
+  clearAllMedia,
+  updateMediaItem
 } from '../../utils/waMediaDB';
 
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
@@ -71,6 +79,15 @@ function formatWaDate(timestamp) {
     minute: '2-digit'
   });
   return `${datePart} • ${timePart} WIB`;
+}
+
+// Format ukuran file (B, KB, MB)
+function formatBytes(bytes) {
+  const num = Number(bytes);
+  if (!num || num <= 0) return '';
+  if (num < 1024) return `${num} B`;
+  if (num < 1024 * 1024) return `${(num / 1024).toFixed(1)} KB`;
+  return `${(num / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function WaViewOnceView({ onBack, onShowToast }) {
@@ -124,11 +141,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   });
 
-  // 3. Galeri Media Tersimpan di IndexedDB
+  // 3. Vault Pesan & Media Tersimpan di IndexedDB
   const [mediaList, setMediaList] = useState([]);
-  const [mediaFilter, setMediaFilter] = useState('all'); // all | image | video
+  const [mediaFilter, setMediaFilter] = useState('all'); // all | deleted | text | image | video | audio | file_sticker
   const [previewMedia, setPreviewMedia] = useState(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [copiedId, setCopiedId] = useState(null);
 
   const socketRef = useRef(null);
   const backendUrl = import.meta.env.VITE_WA_BACKEND_URL || 'http://localhost:4000';
@@ -148,6 +166,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('qr');
         socketRef.current.off('target-synced');
         socketRef.current.off('target-updated');
+        socketRef.current.off('vault-item');
+        socketRef.current.off('vault-item-revoked');
+        socketRef.current.off('vault-item-edited');
         socketRef.current.off('view-once-media');
         socketRef.current.off('vault-activity');
         socketRef.current.off('unmapped-lid-view-once');
@@ -162,14 +183,24 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     try {
       const items = await getAllMediaItems();
       const sanitizedItems = (items || []).map((item) => ({
-        id: safeText(item?.id) || `vo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        id: safeText(item?.id) || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         senderNumber: safeText(item?.senderNumber),
         senderName: safeText(item?.senderName),
-        mediaType: item?.mediaType === 'video' ? 'video' : 'image',
-        mimeType: safeText(item?.mimeType) || (item?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
+        mediaType: safeText(item?.mediaType) || 'text',
+        mimeType: safeText(item?.mimeType),
         caption: safeText(item?.caption),
+        text: safeText(item?.text),
+        fileName: safeText(item?.fileName),
+        fileSize: Number(item?.fileSize) || 0,
+        isPtt: Boolean(item?.isPtt),
+        isViewOnce: Boolean(item?.isViewOnce),
+        isDeleted: Boolean(item?.isDeleted),
+        deletedAt: item?.deletedAt ? Number(item.deletedAt) : null,
+        isEdited: Boolean(item?.isEdited),
+        editedText: safeText(item?.editedText),
+        editedAt: item?.editedAt ? Number(item.editedAt) : null,
         sentAt: Number(item?.sentAt || item?.timestamp) || Date.now(),
-        base64Data: typeof item?.base64Data === 'string' ? item.base64Data : ''
+        base64Data: typeof item?.base64Data === 'string' ? item.base64Data : null
       }));
       setMediaList(sanitizedItems);
     } catch (err) {
@@ -193,7 +224,6 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     socketRef.current = socket;
 
-    // Setiap kali terhubung, kirim 'resume-session' beserta targetNumber dan confirmedLids dari localStorage
     socket.on('connect', () => {
       setBackendError(null);
       const savedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
@@ -216,7 +246,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       );
     });
 
-    // Event status sesi terkini dari backend (dengan sanitasi nilai primitif ketat)
+    // Event status sesi terkini dari backend
     socket.on('session-status', (payload) => {
       const status = safeText(payload?.status) || 'connecting';
       const phone = safeText(payload?.phone);
@@ -238,7 +268,6 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         if (phone) setConnectedPhone(phone);
         triggerToast('WhatsApp berhasil terhubung!', 'success');
 
-        // Pastikan targetNumber dan confirmedLids tersinkronisasi kembali saat status connected
         const currentSavedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
         let savedLids = [];
         try {
@@ -336,13 +365,100 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         setUnmappedLidAlert({
           lid: safeText(data.lid),
           pushName: safeText(data.pushName) || 'Kontak WhatsApp',
-          mediaType: data.mediaType === 'video' ? 'video' : 'image',
+          mediaType: safeText(data.mediaType) || 'image',
           sentAt: Number(data.sentAt) || Date.now()
         });
       }
     });
 
-    // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas Langsung Terbuka)
+    // TANGKAP SEMUA PESAN MASUK REAL-TIME (Teks, Foto, Video, VN, Stiker, Dokumen, View Once)
+    socket.on('vault-item', async (rawPayload) => {
+      try {
+        const cleanItem = {
+          id: safeText(rawPayload?.id) || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          senderNumber: safeText(rawPayload?.senderNumber),
+          senderName: safeText(rawPayload?.senderName),
+          mediaType: safeText(rawPayload?.mediaType) || 'text',
+          mimeType: safeText(rawPayload?.mimeType),
+          caption: safeText(rawPayload?.caption),
+          text: safeText(rawPayload?.text),
+          fileName: safeText(rawPayload?.fileName),
+          fileSize: Number(rawPayload?.fileSize) || 0,
+          isPtt: Boolean(rawPayload?.isPtt),
+          isViewOnce: Boolean(rawPayload?.isViewOnce),
+          isDeleted: Boolean(rawPayload?.isDeleted),
+          deletedAt: rawPayload?.deletedAt ? Number(rawPayload.deletedAt) : null,
+          isEdited: Boolean(rawPayload?.isEdited),
+          editedText: safeText(rawPayload?.editedText),
+          editedAt: rawPayload?.editedAt ? Number(rawPayload.editedAt) : null,
+          sentAt: Number(rawPayload?.sentAt) || Date.now(),
+          base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : null
+        };
+
+        await saveMediaItem(cleanItem);
+        setMediaList((prev) => [cleanItem, ...prev.filter((m) => m.id !== cleanItem.id)]);
+
+        if (cleanItem.mediaType === 'viewonce-blocked') {
+          triggerToast('Media sekali lihat masuk (menunggu dekripsi)...', 'info');
+        } else if (cleanItem.mediaType === 'text') {
+          triggerToast(`Pesan teks baru dari +${cleanItem.senderNumber || 'target'}`, 'info');
+        } else {
+          triggerToast(
+            `${cleanItem.isViewOnce ? 'Media Sekali Lihat' : cleanItem.mediaType.toUpperCase()} baru ditangkap dari +${cleanItem.senderNumber || 'target'}!`,
+            'success'
+          );
+        }
+      } catch (err) {
+        console.error('Gagal memproses item vault:', err);
+      }
+    });
+
+    // ANTI-DELETE REAL-TIME: Pesan Ditarik/Dihapus oleh Pengirim
+    socket.on('vault-item-revoked', async ({ id, deletedAt }) => {
+      try {
+        const targetId = safeText(id);
+        if (!targetId) return;
+
+        const delTime = Number(deletedAt) || Date.now();
+        await updateMediaItem(targetId, { isDeleted: true, deletedAt: delTime });
+
+        setMediaList((prev) =>
+          prev.map((item) =>
+            item.id === targetId ? { ...item, isDeleted: true, deletedAt: delTime } : item
+          )
+        );
+
+        triggerToast('Target baru saja MENGHAPUS / MENARIK pesan! (Pesan tetap tersimpan)', 'error');
+      } catch (err) {
+        console.error('Gagal memperbarui status hapus:', err);
+      }
+    });
+
+    // ANTI-EDIT REAL-TIME: Teks Pesan Diedit oleh Pengirim
+    socket.on('vault-item-edited', async ({ id, editedText, editedAt }) => {
+      try {
+        const targetId = safeText(id);
+        const newText = safeText(editedText);
+        if (!targetId || !newText) return;
+
+        const editTime = Number(editedAt) || Date.now();
+        await updateMediaItem(targetId, { isEdited: true, editedText: newText, editedAt: editTime });
+
+        setMediaList((prev) =>
+          prev.map((item) =>
+            item.id === targetId
+              ? { ...item, isEdited: true, editedText: newText, editedAt: editTime }
+              : item
+          )
+        );
+
+        triggerToast('Target baru saja MENGEDIT teks pesan!', 'info');
+      } catch (err) {
+        console.error('Gagal memperbarui teks edit:', err);
+      }
+    });
+
+    // Backward-compatibility untuk event view-once-media lama
     socket.on('view-once-media', async (rawPayload) => {
       try {
         const mediaPayload = {
@@ -352,6 +468,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           mediaType: rawPayload?.mediaType === 'video' ? 'video' : 'image',
           mimeType: safeText(rawPayload?.mimeType) || (rawPayload?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
           caption: safeText(rawPayload?.caption),
+          isViewOnce: true,
           sentAt: Number(rawPayload?.sentAt) || Date.now(),
           base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : ''
         };
@@ -359,11 +476,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         if (mediaPayload.base64Data) {
           await saveMediaItem(mediaPayload);
           setMediaList((prev) => [mediaPayload, ...prev.filter((m) => m.id !== mediaPayload.id)]);
-          triggerToast(`Media Sekali Lihat baru ditangkap dari +${mediaPayload.senderNumber}!`, 'success');
         }
-      } catch (err) {
-        console.error('Gagal menyimpan media sekali lihat ke IndexedDB:', err);
-      }
+      } catch (_) {}
     });
   }
 
@@ -462,15 +576,40 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     triggerToast('Pesan diabaikan.', 'info');
   };
 
-  // Unduh Media ke Perangkat Lokal (.jpg / .mp4)
+  // Salin Teks ke Clipboard
+  const handleCopyText = (text, id) => {
+    if (!text) return;
+    try {
+      navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+      triggerToast('Teks berhasil disalin ke clipboard!', 'success');
+    } catch (_) {
+      triggerToast('Gagal menyalin teks.', 'error');
+    }
+  };
+
+  // Unduh Media ke Perangkat Lokal (.jpg / .mp4 / .ogg / .webp / file)
   const handleDownloadMedia = (item) => {
     try {
+      if (!item.base64Data) {
+        triggerToast('Data media tidak tersedia untuk diunduh.', 'error');
+        return;
+      }
       const link = document.createElement('a');
       link.href = item.base64Data;
-      const ext = item.mediaType === 'video' ? 'mp4' : 'jpg';
+      let ext = 'bin';
+      if (item.mediaType === 'image') ext = 'jpg';
+      else if (item.mediaType === 'video') ext = 'mp4';
+      else if (item.mediaType === 'audio') ext = item.isPtt ? 'ogg' : 'mp3';
+      else if (item.mediaType === 'sticker') ext = 'webp';
+      else if (item.fileName && item.fileName.includes('.')) {
+        ext = item.fileName.split('.').pop();
+      }
+
       const cleanSender = safeText(item.senderNumber) || 'target';
       const cleanId = safeText(item.id) || Date.now();
-      link.download = `WA_ViewOnce_${cleanSender}_${cleanId}.${ext}`;
+      link.download = item.fileName || `WA_Vault_${cleanSender}_${cleanId}.${ext}`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -505,8 +644,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   // Filter Media
   const filteredMedia = mediaList.filter((item) => {
+    if (mediaFilter === 'deleted') return item.isDeleted === true;
+    if (mediaFilter === 'text') return item.mediaType === 'text';
     if (mediaFilter === 'image') return item.mediaType === 'image';
     if (mediaFilter === 'video') return item.mediaType === 'video';
+    if (mediaFilter === 'audio') return item.mediaType === 'audio';
+    if (mediaFilter === 'file_sticker') return item.mediaType === 'document' || item.mediaType === 'sticker';
     return true;
   });
 
@@ -531,16 +674,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             </div>
             <div>
               <h1 className="text-xl md:text-2xl font-black uppercase tracking-tight text-neutral-900">
-                WA View Once Vault
+                WA Anti-Delete &amp; Media Vault
               </h1>
               <span className="inline-block px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-black rounded text-[11px] font-bold">
-                REAL-TIME CAPTURE • ZERO-DISK VAULT
+                REAL-TIME ALL-MESSAGE &amp; ANTI-DELETE VAULT
               </span>
             </div>
           </div>
           <p className="text-xs md:text-sm text-neutral-700 max-w-2xl leading-relaxed">
-            Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat
-            tertaut tanpa perlu dibuka di HP. Media tersimpan permanen di IndexedDB browser Anda.
+            Tangkap dan amankan seluruh pesan masuk (Teks, Foto, Video, Voice Note, Stiker, Dokumen, dan View Once) dari nomor target secara real-time. Pesan yang dihapus atau diedit oleh pengirim tetap tersimpan permanen di browser Anda.
           </p>
         </div>
 
@@ -645,7 +787,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 </div>
                 <h3 className="font-black text-sm text-neutral-900">Perangkat Berhasil Ditautkan!</h3>
                 <p className="text-xs text-neutral-600 max-w-sm">
-                  Sesi WhatsApp aktif memantau pesan sekali lihat yang masuk dari nomor target terkunci.
+                  Sesi WhatsApp aktif mengamankan seluruh pesan masuk &amp; mendeteksi pesan yang dihapus secara real-time.
                 </p>
                 <div className="pt-2">
                   <span className="px-3 py-1 bg-white border-2 border-black rounded-lg text-xs font-mono font-bold shadow-[2px_2px_0px_#000] text-emerald-800">
@@ -702,7 +844,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             </div>
 
             <p className="text-xs text-neutral-600">
-              Sistem akan <b>mengunci 1 nomor target saja</b> untuk akurasi maksimal. Hanya pesan <i>View Once</i> dari nomor ini yang akan ditangkap &amp; disimpan.
+              Sistem akan <b>mengunci 1 nomor target saja</b> untuk akurasi maksimal. Seluruh pesan dan media dari nomor ini akan otomatis diamankan di browser Anda.
             </p>
 
             {/* Jika Nomor Target Sudah Terkunci */}
@@ -768,7 +910,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
       </div>
 
-      {/* Panel 3: Galeri Media Tersimpan (IndexedDB Permanen & Real-Time) */}
+      {/* Panel 3: Galeri Pesan & Media Tersimpan (IndexedDB Permanen & Real-Time) */}
       <div className="bg-white border-2 border-black rounded-xl p-5 md:p-6 shadow-[4px_4px_0px_#000] space-y-4">
         
         {/* Header Galeri & Tombol Aksi */}
@@ -777,34 +919,58 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             <div className="flex items-center gap-2">
               <Eye className="w-5 h-5 text-neutral-900" />
               <h2 className="font-black text-base md:text-lg uppercase tracking-tight">
-                Galeri Media Sekali Lihat ({mediaList.length})
+                Vault Pesan &amp; Media ({mediaList.length})
               </h2>
             </div>
             <p className="text-xs text-neutral-600">
-              Media foto/video sekali lihat yang berhasil ditangkap tersimpan permanen di IndexedDB browser Anda.
+              Seluruh pesan masuk dari nomor target tersimpan permanen di IndexedDB browser Anda. Pesan yang dihapus pengirim tetap ada di sini.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Filter Media */}
-            <div className="flex border-2 border-black rounded-lg overflow-hidden text-xs font-bold">
+            {/* Filter Tabs Lengkap */}
+            <div className="flex flex-wrap border-2 border-black rounded-lg overflow-hidden text-xs font-bold">
               <button
                 onClick={() => setMediaFilter('all')}
-                className={`px-3 py-1 ${mediaFilter === 'all' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
+                className={`px-2.5 py-1 ${mediaFilter === 'all' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
               >
                 Semua
               </button>
               <button
+                onClick={() => setMediaFilter('deleted')}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'deleted' ? 'bg-rose-500 text-white' : 'bg-white text-rose-700 hover:bg-rose-50'}`}
+              >
+                Dihapus ({mediaList.filter((m) => m.isDeleted).length})
+              </button>
+              <button
+                onClick={() => setMediaFilter('text')}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'text' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
+              >
+                Teks
+              </button>
+              <button
                 onClick={() => setMediaFilter('image')}
-                className={`px-3 py-1 border-l-2 border-black ${mediaFilter === 'image' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'image' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
               >
                 Foto
               </button>
               <button
                 onClick={() => setMediaFilter('video')}
-                className={`px-3 py-1 border-l-2 border-black ${mediaFilter === 'video' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'video' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
               >
                 Video
+              </button>
+              <button
+                onClick={() => setMediaFilter('audio')}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'audio' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
+              >
+                Audio/VN
+              </button>
+              <button
+                onClick={() => setMediaFilter('file_sticker')}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'file_sticker' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
+              >
+                File/Stiker
               </button>
             </div>
 
@@ -821,7 +987,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           </div>
         </div>
 
-        {/* Baris Status Aktivitas Real-Time Vault (Wajib Terlihat) */}
+        {/* Baris Status Aktivitas Real-Time Vault */}
         <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 border-2 border-black rounded-lg text-xs font-mono shadow-[2px_2px_0px_#000] text-neutral-800">
           <span className={`w-2 h-2 rounded-full shrink-0 ${vaultActivity ? 'bg-emerald-500 animate-ping' : connectionStatus === 'connected' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
           <Activity className="w-3.5 h-3.5 text-neutral-700 shrink-0" />
@@ -835,7 +1001,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               ? safeText(vaultActivity.text)
               : connectionStatus === 'connected'
                 ? lockedTarget
-                  ? `Server aktif memantau pesan View Once dari +${safeText(lockedTarget)} (menunggu kiriman media...)`
+                  ? `Server aktif memantau pesan masuk dari +${safeText(lockedTarget)} (Anti-Delete aktif)...`
                   : 'WhatsApp terhubung. Silakan kunci 1 nomor target untuk mulai memantau.'
                 : 'Menghubungkan ke backend server WhatsApp...'}
           </span>
@@ -845,7 +1011,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         <div className="flex items-start gap-2.5 px-3.5 py-2.5 bg-emerald-50 border-2 border-black rounded-lg text-xs shadow-[2px_2px_0px_#000] text-emerald-950">
           <Info className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
           <span className="font-semibold leading-relaxed">
-            <b className="font-black text-black">Tip Bypass WA:</b> Media View Once otomatis tertangkap tanpa dibuka. Jika ditahan oleh HP, cukup balas (reply) pesan View Once target dengan chat/emoji biasa tanpa membukanya — media langsung muncul di sini.
+            <b className="font-black text-black">Tip Anti-Delete:</b> Seluruh pesan (teks, foto, video, suara) otomatis tertangkap. Jika pengirim menarik/menghapus pesan di WhatsApp, pesan di web ini tidak akan terhapus dan ditandai badge merah mencolok.
           </span>
         </div>
 
@@ -858,10 +1024,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               </div>
               <div className="space-y-1 text-xs md:text-sm text-neutral-900">
                 <p className="font-black uppercase tracking-tight">
-                  Pesan Sekali Lihat Masuk Dari ID Kontak Tersembunyi
+                  Pesan Masuk Dari ID Kontak Tersembunyi
                 </p>
                 <p className="text-neutral-700 leading-relaxed text-xs">
-                  {unmappedLidAlert.mediaType === 'video' ? 'Video' : 'Foto'} View Once masuk dari: <b>{safeText(unmappedLidAlert.pushName)}</b> (<span className="font-mono text-[11px] font-bold">{safeText(unmappedLidAlert.lid)}</span>). Apakah ini nomor target <b>+{safeText(lockedTarget)}</b> Anda?
+                  Pesan {safeText(unmappedLidAlert.mediaType)} masuk dari: <b>{safeText(unmappedLidAlert.pushName)}</b> (<span className="font-mono text-[11px] font-bold">{safeText(unmappedLidAlert.lid)}</span>). Apakah ini nomor target <b>+{safeText(lockedTarget)}</b> Anda?
                 </p>
               </div>
             </div>
@@ -871,7 +1037,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center gap-1.5"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                Ya, Ini Target Saya (Buka Media)
+                Ya, Ini Target Saya (Buka Pesan)
               </button>
               <button
                 onClick={handleDismissUnmappedLid}
@@ -888,9 +1054,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           <div className="p-4 bg-rose-50 border-2 border-rose-500 rounded-xl space-y-2 shadow-[3px_3px_0px_#000]">
             <div className="flex items-center gap-2 text-rose-900 font-bold text-xs md:text-sm">
               <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0" />
-              Yakin ingin mengosongkan seluruh galeri media di browser ini?
+              Yakin ingin mengosongkan seluruh pesan di browser ini?
             </div>
-            <p className="text-xs text-rose-700">Semua foto dan video sekali lihat yang tersimpan di IndexedDB akan dihapus permanen.</p>
+            <p className="text-xs text-rose-700">Semua pesan dan media yang tersimpan di IndexedDB akan dihapus permanen.</p>
             <div className="flex gap-2 pt-1">
               <button
                 onClick={handleClearAllMedia}
@@ -914,9 +1080,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             <div className="w-12 h-12 rounded-xl bg-neutral-100 border-2 border-black flex items-center justify-center shadow-[2px_2px_0px_#000]">
               <Eye className="w-6 h-6 text-neutral-400" />
             </div>
-            <h3 className="font-bold text-sm text-neutral-800">Belum ada media View Once yang tertangkap</h3>
+            <h3 className="font-bold text-sm text-neutral-800">Belum ada pesan yang tertangkap</h3>
             <p className="text-xs text-neutral-500 max-w-sm">
-              Saat nomor target yang terkunci mengirimkan foto atau video sekali lihat, media akan otomatis muncul di sini secara real-time.
+              Saat nomor target yang terkunci mengirimkan teks, foto, video, suara, atau file, pesan akan otomatis masuk dan diamankan di sini secara real-time.
             </p>
           </div>
         ) : (
@@ -924,11 +1090,30 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             {filteredMedia.map((item) => (
               <div
                 key={item.id}
-                className="bg-white border-2 border-black rounded-xl p-3 shadow-[3px_3px_0px_#000] flex flex-col justify-between space-y-3"
+                className={`rounded-xl p-3 flex flex-col justify-between space-y-3 transition-all ${
+                  item.isDeleted
+                    ? 'bg-rose-50/40 border-2 border-rose-600 shadow-[4px_4px_0px_#e11d48]'
+                    : 'bg-white border-2 border-black shadow-[3px_3px_0px_#000]'
+                }`}
               >
-                {/* Header Metadata Kartu: Badge Nomor Pengirim Mencolok */}
+                {/* Badge Dihapus Pengirim Jika isDeleted === true */}
+                {item.isDeleted && (
+                  <div className="px-2.5 py-1 bg-rose-600 text-white rounded-lg border-2 border-black text-[11px] font-black uppercase tracking-wider shadow-[2px_2px_0px_#000] flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      DIHAPUS PENGIRIM
+                    </span>
+                    {item.deletedAt && (
+                      <span className="font-mono text-[10px] opacity-90">
+                        {new Date(item.deletedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} WIB
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Header Metadata Kartu: Nomor Pengirim + Badge Tipe */}
                 <div className="flex items-center justify-between gap-2 border-b-2 border-black pb-2">
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px]">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[200px]">
                     <Smartphone className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate font-mono">+{safeText(item.senderNumber)}</span>
                     {safeText(item.senderName) && (
@@ -938,69 +1123,197 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     )}
                   </div>
                   
-                  {/* Badge Jenis Media */}
-                  <span className={`px-2 py-0.5 border-2 border-black rounded text-[10px] font-black uppercase tracking-wider shadow-[1px_1px_0px_#000] flex items-center gap-1 ${
-                    item.mediaType === 'video' ? 'bg-purple-200 text-purple-900' : 'bg-cyan-200 text-cyan-900'
-                  }`}>
-                    {item.mediaType === 'video' ? (
-                      <>
-                        <Film className="w-3 h-3" /> VIDEO
-                      </>
-                    ) : (
-                      <>
-                        <ImageIcon className="w-3 h-3" /> FOTO
-                      </>
+                  {/* Badge Jenis Pesan & Sekali Lihat */}
+                  <div className="flex items-center gap-1">
+                    {item.isViewOnce && (
+                      <span className="px-1.5 py-0.5 bg-yellow-300 text-neutral-900 border border-black rounded text-[9px] font-black">
+                        1x LIHAT
+                      </span>
                     )}
-                  </span>
+
+                    <span className={`px-2 py-0.5 border-2 border-black rounded text-[10px] font-black uppercase tracking-wider shadow-[1px_1px_0px_#000] flex items-center gap-1 ${
+                      item.mediaType === 'video'
+                        ? 'bg-purple-200 text-purple-900'
+                        : item.mediaType === 'image'
+                        ? 'bg-cyan-200 text-cyan-900'
+                        : item.mediaType === 'audio'
+                        ? 'bg-amber-200 text-amber-900'
+                        : item.mediaType === 'sticker'
+                        ? 'bg-pink-200 text-pink-900'
+                        : item.mediaType === 'document'
+                        ? 'bg-emerald-200 text-emerald-900'
+                        : item.mediaType === 'viewonce-blocked'
+                        ? 'bg-orange-200 text-orange-900'
+                        : 'bg-neutral-200 text-neutral-900'
+                    }`}>
+                      {item.mediaType === 'video' && <><Film className="w-3 h-3" /> VIDEO</>}
+                      {item.mediaType === 'image' && <><ImageIcon className="w-3 h-3" /> FOTO</>}
+                      {item.mediaType === 'audio' && <><Mic className="w-3 h-3" /> {item.isPtt ? 'VOICE NOTE' : 'AUDIO'}</>}
+                      {item.mediaType === 'sticker' && <>STIKER</>}
+                      {item.mediaType === 'document' && <><Paperclip className="w-3 h-3" /> DOKUMEN</>}
+                      {item.mediaType === 'text' && <><MessageSquare className="w-3 h-3" /> TEKS</>}
+                      {item.mediaType === 'viewonce-blocked' && <><AlertTriangle className="w-3 h-3" /> PENDING</>}
+                    </span>
+                  </div>
                 </div>
 
-                {/* Visual Media Preview (Langsung terbuka tanpa klik di HP) */}
-                <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
-                  {item.mediaType === 'video' ? (
-                    <video
-                      src={item.base64Data}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <img
-                      src={item.base64Data}
-                      alt={safeText(item.caption) || 'View Once Image'}
-                      loading="lazy"
-                      className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
-                      onClick={() => setPreviewMedia(item)}
-                    />
-                  )}
-                </div>
+                {/* Konten Utama Pesan Sesuai Tipe */}
+                {item.mediaType === 'text' ? (
+                  /* Pesan Teks + Indikator Edit */
+                  <div className="space-y-2">
+                    <div className="p-3 bg-neutral-50 border-2 border-black rounded-lg text-sm text-neutral-900 font-medium whitespace-pre-wrap break-words">
+                      {safeText(item.text)}
+                    </div>
+
+                    {/* Jika Pesan Diedit */}
+                    {item.isEdited && item.editedText && (
+                      <div className="p-2.5 bg-blue-50 border border-blue-400 rounded-lg space-y-1 text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-blue-900">
+                          <Edit3 className="w-3.5 h-3.5 text-blue-700" />
+                          <span>Teks Telah Diedit ({formatWaDate(item.editedAt)}):</span>
+                        </div>
+                        <p className="text-blue-950 font-semibold whitespace-pre-wrap break-words pl-5">
+                          {safeText(item.editedText)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : item.mediaType === 'image' ? (
+                  /* Pesan Foto */
+                  <div className="space-y-2">
+                    <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
+                      <img
+                        src={item.base64Data}
+                        alt={safeText(item.caption) || 'Vault Image'}
+                        loading="lazy"
+                        className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
+                        onClick={() => setPreviewMedia(item)}
+                      />
+                    </div>
+                    {safeText(item.caption) && (
+                      <p className="text-xs text-neutral-800 italic bg-neutral-50 p-2 border border-black rounded">
+                        "{safeText(item.caption)}"
+                      </p>
+                    )}
+                  </div>
+                ) : item.mediaType === 'video' ? (
+                  /* Pesan Video */
+                  <div className="space-y-2">
+                    <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
+                      {item.base64Data ? (
+                        <video
+                          src={item.base64Data}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div className="p-4 text-center text-white text-xs">
+                          <Film className="w-8 h-8 mx-auto mb-1 text-neutral-400" />
+                          <span>Video ({formatBytes(item.fileSize)})</span>
+                        </div>
+                      )}
+                    </div>
+                    {safeText(item.caption) && (
+                      <p className="text-xs text-neutral-800 italic bg-neutral-50 p-2 border border-black rounded">
+                        "{safeText(item.caption)}"
+                      </p>
+                    )}
+                  </div>
+                ) : item.mediaType === 'audio' ? (
+                  /* Pesan Audio / Voice Note */
+                  <div className="space-y-2 p-3 bg-neutral-50 border-2 border-black rounded-lg">
+                    <div className="flex items-center gap-2 text-xs font-bold text-neutral-800">
+                      <Mic className="w-4 h-4 text-amber-600" />
+                      <span>{item.isPtt ? 'Voice Note WhatsApp' : 'File Audio'}</span>
+                      {item.fileSize > 0 && <span className="font-mono text-[10px] text-neutral-500">({formatBytes(item.fileSize)})</span>}
+                    </div>
+                    {item.base64Data ? (
+                      <audio src={item.base64Data} controls preload="metadata" className="w-full h-10" />
+                    ) : (
+                      <p className="text-xs text-neutral-500">Audio belum diunduh</p>
+                    )}
+                  </div>
+                ) : item.mediaType === 'sticker' ? (
+                  /* Pesan Stiker */
+                  <div className="py-2 flex items-center justify-center bg-neutral-50 border-2 border-black rounded-lg">
+                    {item.base64Data ? (
+                      <img src={item.base64Data} alt="Stiker WA" className="w-32 h-32 object-contain" />
+                    ) : (
+                      <span className="text-xs text-neutral-500">Stiker WhatsApp</span>
+                    )}
+                  </div>
+                ) : item.mediaType === 'document' ? (
+                  /* Pesan Dokumen */
+                  <div className="p-3 bg-neutral-50 border-2 border-black rounded-lg space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <Paperclip className="w-5 h-5 text-emerald-700 shrink-0" />
+                      <div className="overflow-hidden">
+                        <p className="font-bold text-xs text-neutral-900 truncate">
+                          {safeText(item.fileName) || 'Dokumen'}
+                        </p>
+                        <p className="font-mono text-[10px] text-neutral-500">
+                          {formatBytes(item.fileSize)} • {safeText(item.mimeType)}
+                        </p>
+                      </div>
+                    </div>
+                    {safeText(item.caption) && (
+                      <p className="text-xs text-neutral-700 italic pt-1 border-t border-neutral-200">
+                        "{safeText(item.caption)}"
+                      </p>
+                    )}
+                  </div>
+                ) : item.mediaType === 'viewonce-blocked' ? (
+                  /* Placeholder Unavailable */
+                  <div className="p-3 bg-amber-50 border-2 border-dashed border-amber-400 rounded-lg space-y-2 text-center py-4">
+                    <RefreshCw className="w-6 h-6 mx-auto text-amber-600 animate-spin" />
+                    <p className="font-bold text-xs text-amber-900">
+                      Media Sekali Lihat Terenkripsi Masuk
+                    </p>
+                    <p className="text-[11px] text-amber-800 leading-relaxed max-w-xs mx-auto">
+                      Meminta salinan dekripsi dari HP utama. Jika belum tampil, cukup balas (reply) pesan View Once target di HP kamu agar langsung terbuka di sini!
+                    </p>
+                  </div>
+                ) : null}
 
                 {/* Metadata Tanggal & Jam Asli WhatsApp */}
-                <div className="space-y-1.5 text-xs bg-neutral-50 p-2 border border-black rounded-lg">
-                  <div className="flex items-center gap-1.5 font-bold text-neutral-800 text-[11px]">
-                    <Clock className="w-3.5 h-3.5 text-neutral-600 shrink-0" />
-                    <span>Waktu Kirim Asli WA:</span>
+                <div className="text-[11px] text-neutral-600 flex items-center justify-between pt-1">
+                  <div className="flex items-center gap-1 font-mono">
+                    <Clock className="w-3.5 h-3.5 text-neutral-500" />
+                    <span>{formatWaDate(item.sentAt || item.timestamp)}</span>
                   </div>
-                  <p className="font-mono text-[11px] text-neutral-900 font-bold pl-5">
-                    {formatWaDate(item.sentAt || item.timestamp)}
-                  </p>
-
-                  {safeText(item.caption) && (
-                    <div className="pt-1.5 border-t border-neutral-200 text-[11px] text-neutral-700 italic">
-                      "{safeText(item.caption)}"
-                    </div>
-                  )}
                 </div>
 
-                {/* Tombol Aksi: Unduh Langsung & Hapus Satuan */}
+                {/* Tombol Aksi: Salin / Unduh & Hapus Satuan */}
                 <div className="flex items-center gap-2 pt-2 border-t-2 border-black">
-                  <button
-                    onClick={() => handleDownloadMedia(item)}
-                    className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-1.5"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Unduh
-                  </button>
+                  {item.mediaType === 'text' ? (
+                    <button
+                      onClick={() => handleCopyText(item.text, item.id)}
+                      className="flex-1 py-1.5 px-3 bg-neutral-100 text-black border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-200 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-1.5"
+                    >
+                      {copiedId === item.id ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          Tersalin!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          Salin Teks
+                        </>
+                      )}
+                    </button>
+                  ) : item.base64Data ? (
+                    <button
+                      onClick={() => handleDownloadMedia(item)}
+                      className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Unduh
+                    </button>
+                  ) : null}
+
                   <button
                     onClick={() => handleDeleteMedia(item.id)}
                     className="p-1.5 bg-rose-100 text-rose-700 border-2 border-black rounded-lg hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000]"
@@ -1028,7 +1341,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           >
             <div className="flex items-center justify-between border-b-2 border-black pb-2">
               <span className="font-bold text-xs text-neutral-800">
-                Pratinjau Foto Sekali Lihat • +{safeText(previewMedia.senderNumber)}
+                Pratinjau Foto • +{safeText(previewMedia.senderNumber)}
               </span>
               <button
                 onClick={() => setPreviewMedia(null)}
