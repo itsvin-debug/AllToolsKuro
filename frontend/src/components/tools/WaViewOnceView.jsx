@@ -90,6 +90,40 @@ function formatBytes(bytes) {
   return `${(num / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Helper normalisasi satu pintu untuk kontrak schema vault item (Anti React Error #31 & State Desync)
+function normalizeVaultItem(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const now = Date.now();
+  const rawId = safeText(raw.id);
+  const rawText = safeText(raw.textContent || raw.text || raw.caption || '');
+  const isPtt = Boolean(raw.isVoiceNote || raw.isPtt);
+  const sentTime = Number(raw.sentAt || raw.timestamp) || now;
+
+  return {
+    id: rawId || `msg_${now}_${Math.random().toString(36).substring(2, 7)}`,
+    senderNumber: safeText(raw.senderNumber),
+    senderName: safeText(raw.senderName) || 'Target',
+    mediaType: safeText(raw.mediaType) || 'text',
+    mimeType: safeText(raw.mimeType),
+    caption: safeText(raw.caption),
+    textContent: rawText,
+    text: rawText,
+    fileName: safeText(raw.fileName),
+    fileSize: Number(raw.fileSize) || 0,
+    isPtt,
+    isVoiceNote: isPtt,
+    isViewOnce: Boolean(raw.isViewOnce),
+    isPending: Boolean(raw.isPending),
+    isDeleted: Boolean(raw.isDeleted),
+    deletedAt: raw.deletedAt ? Number(raw.deletedAt) : null,
+    isEdited: Boolean(raw.isEdited),
+    editedText: safeText(raw.editedText),
+    editedAt: raw.editedAt ? Number(raw.editedAt) : null,
+    sentAt: sentTime,
+    base64Data: typeof raw.base64Data === 'string' ? raw.base64Data : ''
+  };
+}
+
 export default function WaViewOnceView({ onBack, onShowToast }) {
   // Bridge helper toast aman untuk mencegah lewatnya object sebagai React child
   const triggerToast = (msg, type = 'info') => {
@@ -184,31 +218,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     try {
       const items = await getAllMediaItems();
       const now = Date.now();
-      const sanitizedItems = (items || []).map((item) => {
-        const itemSentAt = Number(item?.sentAt || item?.timestamp) || now;
-        const isStillPending = Boolean(item?.isPending) && now - itemSentAt < 20000;
-        return {
-          id: safeText(item?.id) || `msg_${now}_${Math.random().toString(36).substring(2, 7)}`,
-          senderNumber: safeText(item?.senderNumber),
-          senderName: safeText(item?.senderName),
-          mediaType: safeText(item?.mediaType) || 'text',
-          mimeType: safeText(item?.mimeType),
-          caption: safeText(item?.caption),
-          text: safeText(item?.text),
-          fileName: safeText(item?.fileName),
-          fileSize: Number(item?.fileSize) || 0,
-          isPtt: Boolean(item?.isPtt),
-          isViewOnce: Boolean(item?.isViewOnce),
-          isPending: isStillPending,
-          isDeleted: Boolean(item?.isDeleted),
-          deletedAt: item?.deletedAt ? Number(item.deletedAt) : null,
-          isEdited: Boolean(item?.isEdited),
-          editedText: safeText(item?.editedText),
-          editedAt: item?.editedAt ? Number(item.editedAt) : null,
-          sentAt: itemSentAt,
-          base64Data: typeof item?.base64Data === 'string' ? item.base64Data : null
-        };
-      });
+      const sanitizedItems = (items || [])
+        .map((item) => {
+          const normalized = normalizeVaultItem(item);
+          if (!normalized) return null;
+          const isStillPending = Boolean(normalized.isPending) && now - normalized.sentAt < 20000;
+          return {
+            ...normalized,
+            isPending: isStillPending
+          };
+        })
+        .filter(Boolean);
       setMediaList(sanitizedItems);
     } catch (err) {
       console.error('Gagal membaca IndexedDB:', err);
@@ -379,33 +399,28 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
 
     // TANGKAP SEMUA PESAN MASUK REAL-TIME (Teks, Foto, Video, VN, Stiker, Dokumen, View Once)
-    socket.on('vault-item', async (rawPayload) => {
+    socket.on('vault-item', (rawPayload) => {
       try {
-        const cleanItem = {
-          id: safeText(rawPayload?.id) || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          senderNumber: safeText(rawPayload?.senderNumber),
-          senderName: safeText(rawPayload?.senderName),
-          mediaType: safeText(rawPayload?.mediaType) || 'text',
-          mimeType: safeText(rawPayload?.mimeType),
-          caption: safeText(rawPayload?.caption),
-          text: safeText(rawPayload?.text),
-          fileName: safeText(rawPayload?.fileName),
-          fileSize: Number(rawPayload?.fileSize) || 0,
-          isPtt: Boolean(rawPayload?.isPtt),
-          isViewOnce: Boolean(rawPayload?.isViewOnce),
-          isPending: Boolean(rawPayload?.isPending),
-          isDeleted: Boolean(rawPayload?.isDeleted),
-          deletedAt: rawPayload?.deletedAt ? Number(rawPayload.deletedAt) : null,
-          isEdited: Boolean(rawPayload?.isEdited),
-          editedText: safeText(rawPayload?.editedText),
-          editedAt: rawPayload?.editedAt ? Number(rawPayload.editedAt) : null,
-          sentAt: Number(rawPayload?.sentAt) || Date.now(),
-          base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : null
-        };
+        const cleanItem = normalizeVaultItem(rawPayload);
+        if (!cleanItem) return;
 
-        await saveMediaItem(cleanItem);
-        setMediaList((prev) => [cleanItem, ...prev.filter((m) => m.id !== cleanItem.id)]);
+        // 1. OPTIMISTIC STATE UPDATE INSTAN (Tampilkan seketika ke UI tanpa memblokir)
+        setMediaList((prev) => {
+          const index = prev.findIndex((m) => m.id === cleanItem.id);
+          if (index !== -1) {
+            const next = [...prev];
+            next[index] = { ...next[index], ...cleanItem };
+            return next;
+          }
+          return [cleanItem, ...prev];
+        });
 
+        // 2. SIMPAN ASYNC KE INDEXEDDB TANPA MEMBLOKIR REACT STATE
+        saveMediaItem(cleanItem).catch((dbErr) => {
+          console.warn('[WA-VAULT-DB] Gagal menyimpan item ke IndexedDB:', dbErr?.message || dbErr);
+        });
+
+        // 3. Notifikasi toast sesuai tipe pesan
         if (cleanItem.mediaType === 'viewonce-pending' || cleanItem.mediaType === 'viewonce-blocked') {
           triggerToast('Media sekali lihat masuk (menunggu respon dekripsi)...', 'info');
         } else if (cleanItem.mediaType === 'text') {
@@ -422,44 +437,55 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
 
     // PEMBARUAN STATUS KARTU REAL-TIME (Timeout 15s selesai / penghentian spinner otomatis)
-    socket.on('vault-item-update', async (patchData) => {
+    socket.on('vault-item-update', (patchData) => {
       try {
         const targetId = safeText(patchData?.id);
         if (!targetId) return;
 
-        await updateMediaItem(targetId, patchData);
-
+        // 1. Optimistic state update ke UI
         setMediaList((prev) =>
           prev.map((item) => {
             if (item.id === targetId) {
-              return {
-                ...item,
-                ...patchData,
-                id: targetId
-              };
+              const patched = { ...item, ...patchData, id: targetId };
+              if (patchData.text || patchData.textContent) {
+                const t = safeText(patchData.textContent || patchData.text);
+                patched.text = t;
+                patched.textContent = t;
+              }
+              return patched;
             }
             return item;
           })
         );
+
+        // 2. Update async ke IndexedDB
+        updateMediaItem(targetId, patchData).catch((dbErr) => {
+          console.warn('[WA-VAULT-DB] Gagal memperbarui status item:', dbErr?.message || dbErr);
+        });
       } catch (err) {
         console.error('Gagal memperbarui item vault via update:', err);
       }
     });
 
     // ANTI-DELETE REAL-TIME: Pesan Ditarik/Dihapus oleh Pengirim
-    socket.on('vault-item-revoked', async ({ id, deletedAt }) => {
+    socket.on('vault-item-revoked', ({ id, deletedAt }) => {
       try {
         const targetId = safeText(id);
         if (!targetId) return;
 
         const delTime = Number(deletedAt) || Date.now();
-        await updateMediaItem(targetId, { isDeleted: true, deletedAt: delTime });
 
+        // 1. Optimistic state update ke UI
         setMediaList((prev) =>
           prev.map((item) =>
             item.id === targetId ? { ...item, isDeleted: true, deletedAt: delTime } : item
           )
         );
+
+        // 2. Update async ke IndexedDB
+        updateMediaItem(targetId, { isDeleted: true, deletedAt: delTime }).catch((dbErr) => {
+          console.warn('[WA-VAULT-DB] Gagal memperbarui status hapus:', dbErr?.message || dbErr);
+        });
 
         triggerToast('Target baru saja MENGHAPUS / MENARIK pesan! (Pesan tetap tersimpan)', 'error');
       } catch (err) {
@@ -468,15 +494,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
 
     // ANTI-EDIT REAL-TIME: Teks Pesan Diedit oleh Pengirim
-    socket.on('vault-item-edited', async ({ id, editedText, editedAt }) => {
+    socket.on('vault-item-edited', ({ id, editedText, editedAt }) => {
       try {
         const targetId = safeText(id);
         const newText = safeText(editedText);
         if (!targetId || !newText) return;
 
         const editTime = Number(editedAt) || Date.now();
-        await updateMediaItem(targetId, { isEdited: true, editedText: newText, editedAt: editTime });
 
+        // 1. Optimistic state update ke UI
         setMediaList((prev) =>
           prev.map((item) =>
             item.id === targetId
@@ -485,6 +511,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           )
         );
 
+        // 2. Update async ke IndexedDB
+        updateMediaItem(targetId, { isEdited: true, editedText: newText, editedAt: editTime }).catch((dbErr) => {
+          console.warn('[WA-VAULT-DB] Gagal memperbarui teks edit:', dbErr?.message || dbErr);
+        });
+
         triggerToast('Target baru saja MENGEDIT teks pesan!', 'info');
       } catch (err) {
         console.error('Gagal memperbarui teks edit:', err);
@@ -492,24 +523,24 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
 
     // Backward-compatibility untuk event view-once-media lama
-    socket.on('view-once-media', async (rawPayload) => {
+    socket.on('view-once-media', (rawPayload) => {
       try {
-        const mediaPayload = {
-          id: safeText(rawPayload?.id) || `vo_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          senderNumber: safeText(rawPayload?.senderNumber),
-          senderName: safeText(rawPayload?.senderName),
-          mediaType: rawPayload?.mediaType === 'video' ? 'video' : 'image',
-          mimeType: safeText(rawPayload?.mimeType) || (rawPayload?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
-          caption: safeText(rawPayload?.caption),
-          isViewOnce: true,
-          sentAt: Number(rawPayload?.sentAt) || Date.now(),
-          base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : ''
-        };
+        const cleanItem = normalizeVaultItem(rawPayload);
+        if (!cleanItem || !cleanItem.base64Data) return;
 
-        if (mediaPayload.base64Data) {
-          await saveMediaItem(mediaPayload);
-          setMediaList((prev) => [mediaPayload, ...prev.filter((m) => m.id !== mediaPayload.id)]);
-        }
+        setMediaList((prev) => {
+          const index = prev.findIndex((m) => m.id === cleanItem.id);
+          if (index !== -1) {
+            const next = [...prev];
+            next[index] = { ...next[index], ...cleanItem };
+            return next;
+          }
+          return [cleanItem, ...prev];
+        });
+
+        saveMediaItem(cleanItem).catch((dbErr) => {
+          console.warn('[WA-VAULT-DB] Gagal menyimpan media ke IndexedDB:', dbErr?.message || dbErr);
+        });
       } catch (_) {}
     });
   }
@@ -655,8 +686,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   // Hapus Satu Item Media dari UI & IndexedDB (Ikon tempat sampah merah)
   const handleDeleteMedia = async (id) => {
     try {
-      await deleteMediaById(id);
       setMediaList((prev) => prev.filter((item) => item.id !== id));
+      await deleteMediaById(id);
       triggerToast('Item berhasil dihapus dari galeri.', 'info');
     } catch (err) {
       triggerToast('Gagal menghapus item.', 'error');
@@ -666,9 +697,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   // Bersihkan Seluruh Galeri Media di UI & IndexedDB (Clear All)
   const handleClearAllMedia = async () => {
     try {
-      await clearAllMedia();
       setMediaList([]);
       setShowClearConfirm(false);
+      await clearAllMedia();
       triggerToast('Seluruh galeri berhasil dibersihkan.', 'info');
     } catch (err) {
       triggerToast('Gagal membersihkan galeri.', 'error');
@@ -1212,7 +1243,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     /* Pesan Teks + Indikator Edit */
                     <div className="space-y-2">
                       <div className="p-3 bg-neutral-50 border-2 border-black rounded-lg text-sm text-neutral-900 font-medium whitespace-pre-wrap break-words">
-                        {safeText(item.text)}
+                        {safeText(item.textContent || item.text)}
                       </div>
 
                       {/* Jika Pesan Diedit */}
@@ -1351,7 +1382,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   <div className="flex items-center gap-2 pt-2 border-t-2 border-black">
                     {item.mediaType === 'text' ? (
                       <button
-                        onClick={() => handleCopyText(item.text, item.id)}
+                        onClick={() => handleCopyText(item.textContent || item.text, item.id)}
                         className="flex-1 py-1.5 px-3 bg-neutral-100 text-black border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-200 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-1.5"
                       >
                         {copiedId === item.id ? (
