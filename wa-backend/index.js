@@ -334,9 +334,33 @@ function learnLidPair(key, session) {
   }
 }
 
+// Helper pengupas pembungkus pesan keluar (deviceSentMessage, ephemeralMessage, editedMessage, dll.)
+function unwrapOutgoingContainer(rawMsg, depth = 0) {
+  if (!rawMsg || typeof rawMsg !== 'object' || depth > 6) return rawMsg;
+  if (rawMsg.deviceSentMessage?.message) {
+    return unwrapOutgoingContainer(rawMsg.deviceSentMessage.message, depth + 1);
+  }
+  if (rawMsg.ephemeralMessage?.message) {
+    return unwrapOutgoingContainer(rawMsg.ephemeralMessage.message, depth + 1);
+  }
+  if (rawMsg.editedMessage?.message) {
+    return unwrapOutgoingContainer(rawMsg.editedMessage.message, depth + 1);
+  }
+  if (rawMsg.documentWithCaptionMessage?.message) {
+    return unwrapOutgoingContainer(rawMsg.documentWithCaptionMessage.message, depth + 1);
+  }
+  return rawMsg;
+}
+
 // 1. Pencocokan Pengirim Pesan Terhadap Target Terkunci (Menggunakan resolveJidToPhone)
 async function isFromTarget(msg, session) {
   if (!session?.targetNumber) return false;
+
+  // Tangkap destinationJid jika pesan keluar dibungkus oleh deviceSentMessage
+  const destinationJid =
+    msg.message?.deviceSentMessage?.destinationJid ||
+    msg.message?.ephemeralMessage?.message?.deviceSentMessage?.destinationJid ||
+    '';
 
   const candidates = [
     msg.key?.remoteJid,
@@ -344,7 +368,8 @@ async function isFromTarget(msg, session) {
     msg.key?.senderPn,
     msg.key?.participant,
     msg.key?.participantAlt,
-    msg.key?.participantPn
+    msg.key?.participantPn,
+    destinationJid
   ].filter(Boolean);
 
   for (const candidate of candidates) {
@@ -454,6 +479,7 @@ function buildVaultPayload({
   fileSize = 0,
   isPtt = false,
   isViewOnce = false,
+  isPending = false,
   isDeleted = false,
   deletedAt = null,
   isEdited = false,
@@ -474,6 +500,7 @@ function buildVaultPayload({
     fileSize: Number(fileSize || 0),
     isPtt: Boolean(isPtt),
     isViewOnce: Boolean(isViewOnce),
+    isPending: Boolean(isPending),
     isDeleted: Boolean(isDeleted),
     deletedAt: deletedAt ? Number(deletedAt) : null,
     isEdited: Boolean(isEdited),
@@ -821,8 +848,13 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
                 const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
                 const sentAt = Number(decodedMsg.messageTimestamp) ? Number(decodedMsg.messageTimestamp) * 1000 : Date.now();
 
+                const peerCardId =
+                  decodedMsg.key?.id ||
+                  currentSession.lastPendingViewOnceId ||
+                  Date.now();
+
                 const payload = buildVaultPayload({
-                  id: String(decodedMsg.key?.id || Date.now()),
+                  id: String(peerCardId),
                   senderNumber: currentSession.targetNumber,
                   senderName: String(decodedMsg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
                   mediaType: String(mediaType),
@@ -830,6 +862,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
                   caption: String(mediaObj.caption || ''),
                   fileSize: buffer.length,
                   isViewOnce: true,
+                  isPending: false,
                   sentAt: Number(sentAt),
                   base64Data
                 });
@@ -842,6 +875,13 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
                   time: Date.now(),
                   text: 'Berhasil membuka media View Once dari target via Peer Sync!'
                 });
+
+                if (decodedMsg.key?.id) {
+                  currentSession.pendingUnavailableIds?.delete(decodedMsg.key.id);
+                }
+                if (currentSession.lastPendingViewOnceId === decodedMsg.key?.id || currentSession.lastPendingViewOnceId === peerCardId) {
+                  currentSession.lastPendingViewOnceId = null;
+                }
 
                 const room = io.sockets.adapter.rooms.get(sessionId);
                 if (!room || room.size === 0) {
@@ -886,27 +926,30 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
 
   const matched = await isFromTarget(msg, currentSession);
 
-  // 2. Tangkap media <unavailable> (hasMessage: false) & emit kartu placeholder ber-ID sama
+  // 2. Tangkap media <unavailable> (hasMessage: false) & emit kartu placeholder PENDING dengan auto-timeout 15s
   if (!msg.message) {
     if (matched && msg.key?.fromMe === false) {
-      if (!currentSession.pendingUnavailableIds) currentSession.pendingUnavailableIds = new Set();
-      if (msg.key?.id) {
-        if (currentSession.pendingUnavailableIds.size >= 50) {
-          const first = currentSession.pendingUnavailableIds.values().next().value;
-          currentSession.pendingUnavailableIds.delete(first);
-        }
-        currentSession.pendingUnavailableIds.add(msg.key.id);
-      }
+      const unavailableId = String(msg.key?.id || Date.now());
+      currentSession.lastPendingViewOnceId = unavailableId;
 
-      // Buat placeholder kartu di web sehingga pengguna langsung tahu ada media sekali lihat masuk
+      if (!currentSession.pendingUnavailableIds) currentSession.pendingUnavailableIds = new Set();
+      if (currentSession.pendingUnavailableIds.size >= 50) {
+        const first = currentSession.pendingUnavailableIds.values().next().value;
+        currentSession.pendingUnavailableIds.delete(first);
+      }
+      currentSession.pendingUnavailableIds.add(unavailableId);
+
+      // Buat placeholder kartu PENDING di web (isPending: true, mediaType: 'viewonce-pending')
       const placeholderPayload = buildVaultPayload({
-        id: String(msg.key?.id || Date.now()),
+        id: unavailableId,
         senderNumber: currentSession.targetNumber,
         senderName: String(msg.pushName || (currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target')),
-        mediaType: 'viewonce-blocked',
+        mediaType: 'viewonce-pending',
         mimeType: '',
-        caption: 'Media sekali lihat terenkripsi (status unavailable). Menunggu respon dekripsi dari HP utama...',
+        caption: '',
+        text: 'Meminta salinan dekripsi dari HP utama...',
         isViewOnce: true,
+        isPending: true,
         sentAt: Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now(),
         base64Data: null
       });
@@ -920,7 +963,7 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
 
       try {
         if (typeof sock?.requestPlaceholderResend === 'function') {
-          console.log('[WA-VAULT] Meminta placeholder resend untuk unavailable key:', msg.key?.id);
+          console.log('[WA-VAULT] Meminta placeholder resend untuk unavailable key:', unavailableId);
           await sock.requestPlaceholderResend(msg.key);
         } else {
           console.warn('[WA-VAULT][RESEND-ERR] sock.requestPlaceholderResend tidak tersedia di Baileys.');
@@ -928,153 +971,258 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
       } catch (err) {
         console.log('[WA-VAULT][RESEND-ERR]', err.message);
       }
+
+      // Auto-Timeout 15 Detik: Hentikan status loading jika HP utama tidak merespons
+      setTimeout(() => {
+        if (currentSession.pendingUnavailableIds?.has(unavailableId)) {
+          currentSession.pendingUnavailableIds.delete(unavailableId);
+          if (currentSession.lastPendingViewOnceId === unavailableId) {
+            currentSession.lastPendingViewOnceId = null;
+          }
+
+          console.log(`[WA-VAULT] Timeout 15s selesai untuk pending View Once ID: ${unavailableId}`);
+          io.to(sessionId).emit('vault-item-update', {
+            id: unavailableId,
+            isPending: false,
+            mediaType: 'viewonce-blocked',
+            text: 'HP utama menolak mengirim otomatis. Coba balas (reply) pesan View Once di HP tanpa membukanya, atau buka langsung di HP (dibatasi protokol WhatsApp).'
+          });
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'Permintaan otomatis selesai tanpa salinan dari HP utama. Silakan coba balas (reply) pesan View Once di HP.'
+          });
+        }
+      }, 15000);
     }
     return;
   }
 
   // JALUR 2: Bypass "Reply / Quoted Message" ala bot WA (.rvo tanpa perintah khusus)
   if (msg.key?.fromMe === true) {
-    const innerMsg =
-      msg.message?.ephemeralMessage?.message ||
-      msg.message?.viewOnceMessage?.message ||
-      msg.message;
-    const ctx =
-      innerMsg?.extendedTextMessage?.contextInfo ||
-      innerMsg?.imageMessage?.contextInfo ||
-      innerMsg?.videoMessage?.contextInfo ||
-      innerMsg?.stickerMessage?.contextInfo ||
-      innerMsg?.reactionMessage?.contextInfo ||
-      null;
+    const innerMsg = unwrapOutgoingContainer(msg.message);
+
+    // Cari contextInfo secara dinamis di semua properti objek innerMsg
+    let ctx = null;
+    if (innerMsg && typeof innerMsg === 'object') {
+      if (innerMsg.contextInfo?.quotedMessage) {
+        ctx = innerMsg.contextInfo;
+      } else {
+        for (const val of Object.values(innerMsg)) {
+          if (val && typeof val === 'object' && val.contextInfo?.quotedMessage) {
+            ctx = val.contextInfo;
+            break;
+          }
+        }
+      }
+    }
 
     if (ctx?.quotedMessage && matched) {
-      let quotedViewOnce = deepExtractViewOnce(ctx.quotedMessage);
-      const isQuotedInUnavailable = ctx.stanzaId && currentSession.pendingUnavailableIds?.has(ctx.stanzaId);
-
-      if (!quotedViewOnce) {
-        if (
-          ctx.quotedMessage?.imageMessage &&
-          (ctx.quotedMessage.imageMessage.viewOnce === true ||
-            isQuotedInUnavailable ||
-            ctx.quotedMessage.viewOnceMessage ||
-            ctx.quotedMessage.viewOnceMessageV2 ||
-            (ctx.quotedMessage.imageMessage.mediaKey && (ctx.quotedMessage.imageMessage.url || ctx.quotedMessage.imageMessage.directPath)))
-        ) {
-          quotedViewOnce = {
+      let found = deepExtractViewOnce(ctx.quotedMessage);
+      if (!found) {
+        const qInner = unwrapOutgoingContainer(ctx.quotedMessage);
+        if (qInner?.imageMessage) {
+          found = {
             mediaType: 'image',
-            mediaObj: ctx.quotedMessage.imageMessage,
-            unwrappedMessage: { imageMessage: ctx.quotedMessage.imageMessage }
+            mediaObj: qInner.imageMessage,
+            unwrappedMessage: { imageMessage: qInner.imageMessage }
           };
-        } else if (
-          ctx.quotedMessage?.videoMessage &&
-          (ctx.quotedMessage.videoMessage.viewOnce === true ||
-            isQuotedInUnavailable ||
-            ctx.quotedMessage.viewOnceMessage ||
-            ctx.quotedMessage.viewOnceMessageV2 ||
-            (ctx.quotedMessage.videoMessage.mediaKey && (ctx.quotedMessage.videoMessage.url || ctx.quotedMessage.videoMessage.directPath)))
-        ) {
-          quotedViewOnce = {
+        } else if (qInner?.videoMessage) {
+          found = {
             mediaType: 'video',
-            mediaObj: ctx.quotedMessage.videoMessage,
-            unwrappedMessage: { videoMessage: ctx.quotedMessage.videoMessage }
+            mediaObj: qInner.videoMessage,
+            unwrappedMessage: { videoMessage: qInner.videoMessage }
           };
         }
       }
 
-      if (quotedViewOnce) {
-        const { mediaType, mediaObj, unwrappedMessage } = quotedViewOnce;
+      console.log('[WA-VAULT][REPLY-INSPECT]', {
+        stanzaId: ctx.stanzaId,
+        quotedKeys: Object.keys(ctx.quotedMessage || {}),
+        mediaType: found?.mediaType || 'none',
+        hasMediaKey: Boolean(found?.mediaObj?.mediaKey),
+        hasDirectPath: Boolean(found?.mediaObj?.directPath),
+        hasUrl: Boolean(found?.mediaObj?.url),
+        hasJpegThumbnail: Boolean(found?.mediaObj?.jpegThumbnail)
+      });
+
+      // Tentukan targetCardId agar kartu PENDING di frontend langsung ter-replace
+      let targetCardId = null;
+      if (ctx.stanzaId && currentSession.pendingUnavailableIds?.has(ctx.stanzaId)) {
+        targetCardId = ctx.stanzaId;
+      } else if (currentSession.lastPendingViewOnceId) {
+        targetCardId = currentSession.lastPendingViewOnceId;
+      } else if (ctx.stanzaId) {
+        targetCardId = ctx.stanzaId;
+      } else {
+        targetCardId = msg.key?.id;
+      }
+
+      if (found) {
+        const { mediaType, mediaObj, unwrappedMessage } = found;
         if (mediaObj.mediaKey && !Buffer.isBuffer(mediaObj.mediaKey)) {
           try {
             mediaObj.mediaKey = Buffer.from(mediaObj.mediaKey);
           } catch (_) {}
         }
 
-        io.to(sessionId).emit('vault-activity', {
-          time: Date.now(),
-          text: 'Terdeteksi balasan (reply) pesan View Once target! Mendekripsi via jalur Reply Bypass...'
-        });
+        const hasMediaKey = Boolean(mediaObj.mediaKey);
+        const hasDirectPath = Boolean(mediaObj.directPath);
+        const hasUrl = Boolean(mediaObj.url);
 
-        let buffer = null;
-        let errDetail = '';
-
-        try {
-          const stream = await downloadContentFromMessage(mediaObj, mediaType);
-          const chunks = [];
-          for await (const chunk of stream) chunks.push(chunk);
-          buffer = Buffer.concat(chunks);
-        } catch (err1) {
-          errDetail = err1.message;
-          console.warn(`[WA-VAULT][REPLY-BYPASS] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
-        }
-
-        if (!buffer || buffer.length === 0) {
-          try {
-            buffer = await downloadMediaMessage(
-              {
-                key: {
-                  remoteJid,
-                  id: ctx.stanzaId || msg.key?.id,
-                  fromMe: false
-                },
-                message: unwrappedMessage
-              },
-              'buffer',
-              {},
-              { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
-            );
-          } catch (err2) {
-            errDetail = err2.message;
-            console.error('[WA-VAULT][REPLY-BYPASS] Tahap 2 juga gagal:', err2.message);
-          }
-        }
-
-        if (buffer && buffer.length > 0) {
-          const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-          const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-          const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
-
-          const payload = buildVaultPayload({
-            id: String(ctx.stanzaId || msg.key?.id || Date.now()),
-            senderNumber: currentSession.targetNumber,
-            senderName: String(currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target'),
-            mediaType: String(mediaType),
-            mimeType: String(mimeType),
-            caption: String(mediaObj.caption || ''),
-            fileSize: buffer.length,
-            isViewOnce: true,
-            sentAt: Number(sentAt),
-            base64Data
-          });
-
-          console.log(`[WA-VAULT Captured via Reply Bypass] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
-
-          io.to(sessionId).emit('vault-item', payload);
-          io.to(sessionId).emit('view-once-media', payload);
+        // KONDISI A — Kunci Media Lengkap (hasMediaKey && (hasDirectPath || hasUrl))
+        if (hasMediaKey && (hasDirectPath || hasUrl)) {
           io.to(sessionId).emit('vault-activity', {
             time: Date.now(),
-            text: 'Berhasil membuka View Once via jalur Reply Bypass!'
+            text: 'Terdeteksi balasan (reply) pesan View Once target! Mendekripsi via jalur Reply Bypass...'
           });
 
-          const room = io.sockets.adapter.rooms.get(sessionId);
-          if (!room || room.size === 0) {
-            if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
-            currentSession.pendingMedia.push(payload);
-            if (currentSession.pendingMedia.length > 20) {
-              currentSession.pendingMedia.shift();
+          let buffer = null;
+          let errDetail = '';
+
+          try {
+            const stream = await downloadContentFromMessage(mediaObj, mediaType);
+            const chunks = [];
+            for await (const chunk of stream) chunks.push(chunk);
+            buffer = Buffer.concat(chunks);
+          } catch (err1) {
+            errDetail = err1.message;
+            console.warn(`[WA-VAULT][REPLY-BYPASS] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
+          }
+
+          if (!buffer || buffer.length === 0) {
+            try {
+              buffer = await downloadMediaMessage(
+                {
+                  key: {
+                    remoteJid,
+                    id: ctx.stanzaId || msg.key?.id,
+                    fromMe: false
+                  },
+                  message: unwrappedMessage
+                },
+                'buffer',
+                {},
+                { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
+              );
+            } catch (err2) {
+              errDetail = err2.message;
+              console.error('[WA-VAULT][REPLY-BYPASS] Tahap 2 juga gagal:', err2.message);
             }
           }
-          return;
-        } else {
-          io.to(sessionId).emit('vault-activity', {
-            time: Date.now(),
-            text: 'Gagal mendekripsi media quoted reply: ' + (errDetail || 'Buffer kosong')
-          });
-          return;
+
+          if (buffer && buffer.length > 0) {
+            const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+            const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+            const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+            const payload = buildVaultPayload({
+              id: String(targetCardId || ctx.stanzaId || msg.key?.id || Date.now()),
+              senderNumber: currentSession.targetNumber,
+              senderName: String(currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target'),
+              mediaType: String(mediaType),
+              mimeType: String(mimeType),
+              caption: String(mediaObj.caption || ''),
+              fileSize: buffer.length,
+              isViewOnce: true,
+              isPending: false,
+              sentAt: Number(sentAt),
+              base64Data
+            });
+
+            console.log(`[WA-VAULT Captured via Reply Bypass] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
+
+            io.to(sessionId).emit('vault-item', payload);
+            io.to(sessionId).emit('view-once-media', payload);
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: 'Berhasil membuka media View Once via Reply Bypass!'
+            });
+
+            if (targetCardId) {
+              currentSession.pendingUnavailableIds?.delete(targetCardId);
+            }
+            if (currentSession.lastPendingViewOnceId === targetCardId) {
+              currentSession.lastPendingViewOnceId = null;
+            }
+
+            const room = io.sockets.adapter.rooms.get(sessionId);
+            if (!room || room.size === 0) {
+              if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
+              currentSession.pendingMedia.push(payload);
+              if (currentSession.pendingMedia.length > 20) {
+                currentSession.pendingMedia.shift();
+              }
+            }
+            return;
+          }
         }
+
+        // KONDISI B — Kunci Media Dihapus WA, Tetapi Ada jpegThumbnail
+        if (mediaObj.jpegThumbnail) {
+          const thumbBuf = Buffer.isBuffer(mediaObj.jpegThumbnail)
+            ? mediaObj.jpegThumbnail
+            : Buffer.from(mediaObj.jpegThumbnail);
+          if (thumbBuf && thumbBuf.length > 0) {
+            const thumbDataUrl = 'data:image/jpeg;base64,' + thumbBuf.toString('base64');
+            const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+            const payload = buildVaultPayload({
+              id: String(targetCardId || ctx.stanzaId || msg.key?.id || Date.now()),
+              senderNumber: currentSession.targetNumber,
+              senderName: String(currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target'),
+              mediaType: 'image',
+              mimeType: 'image/jpeg',
+              caption: String(mediaObj.caption || ''),
+              text: 'Pratinjau Thumbnail (File resolusi penuh dikunci WhatsApp di HP utama)',
+              fileSize: thumbBuf.length,
+              isViewOnce: true,
+              isPending: false,
+              sentAt: Number(sentAt),
+              base64Data: thumbDataUrl
+            });
+
+            console.log(`[WA-VAULT Captured via Thumbnail Fallback] Foto thumbnail dari target +${currentSession.targetNumber}`);
+
+            io.to(sessionId).emit('vault-item', payload);
+            io.to(sessionId).emit('view-once-media', payload);
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: 'WhatsApp menghapus kunci file penuh, pratinjau thumbnail berhasil ditampilkan.'
+            });
+
+            if (targetCardId) {
+              currentSession.pendingUnavailableIds?.delete(targetCardId);
+            }
+            if (currentSession.lastPendingViewOnceId === targetCardId) {
+              currentSession.lastPendingViewOnceId = null;
+            }
+            return;
+          }
+        }
+
+        // KONDISI C — WhatsApp Menghapus Kunci Media & Thumbnail (Kosong Total)
+        io.to(sessionId).emit('vault-item-update', {
+          id: String(targetCardId || ctx.stanzaId || msg.key?.id),
+          isPending: false,
+          mediaType: 'viewonce-blocked',
+          text: 'Media Sekali Lihat terkunci oleh protokol WhatsApp di HP utama (kunci dekripsi tidak dikirim ke perangkat tertaut meski sudah di-reply).'
+        });
+        io.to(sessionId).emit('vault-activity', {
+          time: Date.now(),
+          text: 'Reply terdeteksi, namun versi WhatsApp di HP memblokir pengiriman kunci media View Once ke perangkat tertaut.'
+        });
+        if (targetCardId) {
+          currentSession.pendingUnavailableIds?.delete(targetCardId);
+        }
+        if (currentSession.lastPendingViewOnceId === targetCardId) {
+          currentSession.lastPendingViewOnceId = null;
+        }
+        return;
       }
     }
 
     // Peringatan fromMe HANYA jika bukan protocol sync, bukan reply yang memuat media, dan memang View Once keluar
-    const viewOnceOut = deepExtractViewOnce(msg.message);
+    const viewOnceOut = deepExtractViewOnce(innerMsg || msg.message);
     if (viewOnceOut) {
       io.to(sessionId).emit('vault-activity', {
         time: Date.now(),
