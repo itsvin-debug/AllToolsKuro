@@ -133,6 +133,11 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
     return null;
   });
 
+  const lockedTargetRef = useRef(lockedTarget);
+  useEffect(() => {
+    lockedTargetRef.current = lockedTarget;
+  }, [lockedTarget]);
+
   const [inputTarget, setInputTarget] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | qr_ready | connected | reconnecting
@@ -170,7 +175,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
         senderNumber: safeText(item?.senderNumber),
         senderName: safeText(item?.senderName),
         mediaType: item?.mediaType === 'video' ? 'video' : 'image',
-        mimeType: safeText(item?.mimeType) || 'image/jpeg',
+        mimeType: safeText(item?.mimeType) || (item?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
         caption: safeText(item?.caption),
         sentAt: Number(item?.sentAt || item?.timestamp) || Date.now(),
         timestamp: Number(item?.timestamp || item?.sentAt) || Date.now(),
@@ -202,11 +207,11 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       setIsServerStarting(false);
       setBackendError(null);
 
-      // Otomatis kirim resume-session agar sesi yang sudah pernah ditautkan tidak perlu scan QR lagi
+      // Otomatis kirim resume-session dengan target terbaru
       socket.emit('resume-session', {
         sessionId,
         sessionToken,
-        targetNumber: lockedTarget
+        targetNumber: lockedTargetRef.current
       });
     });
 
@@ -224,9 +229,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       const status = safeText(payload?.status) || 'connecting';
       const phone = safeText(payload?.phone);
       const reason = safeText(payload?.reason);
+      const targetNumber = safeText(payload?.targetNumber);
 
       setConnectionStatus(status);
       setIsServerStarting(false);
+
+      if (targetNumber && !lockedTargetRef.current) {
+        setLockedTarget(targetNumber);
+        localStorage.setItem(STORAGE_LOCKED_TARGET, targetNumber);
+      }
 
       if (status === 'connected') {
         setQrCodeDataUrl(null);
@@ -243,6 +254,23 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
         if (reason === 'logged_out') {
           triggerToast('Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
         }
+      }
+    });
+
+    // Event sinkronisasi nomor target dari server
+    socket.on('target-synced', (payload) => {
+      const synced = safeText(payload?.targetNumber);
+      if (synced) {
+        setLockedTarget(synced);
+        localStorage.setItem(STORAGE_LOCKED_TARGET, synced);
+      }
+    });
+
+    socket.on('target-updated', (payload) => {
+      const synced = safeText(payload?.targetNumber);
+      if (synced) {
+        setLockedTarget(synced);
+        localStorage.setItem(STORAGE_LOCKED_TARGET, synced);
       }
     });
 
@@ -287,7 +315,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       triggerToast(message, 'error');
     });
 
-    // Tangkap Media View Once Real-Time (dengan normalisasi ketat ke tipe primitif)
+    // Tangkap Media View Once Real-Time (dengan normalisasi ketat ke tipe primitif & penanganan instan)
     socket.on('view-once-media', async (rawPayload) => {
       try {
         const mediaPayload = {
@@ -295,7 +323,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
           senderNumber: safeText(rawPayload?.senderNumber),
           senderName: safeText(rawPayload?.senderName),
           mediaType: rawPayload?.mediaType === 'video' ? 'video' : 'image',
-          mimeType: safeText(rawPayload?.mimeType) || 'image/jpeg',
+          mimeType: safeText(rawPayload?.mimeType) || (rawPayload?.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
           caption: safeText(rawPayload?.caption),
           sentAt: Number(rawPayload?.sentAt || rawPayload?.timestamp) || Date.now(),
           timestamp: Number(rawPayload?.sentAt || rawPayload?.timestamp) || Date.now(),
@@ -323,7 +351,7 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
       socketRef.current.emit('start-session', {
         sessionId,
         sessionToken,
-        targetNumber: lockedTarget
+        targetNumber: lockedTargetRef.current
       });
     }
   };
@@ -816,12 +844,15 @@ export default function WaViewOnceView({ onBack, onShowToast, lang = 'id' }) {
                     <video
                       src={item.base64Data}
                       controls
+                      playsInline
+                      preload="metadata"
                       className="w-full h-full object-contain"
                     />
                   ) : (
                     <img
                       src={item.base64Data}
                       alt={safeText(item.caption) || 'View Once Image'}
+                      loading="lazy"
                       className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
                       onClick={() => setPreviewMedia(item)}
                     />
