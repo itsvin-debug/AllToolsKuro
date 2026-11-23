@@ -19,7 +19,8 @@ import {
   Clock,
   Film,
   Image as ImageIcon,
-  ShieldAlert
+  ShieldAlert,
+  Activity
 } from 'lucide-react';
 import {
   saveMediaItem,
@@ -111,6 +112,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | qr_ready | connected | reconnecting
   const [connectedPhone, setConnectedPhone] = useState(null);
   const [backendError, setBackendError] = useState(null);
+  const [vaultActivity, setVaultActivity] = useState(null); // Status aktivitas real-time deteksi/dekripsi
 
   // 3. Galeri Media Tersimpan di IndexedDB
   const [mediaList, setMediaList] = useState([]);
@@ -137,6 +139,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('target-synced');
         socketRef.current.off('target-updated');
         socketRef.current.off('view-once-media');
+        socketRef.current.off('vault-activity');
         socketRef.current.off('session-error');
         socketRef.current.disconnect();
         socketRef.current = null;
@@ -296,7 +299,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       triggerToast(message, 'error');
     });
 
-    // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas)
+    // Baris Aktivitas Real-Time Vault (Deteksi & Dekripsi)
+    socket.on('vault-activity', (data) => {
+      if (data && typeof data === 'object') {
+        setVaultActivity({
+          time: Number(data.time) || Date.now(),
+          text: safeText(data.text)
+        });
+      }
+    });
+
+    // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas Langsung Terbuka)
     socket.on('view-once-media', async (rawPayload) => {
       try {
         const mediaPayload = {
@@ -744,6 +757,18 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             )}
           </div>
         </div>
+
+        {/* Baris Status Aktivitas Real-Time Vault */}
+        {vaultActivity && safeText(vaultActivity.text) && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 border-2 border-black rounded-lg text-xs font-mono shadow-[2px_2px_0px_#000] text-neutral-800">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping shrink-0" />
+            <Activity className="w-3.5 h-3.5 text-neutral-700 shrink-0" />
+            <span className="font-bold text-neutral-500 shrink-0">
+              {new Date(vaultActivity.time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}:
+            </span>
+            <span className="truncate">{safeText(vaultActivity.text)}</span>
+          </div>
+        )}
 
         {/* Dialog Konfirmasi Clear All */}
         {showClearConfirm && (
