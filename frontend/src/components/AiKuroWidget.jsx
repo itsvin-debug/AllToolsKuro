@@ -979,6 +979,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
             top: `${currentRenderY}px`,
             zIndex: 50,
             touchAction: 'none',
+            userSelect: 'none',
             transition: isDragging 
               ? 'none' 
               : 'left 0.28s cubic-bezier(0.22, 1, 0.36, 1), top 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
@@ -1066,7 +1067,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
           }
           className={
             typeof window !== 'undefined' && window.innerWidth < 640
-              ? "fixed left-3 right-3 mx-auto bottom-20 z-50 w-[calc(100vw-24px)] max-w-[380px] max-h-[72vh] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150"
+              ? "fixed left-3 right-3 mx-auto bottom-20 z-50 w-[calc(100vw-24px)] max-w-[380px] max-h-[70vh] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150"
               : `sm:w-[385px] max-h-[82vh] sm:max-h-[560px] rounded-2xl border-2 border-black bg-white text-black shadow-[6px_6px_0px_#000000] flex flex-col overflow-hidden animate-in fade-in duration-150 ${
                   isDragging ? 'select-none' : ''
                 }`
@@ -1172,7 +1173,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
           )}
 
           {/* Area Riwayat Pesan Obrolan Neobrutalist Terang */}
-          <div className="flex-1 p-3.5 overflow-y-auto max-h-[360px] flex flex-col gap-3 bg-neutral-50/70 text-xs custom-scrollbar">
+          <div className="flex-1 p-3.5 overflow-y-auto min-h-[160px] flex flex-col gap-3 bg-neutral-50/70 text-xs custom-scrollbar">
             {messages.map((m, idx) => (
               <div
                 key={idx}
@@ -1199,8 +1200,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
                       <p className="whitespace-pre-line font-medium text-neutral-800">{cleanSpeechText(m.text)}</p>
                       
                       {/* Navigasi Tur Interaktif Satu per Satu */}
-                      <div className="pt-2 border-t border-neutral-200 flex flex-wrap gap-1.5 items-center justify-between">
-                        <div className="flex items-center gap-1.5">
+                      <div className="pt-2 border-t border-neutral-200 flex flex-wrap gap-2 items-center justify-between">
+                        <div className="flex flex-wrap items-center gap-2">
                           {/* Tombol Lanjut Fitur Berikutnya */}
                           {m.stepIndex < KURO_TOOLS_CATALOG.length - 1 ? (
                             <button
