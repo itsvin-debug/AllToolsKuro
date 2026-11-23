@@ -8,10 +8,11 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.9",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "node-cache": "^5.1.2",
     "pino": "^9.6.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1"

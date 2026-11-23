@@ -14,8 +14,10 @@ const {
   DisconnectReason,
   downloadContentFromMessage,
   downloadMediaMessage,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
+const NodeCache = require('node-cache');
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +28,7 @@ const MAX_SESSIONS = 6;
 const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 60 menit batas idle sesi
 
 const pinoLogger = pino({ level: 'silent' });
+const baileysLogger = pino({ level: 'silent' });
 
 app.use(cors({ origin: FRONTEND_URL === '*' ? '*' : [FRONTEND_URL, 'http://localhost:5173'] }));
 app.use(express.json());
@@ -296,26 +299,16 @@ function extractViewOnce(rawMessage) {
   return { unwrapped: current, isViewOnce };
 }
 
-// Inisialisasi & Penghubung Baileys Anti-Putus (Handle 515 & Multi-File Auth)
-async function startBaileys(sessionId, targetNumber = null) {
-  const sessionDir = getSessionDir(sessionId);
-  if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
-  }
-
-  let version = [2, 3000, 1015901307];
-  try {
-    const fetched = await fetchLatestBaileysVersion();
-    if (fetched?.version) {
-      version = fetched.version;
-    }
-  } catch (verErr) {
-    console.warn(`[Session ${sessionId}] fetchLatestBaileysVersion: ${verErr.message}, menggunakan fallback.`);
-  }
-
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-
+// Inisialisasi & Penghubung Baileys Anti-Putus & Anti-Bad MAC
+async function startBaileys(sessionId, targetNumber = null, cleanAuth = false) {
   let session = sessions.get(sessionId);
+
+  // Kunci single-socket per session (cegah race condition / bentrok ratchet Signal)
+  if (session?.isInitializing) {
+    console.log(`[Session ${sessionId}] Inisialisasi sedang berjalan, abaikan permintaan socket ganda.`);
+    return session;
+  }
+
   if (!session) {
     session = {
       sessionId,
@@ -325,91 +318,99 @@ async function startBaileys(sessionId, targetNumber = null) {
       targetJids: new Set(),
       lidMap: new Map(),
       msgCache: new Map(),
+      msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
       pendingMedia: [],
       presenceInterval: null,
+      isInitializing: true,
       lastActive: Date.now(),
       qrCode: null,
       qrDataUrl: null
     };
     sessions.set(sessionId, session);
   } else {
+    session.isInitializing = true;
     if (!session.msgCache) session.msgCache = new Map();
+    if (!session.msgRetryCounterCache) {
+      session.msgRetryCounterCache = new NodeCache({ stdTTL: 600, useClones: false });
+    }
     session.status = 'connecting';
     session.lastActive = Date.now();
     if (targetNumber) {
       session.targetNumber = normalizePhone(targetNumber);
     }
-    if (session.presenceInterval) {
-      clearInterval(session.presenceInterval);
-      session.presenceInterval = null;
-    }
   }
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    browser: ['Kuro Studio', 'Chrome', '120.0.0'],
-    syncFullHistory: false,
-    shouldSyncHistoryMessage: () => false,
-    markOnlineOnConnect: true,
-    connectTimeoutMs: 60000,
-    keepAliveIntervalMs: 20000,
-    logger: pinoLogger,
-    printQRInTerminal: false,
-    getMessage: async (key) => {
-      const cached = session.msgCache?.get(key?.id);
-      return cached || undefined;
-    }
-  });
-
-  session.sock = sock;
-
-  // Simpan kredensial setiap pembaruan
-  sock.ev.on('creds.update', saveCreds);
-
-  // Listener untuk memetakan contact.lid <-> phone
-  sock.ev.on('contacts.upsert', (contacts) => {
-    if (!Array.isArray(contacts)) return;
-    for (const c of contacts) {
-      if (c.lid && c.id) {
-        const phone = normalizePhone(c.id);
-        if (phone) {
-          session.lidMap.set(c.lid, phone);
-          session.lidMap.set(phone, c.lid);
-        }
+  try {
+    // 1. Bersihkan instance socket & event listeners lama secara tuntas jika ada
+    if (session.sock) {
+      if (session.presenceInterval) {
+        clearInterval(session.presenceInterval);
+        session.presenceInterval = null;
       }
+      try {
+        session.sock.ev?.removeAllListeners();
+      } catch (_) {}
+      try {
+        session.sock.end?.(undefined);
+      } catch (_) {}
+      session.sock = null;
     }
-  });
 
-  sock.ev.on('contacts.update', (updates) => {
-    if (!Array.isArray(updates)) return;
-    for (const u of updates) {
-      if (u.lid && u.id) {
-        const phone = normalizePhone(u.id);
-        if (phone) {
-          session.lidMap.set(u.lid, phone);
-          session.lidMap.set(phone, u.lid);
-        }
+    if (cleanAuth) {
+      removeSessionDir(sessionId);
+    }
+
+    // Jeda 300ms agar socket dan port sebelumnya benar-benar tertutup bersih
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const sessionDir = getSessionDir(sessionId);
+    if (!fs.existsSync(sessionDir)) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    let version = [2, 3000, 1015901307];
+    try {
+      const fetched = await fetchLatestBaileysVersion();
+      if (fetched?.version) {
+        version = fetched.version;
       }
+    } catch (verErr) {
+      console.warn(`[Session ${sessionId}] fetchLatestBaileysVersion: ${verErr.message}, menggunakan fallback.`);
     }
-  });
 
-  sock.ev.on('chats.upsert', (chats) => {
-    if (!Array.isArray(chats)) return;
-    for (const chat of chats) {
-      if (chat.id && chat.lid) {
-        const phone = normalizePhone(chat.id);
-        if (phone) {
-          session.lidMap.set(chat.lid, phone);
-          session.lidMap.set(phone, chat.lid);
-        }
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+
+    const sock = makeWASocket({
+      version,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, baileysLogger)
+      },
+      browser: ['Kuro Studio', 'Chrome', '120.0.0'],
+      syncFullHistory: false,
+      shouldSyncHistoryMessage: () => false,
+      markOnlineOnConnect: true,
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 20000,
+      msgRetryCounterCache: session.msgRetryCounterCache,
+      retryRequestDelayMs: 250,
+      maxMsgRetryCount: 5,
+      logger: baileysLogger,
+      printQRInTerminal: false,
+      getMessage: async (key) => {
+        const cached = session.msgCache?.get(key?.id);
+        return cached || undefined;
       }
-    }
-  });
+    });
 
-  sock.ev.on('messaging-history.set', (payload) => {
-    const contacts = payload?.contacts;
-    if (Array.isArray(contacts)) {
+    session.sock = sock;
+
+    // Simpan kredensial setiap pembaruan
+    sock.ev.on('creds.update', saveCreds);
+
+    // Listener untuk memetakan contact.lid <-> phone
+    sock.ev.on('contacts.upsert', (contacts) => {
+      if (!Array.isArray(contacts)) return;
       for (const c of contacts) {
         if (c.lid && c.id) {
           const phone = normalizePhone(c.id);
@@ -419,9 +420,23 @@ async function startBaileys(sessionId, targetNumber = null) {
           }
         }
       }
-    }
-    const chats = payload?.chats;
-    if (Array.isArray(chats)) {
+    });
+
+    sock.ev.on('contacts.update', (updates) => {
+      if (!Array.isArray(updates)) return;
+      for (const u of updates) {
+        if (u.lid && u.id) {
+          const phone = normalizePhone(u.id);
+          if (phone) {
+            session.lidMap.set(u.lid, phone);
+            session.lidMap.set(phone, u.lid);
+          }
+        }
+      }
+    });
+
+    sock.ev.on('chats.upsert', (chats) => {
+      if (!Array.isArray(chats)) return;
       for (const chat of chats) {
         if (chat.id && chat.lid) {
           const phone = normalizePhone(chat.id);
@@ -431,240 +446,279 @@ async function startBaileys(sessionId, targetNumber = null) {
           }
         }
       }
-    }
-  });
+    });
 
-  // Handler connection.update Anti-Putus
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      session.qrCode = qr;
-      session.status = 'qr_ready';
-      session.lastActive = Date.now();
-      try {
-        const qrDataUrl = await QRCode.toDataURL(qr, { margin: 1, scale: 7 });
-        session.qrDataUrl = qrDataUrl;
-        io.to(sessionId).emit('qr-code', { qr, qrDataUrl });
-        io.to(sessionId).emit('qr', { qr, qrDataUrl });
-      } catch (_) {
-        io.to(sessionId).emit('qr-code', { qr });
-        io.to(sessionId).emit('qr', { qr });
-      }
-    }
-
-    if (connection === 'open') {
-      session.status = 'connected';
-      session.qrCode = null;
-      session.qrDataUrl = null;
-      session.lastActive = Date.now();
-
-      // Perangkat tertaut tetap aktif (ON) dan heartbeat presence setiap 45 detik
-      try {
-        await sock.sendPresenceUpdate('available');
-      } catch (_) {}
-
-      if (session.presenceInterval) {
-        clearInterval(session.presenceInterval);
-      }
-      session.presenceInterval = setInterval(async () => {
-        try {
-          if (session.sock) {
-            await session.sock.sendPresenceUpdate('available');
+    sock.ev.on('messaging-history.set', (payload) => {
+      const contacts = payload?.contacts;
+      if (Array.isArray(contacts)) {
+        for (const c of contacts) {
+          if (c.lid && c.id) {
+            const phone = normalizePhone(c.id);
+            if (phone) {
+              session.lidMap.set(c.lid, phone);
+              session.lidMap.set(phone, c.lid);
+            }
           }
+        }
+      }
+      const chats = payload?.chats;
+      if (Array.isArray(chats)) {
+        for (const chat of chats) {
+          if (chat.id && chat.lid) {
+            const phone = normalizePhone(chat.id);
+            if (phone) {
+              session.lidMap.set(chat.lid, phone);
+              session.lidMap.set(phone, chat.lid);
+            }
+          }
+        }
+      }
+    });
+
+    // Handler connection.update Anti-Putus
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        session.qrCode = qr;
+        session.status = 'qr_ready';
+        session.lastActive = Date.now();
+        try {
+          const qrDataUrl = await QRCode.toDataURL(qr, { margin: 1, scale: 7 });
+          session.qrDataUrl = qrDataUrl;
+          io.to(sessionId).emit('qr-code', { qr, qrDataUrl });
+          io.to(sessionId).emit('qr', { qr, qrDataUrl });
+        } catch (_) {
+          io.to(sessionId).emit('qr-code', { qr });
+          io.to(sessionId).emit('qr', { qr });
+        }
+      }
+
+      if (connection === 'open') {
+        session.isInitializing = false;
+        session.status = 'connected';
+        session.qrCode = null;
+        session.qrDataUrl = null;
+        session.lastActive = Date.now();
+
+        // Perangkat tertaut tetap aktif (ON) dan heartbeat presence setiap 45 detik
+        try {
+          await sock.sendPresenceUpdate('available');
         } catch (_) {}
-      }, 45000);
 
-      if (session.targetNumber) {
-        await resolveTargetIdentifiers(session);
-      }
-
-      const phone = sock.user?.id ? sock.user.id.split(':')[0] : (sock.user?.id || '');
-      io.to(sessionId).emit('session-status', {
-        status: 'connected',
-        phone,
-        targetNumber: session.targetNumber || ''
-      });
-      io.to(sessionId).emit('status', { status: 'connected', phone });
-
-      if (session.pendingMedia && session.pendingMedia.length > 0) {
-        while (session.pendingMedia.length > 0) {
-          const item = session.pendingMedia.shift();
-          io.to(sessionId).emit('view-once-media', item);
+        if (session.presenceInterval) {
+          clearInterval(session.presenceInterval);
         }
-      }
-    }
+        session.presenceInterval = setInterval(async () => {
+          try {
+            if (session.sock) {
+              await session.sock.sendPresenceUpdate('available');
+            }
+          } catch (_) {}
+        }, 45000);
 
-    if (connection === 'close') {
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+        if (session.targetNumber) {
+          await resolveTargetIdentifiers(session);
+        }
 
-      if (session.presenceInterval) {
-        clearInterval(session.presenceInterval);
-        session.presenceInterval = null;
-      }
-
-      if (isLoggedOut) {
-        removeSessionDir(sessionId);
-        sessions.delete(sessionId);
+        const phone = sock.user?.id ? sock.user.id.split(':')[0] : (sock.user?.id || '');
         io.to(sessionId).emit('session-status', {
-          status: 'disconnected',
-          message: 'Sesi keluar dari perangkat.'
+          status: 'connected',
+          phone,
+          targetNumber: session.targetNumber || ''
         });
-        io.to(sessionId).emit('status', { status: 'disconnected', reason: 'logged_out' });
-      } else {
-        session.status = 'reconnecting';
-        io.to(sessionId).emit('session-status', {
-          status: 'reconnecting',
-          statusCode
-        });
-        io.to(sessionId).emit('status', { status: 'reconnecting' });
+        io.to(sessionId).emit('status', { status: 'connected', phone });
 
-        setTimeout(() => {
-          if (sessions.has(sessionId)) {
-            startBaileys(sessionId, session.targetNumber);
+        if (session.pendingMedia && session.pendingMedia.length > 0) {
+          while (session.pendingMedia.length > 0) {
+            const item = session.pendingMedia.shift();
+            io.to(sessionId).emit('view-once-media', item);
           }
-        }, 1500);
-      }
-    }
-  });
-
-  // 2. Interseptor Pesan & Dekripsi View Once Real-Time
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify' && type !== 'append') return;
-
-    const currentSession = sessions.get(sessionId);
-    if (!currentSession) return;
-
-    for (const msg of messages) {
-      if (!msg.message) continue;
-
-      // Simpan msg.message ke session.msgCache (maks 100 item, FIFO) untuk kebutuhan retry getMessage Baileys
-      if (msg.key?.id) {
-        if (!currentSession.msgCache) currentSession.msgCache = new Map();
-        if (currentSession.msgCache.size >= 100) {
-          const firstKey = currentSession.msgCache.keys().next().value;
-          currentSession.msgCache.delete(firstKey);
         }
-        currentSession.msgCache.set(msg.key.id, msg.message);
       }
 
-      if (msg.key?.remoteJid === 'status@broadcast' || msg.key?.fromMe === true) {
-        continue;
+      if (connection === 'close') {
+        session.isInitializing = false;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+
+        if (session.presenceInterval) {
+          clearInterval(session.presenceInterval);
+          session.presenceInterval = null;
+        }
+
+        if (isLoggedOut) {
+          removeSessionDir(sessionId);
+          sessions.delete(sessionId);
+          io.to(sessionId).emit('session-status', {
+            status: 'disconnected',
+            message: 'Sesi keluar dari perangkat.'
+          });
+          io.to(sessionId).emit('status', { status: 'disconnected', reason: 'logged_out' });
+        } else {
+          session.status = 'reconnecting';
+          io.to(sessionId).emit('session-status', {
+            status: 'reconnecting',
+            statusCode
+          });
+          io.to(sessionId).emit('status', { status: 'reconnecting' });
+
+          setTimeout(() => {
+            if (sessions.has(sessionId)) {
+              startBaileys(sessionId, session.targetNumber, false);
+            }
+          }, 1500);
+        }
       }
+    });
 
-      currentSession.lastActive = Date.now();
+    // 2. Interseptor Pesan & Dekripsi View Once Real-Time
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify' && type !== 'append') return;
 
-      const { unwrapped, isViewOnce } = extractViewOnce(msg.message);
-      if (!isViewOnce || !unwrapped) continue;
+      const currentSession = sessions.get(sessionId);
+      if (!currentSession) return;
 
-      const matchedTarget = await isFromTarget(msg, currentSession);
+      for (const msg of messages) {
+        if (!msg.message) continue;
 
-      // Log diagnostik singkat
-      console.log('[WA-VAULT]', {
-        sessionId,
-        remoteJid: msg.key?.remoteJid,
-        remoteJidAlt: msg.key?.remoteJidAlt,
-        fromMe: msg.key?.fromMe,
-        isViewOnce,
-        matchedTarget
-      });
+        // Log diagnostik bersih membuktikan pesan berhasil didekripsi libsignal tanpa Bad MAC
+        console.log('[WA-VAULT][MSG]', {
+          from: msg.key?.remoteJid,
+          alt: msg.key?.remoteJidAlt,
+          fromMe: msg.key?.fromMe,
+          keys: Object.keys(msg.message || {})
+        });
 
-      // Status real-time ke frontend via event 'vault-activity'
-      if (!matchedTarget) {
+        // Simpan msg.message ke session.msgCache (maks 100 item, FIFO) untuk kebutuhan retry getMessage Baileys
+        if (msg.key?.id) {
+          if (!currentSession.msgCache) currentSession.msgCache = new Map();
+          if (currentSession.msgCache.size >= 100) {
+            const firstKey = currentSession.msgCache.keys().next().value;
+            currentSession.msgCache.delete(firstKey);
+          }
+          currentSession.msgCache.set(msg.key.id, msg.message);
+        }
+
+        if (msg.key?.remoteJid === 'status@broadcast' || msg.key?.fromMe === true) {
+          continue;
+        }
+
+        currentSession.lastActive = Date.now();
+
+        const { unwrapped, isViewOnce } = extractViewOnce(msg.message);
+        if (!isViewOnce || !unwrapped) continue;
+
+        const matchedTarget = await isFromTarget(msg, currentSession);
+
+        // Log diagnostik singkat
+        console.log('[WA-VAULT]', {
+          sessionId,
+          remoteJid: msg.key?.remoteJid,
+          remoteJidAlt: msg.key?.remoteJidAlt,
+          fromMe: msg.key?.fromMe,
+          isViewOnce,
+          matchedTarget
+        });
+
+        // Status real-time ke frontend via event 'vault-activity'
+        if (!matchedTarget) {
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'View Once masuk dari ' + (msg.key?.remoteJid || 'unknown') + ' (diabaikan, bukan target terkunci)'
+          });
+          continue;
+        }
+
         io.to(sessionId).emit('vault-activity', {
           time: Date.now(),
-          text: 'View Once masuk dari ' + (msg.key?.remoteJid || 'unknown') + ' (diabaikan, bukan target terkunci)'
+          text: 'View Once dari target terdeteksi! Mengunduh media...'
         });
-        continue;
-      }
 
-      io.to(sessionId).emit('vault-activity', {
-        time: Date.now(),
-        text: 'View Once dari target terdeteksi! Mengunduh media...'
-      });
+        const mediaObj = unwrapped.imageMessage || unwrapped.videoMessage;
+        const mediaType = unwrapped.imageMessage ? 'image' : 'video';
+        if (!mediaObj) continue;
 
-      const mediaObj = unwrapped.imageMessage || unwrapped.videoMessage;
-      const mediaType = unwrapped.imageMessage ? 'image' : 'video';
-      if (!mediaObj) continue;
+        // Dekripsi 2 Tahap (downloadContentFromMessage dengan fallback downloadMediaMessage)
+        let buffer = null;
+        let errDetail = '';
 
-      // Dekripsi 2 Tahap (downloadContentFromMessage dengan fallback downloadMediaMessage)
-      let buffer = null;
-      let errDetail = '';
-
-      // Tahap 1: downloadContentFromMessage
-      try {
-        const stream = await downloadContentFromMessage(mediaObj, mediaType);
-        const chunks = [];
-        for await (const chunk of stream) chunks.push(chunk);
-        buffer = Buffer.concat(chunks);
-      } catch (err1) {
-        errDetail = err1.message;
-        console.warn(`[WA-VAULT] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
-      }
-
-      // Tahap 2 (Fallback jika Tahap 1 error atau buffer kosong): downloadMediaMessage
-      if (!buffer || buffer.length === 0) {
+        // Tahap 1: downloadContentFromMessage
         try {
-          buffer = await downloadMediaMessage(
-            { key: msg.key, message: unwrapped },
-            'buffer',
-            {},
-            { logger: pinoLogger, reuploadRequest: sock.updateMediaMessage }
-          );
-        } catch (err2) {
-          errDetail = err2.message;
-          console.error('[WA-VAULT] Tahap 2 juga gagal:', err2.message);
+          const stream = await downloadContentFromMessage(mediaObj, mediaType);
+          const chunks = [];
+          for await (const chunk of stream) chunks.push(chunk);
+          buffer = Buffer.concat(chunks);
+        } catch (err1) {
+          errDetail = err1.message;
+          console.warn(`[WA-VAULT] Tahap 1 gagal (${err1.message}), mencoba Tahap 2 fallback...`);
         }
-      }
 
-      if (!buffer || buffer.length === 0) {
+        // Tahap 2 (Fallback jika Tahap 1 error atau buffer kosong): downloadMediaMessage
+        if (!buffer || buffer.length === 0) {
+          try {
+            buffer = await downloadMediaMessage(
+              { key: msg.key, message: unwrapped },
+              'buffer',
+              {},
+              { logger: baileysLogger, reuploadRequest: sock.updateMediaMessage }
+            );
+          } catch (err2) {
+            errDetail = err2.message;
+            console.error('[WA-VAULT] Tahap 2 juga gagal:', err2.message);
+          }
+        }
+
+        if (!buffer || buffer.length === 0) {
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: 'Gagal mendekripsi media: ' + (errDetail || 'Buffer kosong')
+          });
+          continue;
+        }
+
+        const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+        const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+        const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+        const payload = {
+          id: String(msg.key?.id || Date.now()),
+          senderNumber: currentSession.targetNumber,
+          senderName: String(msg.pushName || ''),
+          mediaType: String(mediaType),
+          mimeType: String(mimeType),
+          caption: String(mediaObj.caption || ''),
+          sentAt: Number(sentAt),
+          base64Data
+        };
+
+        console.log(`[WA-VAULT Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari +${currentSession.targetNumber}`);
+
+        // Kirim real-time ke room socket client
+        io.to(sessionId).emit('view-once-media', payload);
+
+        // Emit status aktivitas berhasil
         io.to(sessionId).emit('vault-activity', {
           time: Date.now(),
-          text: 'Gagal mendekripsi media: ' + (errDetail || 'Buffer kosong')
+          text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once!'
         });
-        continue;
-      }
 
-      const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-      const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-      const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
-
-      const payload = {
-        id: String(msg.key?.id || Date.now()),
-        senderNumber: currentSession.targetNumber,
-        senderName: String(msg.pushName || ''),
-        mediaType: String(mediaType),
-        mimeType: String(mimeType),
-        caption: String(mediaObj.caption || ''),
-        sentAt: Number(sentAt),
-        base64Data
-      };
-
-      console.log(`[WA-VAULT Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari +${currentSession.targetNumber}`);
-
-      // Kirim real-time ke room socket client
-      io.to(sessionId).emit('view-once-media', payload);
-
-      // Emit status aktivitas berhasil
-      io.to(sessionId).emit('vault-activity', {
-        time: Date.now(),
-        text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once!'
-      });
-
-      // Jika room sessionId sedang kosong (tab ditutup), simpan ke antrian pendingMedia (maks 10 item)
-      const room = io.sockets.adapter.rooms.get(sessionId);
-      if (!room || room.size === 0) {
-        if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
-        currentSession.pendingMedia.push(payload);
-        if (currentSession.pendingMedia.length > 10) {
-          currentSession.pendingMedia.shift();
+        // Jika room sessionId sedang kosong (tab ditutup), simpan ke antrian pendingMedia (maks 10 item)
+        const room = io.sockets.adapter.rooms.get(sessionId);
+        if (!room || room.size === 0) {
+          if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
+          currentSession.pendingMedia.push(payload);
+          if (currentSession.pendingMedia.length > 10) {
+            currentSession.pendingMedia.shift();
+          }
         }
       }
-    }
-  });
+    });
 
-  return session;
+    return session;
+  } finally {
+    session.isInitializing = false;
+  }
 }
 
 // 3. Sinkronisasi Event Socket.io Multi-Client
@@ -776,30 +830,41 @@ io.on('connection', (socket) => {
           await resolveTargetIdentifiers(session);
         }
 
-        socket.emit('session-status', {
-          status: session.status,
-          phone: session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '',
-          targetNumber: session.targetNumber || ''
-        });
+        if (session.status === 'connected') {
+          socket.emit('session-status', {
+            status: session.status,
+            phone: session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '',
+            targetNumber: session.targetNumber || ''
+          });
 
-        if (session.targetNumber) {
-          socket.emit('target-synced', { targetNumber: session.targetNumber });
+          if (session.targetNumber) {
+            socket.emit('target-synced', { targetNumber: session.targetNumber });
+          }
+          return;
         }
 
         if (session.status === 'qr_ready' && session.qrCode) {
+          socket.emit('session-status', {
+            status: session.status,
+            phone: '',
+            targetNumber: session.targetNumber || ''
+          });
           socket.emit('qr-code', { qr: session.qrCode, qrDataUrl: session.qrDataUrl });
           socket.emit('qr', { qr: session.qrCode, qrDataUrl: session.qrDataUrl });
+          return;
         }
-        return;
       }
 
-      if (sessions.size >= MAX_SESSIONS) {
+      if (sessions.size >= MAX_SESSIONS && !sessions.has(sessionId)) {
         return socket.emit('session-error', {
           message: 'Server sedang padat (batas 6 sesi tercapai). Silakan coba lagi beberapa saat.'
         });
       }
 
-      session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null);
+      // Bersihkan folder auth lama secara tuntas sebelum generate QR baru agar tidak ada sisa file kunci Signal rusak
+      removeSessionDir(sessionId);
+
+      session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null, true);
       socket.emit('session-status', { status: session.status, targetNumber: session.targetNumber });
       if (session.targetNumber) {
         socket.emit('target-synced', { targetNumber: session.targetNumber });
@@ -823,12 +888,16 @@ io.on('connection', (socket) => {
           session.presenceInterval = null;
         }
         try {
+          session.sock?.ev?.removeAllListeners();
+        } catch (_) {}
+        try {
           await session.sock?.logout();
         } catch (_) {
           try {
-            session.sock?.end();
+            session.sock?.end(undefined);
           } catch (_) {}
         }
+        session.sock = null;
       }
 
       removeSessionDir(sessionId);
