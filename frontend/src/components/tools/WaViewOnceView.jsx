@@ -28,7 +28,13 @@ import {
   Radio,
   Users,
   Check,
-  X
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  Play,
+  HardDrive,
+  Server
 } from 'lucide-react';
 import {
   saveMediaItem,
@@ -36,7 +42,9 @@ import {
   getAllMediaItems,
   deleteMediaById,
   deleteMediaByIds,
-  clearAllMedia
+  clearAllMedia,
+  getVaultStorageStats,
+  pruneExpiredStatuses
 } from '../../utils/waMediaDB';
 
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
@@ -44,6 +52,7 @@ const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
 const STORAGE_CONFIRMED_LIDS = 'wa_vault_confirmed_lids';
 const STORAGE_PAIRING_PHONE = 'wa_vault_pairing_phone';
 const STORAGE_MONITOR_MODE = 'wa_vault_monitor_mode';
+const STORAGE_SW_MODE = 'wa_vault_sw_mode';
 
 // Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
 const safeText = (val) => {
@@ -152,6 +161,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     return localStorage.getItem(STORAGE_MONITOR_MODE) || 'all';
   });
 
+  // Mode Muat SW: 'auto' (Auto Penuh) vs 'lite' (Hemat Server: Thumbnail Dulu untuk Video)
+  const [swMode, setSwMode] = useState(() => {
+    return localStorage.getItem(STORAGE_SW_MODE) || 'auto';
+  });
+
   // Kunci 1 Nomor Target
   const [lockedTarget, setLockedTarget] = useState(() => {
     const saved = localStorage.getItem(STORAGE_LOCKED_TARGET);
@@ -188,7 +202,21 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const [mediaList, setMediaList] = useState([]);
   const [previewMedia, setPreviewMedia] = useState(null);
   const [copiedItemId, setCopiedItemId] = useState(null);
-  const [confirmClearTab, setConfirmClearTab] = useState(null); // null | 'view_once' | 'ghost_reader' | 'anti_delete' | 'status_saver' | 'all'
+  const [confirmClearTab, setConfirmClearTab] = useState(null);
+
+  // Filter Story Kontak Khusus Tab Status SW
+  const [selectedStatusContact, setSelectedStatusContact] = useState('all');
+
+  // Loading on-demand media per item ID
+  const [loadingMediaIds, setLoadingMediaIds] = useState(new Set());
+
+  // Lightbox Story Viewer Fullscreen
+  const [storyViewerIndex, setStoryViewerIndex] = useState(null);
+
+  // Render & Local Storage Health Metrics
+  const [serverRssMB, setServerRssMB] = useState(null);
+  const [vaultStats, setVaultStats] = useState({ totalItems: 0, statusCount: 0, estimatedMB: '0.00' });
+  const [confirmPruneStatuses, setConfirmPruneStatuses] = useState(false);
 
   const socketRef = useRef(null);
   const backendUrl = import.meta.env.VITE_WA_BACKEND_URL || 'http://localhost:4000';
@@ -215,7 +243,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   // Muat data dari IndexedDB & inisialisasi koneksi saat halaman dibuka
   useEffect(() => {
     try {
-      fetch(`${backendUrl}/ping`, { mode: 'cors' }).catch(() => {});
+      fetch(`${backendUrl}/ping`, { mode: 'cors' })
+        .then((r) => r.json())
+        .then((d) => {
+          if (d && typeof d.rssMB === 'number') setServerRssMB(d.rssMB);
+        })
+        .catch(() => {});
     } catch (_) {}
 
     loadSavedMedia();
@@ -236,6 +269,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('target-updated');
         socketRef.current.off('monitor-mode-synced');
         socketRef.current.off('vault-item');
+        socketRef.current.off('vault-item-media-ready');
         socketRef.current.off('vault-item-revoked');
         socketRef.current.off('vault-item-edited');
         socketRef.current.off('view-once-media');
@@ -247,6 +281,30 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
     };
   }, []);
+
+  // Update storage metrics saat mediaList berubah
+  useEffect(() => {
+    getVaultStorageStats().then(setVaultStats).catch(() => {});
+  }, [mediaList]);
+
+  // Smart Keep-Alive Ramah Render (Ping tiap 4 menit HANYA saat tab aktif & terhubung)
+  useEffect(() => {
+    const checkPing = () => {
+      if (document.visibilityState === 'visible' && connectionStatus === 'connected') {
+        fetch(`${backendUrl}/ping`, { mode: 'cors' })
+          .then((res) => res.json())
+          .then((data) => {
+            if (data && typeof data.rssMB === 'number') {
+              setServerRssMB(data.rssMB);
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    const interval = setInterval(checkPing, 4 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [backendUrl, connectionStatus]);
 
   async function loadSavedMedia() {
     try {
@@ -279,6 +337,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
       const savedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
       const savedMode = localStorage.getItem(STORAGE_MONITOR_MODE) || 'all';
+      const savedSwMode = localStorage.getItem(STORAGE_SW_MODE) || 'auto';
       let savedLids = [];
       try {
         savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
@@ -287,6 +346,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       socket.emit('resume-session', {
         sessionId,
         monitorMode: savedMode,
+        swMode: savedSwMode,
         targetNumber: savedTarget ? normalizePhone(savedTarget) : null,
         confirmedLids: savedLids
       });
@@ -313,12 +373,18 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       const targetNumber = safeText(payload?.targetNumber);
       const code = safeText(payload?.code);
       const mode = safeText(payload?.monitorMode);
+      const serverSwMode = safeText(payload?.swMode);
 
       setConnectionStatus(status);
 
       if (mode && (mode === 'all' || mode === 'single')) {
         setMonitorMode(mode);
         localStorage.setItem(STORAGE_MONITOR_MODE, mode);
+      }
+
+      if (serverSwMode && (serverSwMode === 'auto' || serverSwMode === 'lite')) {
+        setSwMode(serverSwMode);
+        localStorage.setItem(STORAGE_SW_MODE, serverSwMode);
       }
 
       if (code) {
@@ -459,7 +525,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           editedText: safeText(rawPayload?.editedText),
           editedAt: rawPayload?.editedAt ? Number(rawPayload.editedAt) : null,
           sentAt: Number(rawPayload?.sentAt) || Date.now(),
-          base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : ''
+          base64Data: typeof rawPayload?.base64Data === 'string' ? rawPayload.base64Data : '',
+          thumbnailBase64: typeof rawPayload?.thumbnailBase64 === 'string' ? rawPayload.thumbnailBase64 : '',
+          needsOnDemandLoad: Boolean(rawPayload?.needsOnDemandLoad)
         };
 
         await saveMediaItem(item);
@@ -477,6 +545,35 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
     });
 
+    // EVENT MEDIA STATUS SIAP (ON-DEMAND SELESAI DIDOWNLOAD DARI WA CDN)
+    socket.on('vault-item-media-ready', async (payload) => {
+      const cleanId = safeText(payload?.id);
+      const base64Data = typeof payload?.base64Data === 'string' ? payload.base64Data : '';
+      if (!cleanId || !base64Data) return;
+
+      setLoadingMediaIds((prev) => {
+        const next = new Set(prev);
+        next.delete(cleanId);
+        return next;
+      });
+
+      await updateMediaItem(cleanId, {
+        base64Data,
+        needsOnDemandLoad: false,
+        mimeType: safeText(payload?.mimeType),
+        fileSize: Number(payload?.fileSize) || undefined
+      });
+
+      setMediaList((prev) =>
+        prev.map((m) =>
+          m.id === cleanId
+            ? { ...m, base64Data, needsOnDemandLoad: false }
+            : m
+        )
+      );
+      triggerToast('Media status berhasil dimuat dan siap ditonton!', 'success');
+    });
+
     // EVENT ANTI-DELETE: Pesan ditarik oleh pengirim
     socket.on('vault-item-revoked', async ({ id, deletedAt }) => {
       try {
@@ -486,7 +583,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         setMediaList((prev) =>
           prev.map((m) => (m.id === cleanId ? { ...m, isDeleted: true, deletedAt: delTime } : m))
         );
-        triggerToast('Ada pesan yang ditarik/dihapus pengirim (Anti-Delete aktif)!', 'error');
+        triggerToast('Ada status/pesan yang ditarik pengirim (Anti-Delete aktif)!', 'error');
       } catch (err) {
         console.error('Gagal menandai pesan revoked:', err);
       }
@@ -524,7 +621,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           caption: safeText(rawPayload.caption),
           isViewOnce: true,
           sentAt: Number(rawPayload.sentAt) || Date.now(),
-          base64Data: typeof rawPayload.base64Data === 'string' ? rawPayload.base64Data : ''
+          base64Data: typeof rawPayload.base64Data === 'string' ? rawPayload.base64Data : '',
+          thumbnailBase64: typeof rawPayload.thumbnailBase64 === 'string' ? rawPayload.thumbnailBase64 : ''
         };
         await saveMediaItem(item);
         setMediaList((prev) => [item, ...prev.filter((m) => m.id !== item.id)]);
@@ -554,6 +652,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.emit('start-session', {
           sessionId,
           monitorMode,
+          swMode,
           targetNumber: lockedTargetRef.current,
           authMethod: 'pairing',
           pairingPhone: cleanPhone,
@@ -570,6 +669,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.emit('start-session', {
           sessionId,
           monitorMode,
+          swMode,
           targetNumber: lockedTargetRef.current,
           authMethod: 'qr',
           forceNew
@@ -626,6 +726,57 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         : 'Mode diubah: Memantau target terkunci.',
       'info'
     );
+  };
+
+  // Ubah Mode Muat SW ('auto' vs 'lite')
+  const handleToggleSwMode = (newSwMode) => {
+    setSwMode(newSwMode);
+    localStorage.setItem(STORAGE_SW_MODE, newSwMode);
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('set-sw-mode', { sessionId, swMode: newSwMode });
+    }
+    triggerToast(
+      newSwMode === 'auto'
+        ? 'Mode SW: Auto Penuh (Video & Foto langsung siap tonton).'
+        : 'Mode SW: Hemat Server (Video tampil thumbnail & dimuat on-demand).',
+      'info'
+    );
+  };
+
+  // On-Demand Fetch Media Status
+  const handleFetchStatusMedia = (id) => {
+    if (!id) return;
+    setLoadingMediaIds((prev) => new Set(prev).add(id));
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('fetch-status-media', { sessionId, id });
+    }
+    triggerToast('Mengunduh media video status dari WhatsApp...', 'info');
+
+    // Timeout pengaman 25 detik jika server gagal
+    setTimeout(() => {
+      setLoadingMediaIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 25000);
+  };
+
+  // Bersihkan SW kedaluwarsa > 24 jam
+  const handlePruneExpiredStatuses = async () => {
+    try {
+      const pruned = await pruneExpiredStatuses();
+      if (pruned > 0) {
+        await loadSavedMedia();
+        triggerToast(`Berhasil membersihkan ${pruned} Status WA yang > 24 jam!`, 'success');
+      } else {
+        triggerToast('Tidak ada status WA yang lebih dari 24 jam.', 'info');
+      }
+    } catch (err) {
+      triggerToast('Gagal memangkas status: ' + err.message, 'error');
+    } finally {
+      setConfirmPruneStatuses(false);
+    }
   };
 
   const handleLockTarget = (e) => {
@@ -695,13 +846,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   // Unduh Item (Foto, Video, Audio, Dokumen)
   const handleDownloadItem = (item) => {
     try {
-      if (!item.base64Data) {
-        triggerToast('Item ini tidak memuat file media.', 'info');
+      const dataToDownload = item.base64Data || item.thumbnailBase64;
+      if (!dataToDownload) {
+        triggerToast('Item ini belum memuat data media.', 'info');
         return;
       }
       const ext =
         item.mediaType === 'video'
-          ? 'mp4'
+          ? (item.base64Data ? 'mp4' : 'jpg')
           : item.mediaType === 'audio'
           ? 'mp3'
           : item.mediaType === 'sticker'
@@ -719,7 +871,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         : 'ChatWA';
 
       const filename = `${prefix}_${cleanSender}_${cleanId}.${ext}`;
-      downloadBase64File(item.base64Data, filename, item.mimeType);
+      downloadBase64File(dataToDownload, filename, item.mimeType);
       triggerToast('Mengunduh media...', 'success');
     } catch (err) {
       triggerToast('Gagal mengunduh media.', 'error');
@@ -767,7 +919,32 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     return { vo, gr, ad, sw };
   }, [mediaList]);
 
-  // Filter daftar item berdasarkan tab aktif & sub-filter & pencarian
+  // Daftar Kontak yang Memiliki Status WA (Story Filter Strip)
+  const statusContacts = useMemo(() => {
+    const map = new Map();
+    for (const it of mediaList) {
+      if (it.category === 'status') {
+        const key = it.senderNumber || it.senderName || 'unknown';
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
+            name: it.senderName || it.senderNumber || 'Kontak',
+            number: it.senderNumber || '',
+            count: 0,
+            latestTime: it.sentAt || 0,
+            hasDeleted: it.isDeleted
+          });
+        }
+        const entry = map.get(key);
+        entry.count++;
+        if (it.isDeleted) entry.hasDeleted = true;
+        if (it.sentAt > entry.latestTime) entry.latestTime = it.sentAt;
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.latestTime - a.latestTime);
+  }, [mediaList]);
+
+  // Filter daftar item berdasarkan tab aktif & sub-filter & kontak & pencarian
   const filteredItems = useMemo(() => {
     let list = [];
 
@@ -789,6 +966,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       if (subFilter === 'edited') list = list.filter((it) => it.isEdited === true);
     } else if (activeTab === 'status_saver') {
       list = mediaList.filter((it) => it.category === 'status');
+      if (selectedStatusContact !== 'all') {
+        list = list.filter(
+          (it) => it.senderNumber === selectedStatusContact || it.senderName === selectedStatusContact
+        );
+      }
       if (subFilter === 'image') list = list.filter((it) => it.mediaType === 'image');
       if (subFilter === 'video') list = list.filter((it) => it.mediaType === 'video');
       if (subFilter === 'text') list = list.filter((it) => it.mediaType === 'text');
@@ -807,7 +989,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
 
     return list;
-  }, [mediaList, activeTab, subFilter, searchQuery]);
+  }, [mediaList, activeTab, subFilter, selectedStatusContact, searchQuery]);
 
   // Eksekusi pembersihan item tab saat ini
   const handleExecuteClearTab = async (tabKey) => {
@@ -828,13 +1010,16 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   };
 
+  // Navigasi Story Viewer
+  const currentStoryItem = storyViewerIndex !== null ? filteredItems[storyViewerIndex] : null;
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       
       {/* Tombol Navigasi Kembali */}
       <button
         onClick={onBack}
-        className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-white border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px] transition-all"
+        className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-white border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px] transition-all cursor-pointer"
       >
         <ArrowLeft className="w-4 h-4" />
         Kembali ke Beranda
@@ -946,7 +1131,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               {connectionStatus === 'connected' && (
                 <button
                   onClick={handleLogoutSession}
-                  className="px-2.5 py-1 bg-rose-500 text-white border-2 border-black rounded-md text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-600 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
+                  className="px-2.5 py-1 bg-rose-500 text-white border-2 border-black rounded-md text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-600 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
                   Putuskan
@@ -969,7 +1154,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     Auto-Resume Aktif
                   </span>
                   <span className="px-2.5 py-0.5 bg-emerald-200 border border-black rounded text-[11px] font-bold text-emerald-900 shadow-[1px_1px_0px_#000]">
-                    4 Fitur Stealth Aktif
+                    Zero-Disk Media
                   </span>
                 </div>
               </div>
@@ -980,7 +1165,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => switchAuthMethod('pairing')}
-                    className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 ${
+                    className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                       authMethod === 'pairing'
                         ? 'bg-black text-white font-black'
                         : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -995,7 +1180,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => switchAuthMethod('qr')}
-                    className={`flex-1 py-1.5 px-2 text-center border-l-2 border-black transition-colors flex items-center justify-center gap-1.5 ${
+                    className={`flex-1 py-1.5 px-2 text-center border-l-2 border-black transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                       authMethod === 'qr'
                         ? 'bg-black text-white font-black'
                         : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1024,7 +1209,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                             <button
                               type="button"
                               onClick={handleCopyPairingCode}
-                              className="px-2.5 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000] font-black text-xs flex items-center gap-1"
+                              className="px-2.5 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000] font-black text-xs flex items-center gap-1 cursor-pointer"
                               title="Salin Kode"
                             >
                               {copiedCode ? (
@@ -1076,7 +1261,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                               type="button"
                               onClick={() => handleStartSession('pairing')}
                               disabled={connectionStatus === 'connecting' && !socketConnected}
-                              className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                              className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer"
                             >
                               {connectionStatus === 'connecting' && !socketConnected ? (
                                 <>
@@ -1124,7 +1309,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                         <button
                           type="button"
                           onClick={() => handleStartSession('qr', true)}
-                          className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-neutral-800 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px]"
+                          className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-neutral-800 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px] cursor-pointer"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
                           Muat Ulang QR Baru
@@ -1142,7 +1327,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                         <button
                           type="button"
                           onClick={() => handleStartSession('qr', true)}
-                          className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] inline-flex items-center gap-1.5"
+                          className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] inline-flex items-center gap-1.5 cursor-pointer"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
                           Coba Buat QR Lagi
@@ -1174,7 +1359,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                         <button
                           type="button"
                           onClick={() => handleStartSession('qr')}
-                          className="mt-2 py-2 px-4 bg-black text-white border-2 border-black rounded-xl font-black text-xs shadow-[3px_3px_0px_#22c55e] hover:bg-neutral-800 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
+                          className="mt-2 py-2 px-4 bg-black text-white border-2 border-black rounded-xl font-black text-xs shadow-[3px_3px_0px_#22c55e] hover:bg-neutral-800 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
                         >
                           <QrCode className="w-4 h-4" />
                           Mulai &amp; Buat QR Code
@@ -1208,7 +1393,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               <button
                 type="button"
                 onClick={() => handleChangeMonitorMode('all')}
-                className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 ${
+                className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                   monitorMode === 'all'
                     ? 'bg-black text-white font-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1220,7 +1405,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               <button
                 type="button"
                 onClick={() => handleChangeMonitorMode('single')}
-                className={`flex-1 py-1.5 px-2 text-center border-l-2 border-black transition-colors flex items-center justify-center gap-1.5 ${
+                className={`flex-1 py-1.5 px-2 text-center border-l-2 border-black transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                   monitorMode === 'single'
                     ? 'bg-black text-white font-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1265,7 +1450,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       </div>
                       <button
                         onClick={handleUnlockTarget}
-                        className="px-3 py-1.5 bg-white text-rose-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-50 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
+                        className="px-3 py-1.5 bg-white text-rose-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-50 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 cursor-pointer"
                       >
                         <Unlock className="w-3.5 h-3.5" />
                         Ganti Target
@@ -1284,7 +1469,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       />
                       <button
                         type="submit"
-                        className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0"
+                        className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 cursor-pointer"
                       >
                         <Lock className="w-3.5 h-3.5" />
                         Kunci
@@ -1321,7 +1506,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('view_once');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] ${
+                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'view_once'
                     ? 'bg-amber-300 text-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1341,7 +1526,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('ghost_reader');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] ${
+                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'ghost_reader'
                     ? 'bg-emerald-300 text-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1361,7 +1546,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('anti_delete');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] ${
+                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'anti_delete'
                     ? 'bg-rose-400 text-white'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1381,7 +1566,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('status_saver');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] ${
+                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'status_saver'
                     ? 'bg-cyan-300 text-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
@@ -1400,7 +1585,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               <button
                 type="button"
                 onClick={() => setConfirmClearTab(activeTab)}
-                className="px-3 py-1.5 bg-rose-100 text-rose-800 border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0"
+                className="px-3 py-1.5 bg-rose-100 text-rose-800 border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Bersihkan Tab Ini
@@ -1419,7 +1604,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       key={f}
                       type="button"
                       onClick={() => setSubFilter(f)}
-                      className={`px-2.5 py-1 rounded-lg border border-black ${
+                      className={`px-2.5 py-1 rounded-lg border border-black cursor-pointer ${
                         subFilter === f ? 'bg-black text-white font-black' : 'bg-white text-neutral-700 hover:bg-neutral-100'
                       }`}
                     >
@@ -1436,7 +1621,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       key={f}
                       type="button"
                       onClick={() => setSubFilter(f)}
-                      className={`px-2.5 py-1 rounded-lg border border-black ${
+                      className={`px-2.5 py-1 rounded-lg border border-black cursor-pointer ${
                         subFilter === f ? 'bg-black text-white font-black' : 'bg-white text-neutral-700 hover:bg-neutral-100'
                       }`}
                     >
@@ -1463,7 +1648,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       key={f}
                       type="button"
                       onClick={() => setSubFilter(f)}
-                      className={`px-2.5 py-1 rounded-lg border border-black ${
+                      className={`px-2.5 py-1 rounded-lg border border-black cursor-pointer ${
                         subFilter === f ? 'bg-black text-white font-black' : 'bg-white text-neutral-700 hover:bg-neutral-100'
                       }`}
                     >
@@ -1480,7 +1665,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       key={f}
                       type="button"
                       onClick={() => setSubFilter(f)}
-                      className={`px-2.5 py-1 rounded-lg border border-black ${
+                      className={`px-2.5 py-1 rounded-lg border border-black cursor-pointer ${
                         subFilter === f ? 'bg-black text-white font-black' : 'bg-white text-neutral-700 hover:bg-neutral-100'
                       }`}
                     >
@@ -1540,7 +1725,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           </span>
         </div>
 
-        {/* Tip Khusus per Tab */}
+        {/* Tip Khusus per Tab & Bar Kesehatan Render untuk Tab Status SW */}
         {activeTab === 'view_once' && (
           <div className="flex items-start gap-2.5 px-3.5 py-2.5 bg-amber-50 border-2 border-black rounded-lg text-xs shadow-[2px_2px_0px_#000] text-amber-950">
             <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
@@ -1569,11 +1754,122 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         )}
 
         {activeTab === 'status_saver' && (
-          <div className="flex items-start gap-2.5 px-3.5 py-2.5 bg-cyan-50 border-2 border-black rounded-lg text-xs shadow-[2px_2px_0px_#000] text-cyan-950">
-            <Radio className="w-4 h-4 text-cyan-700 shrink-0 mt-0.5" />
-            <span className="font-semibold leading-relaxed">
-              <b className="font-black text-black">Silent Status Saver (0 View):</b> Seluruh Story / Status WhatsApp foto, video, dan teks dari kontak diamankan otomatis tanpa nomor Anda masuk ke daftar penonton story mereka.
-            </span>
+          <div className="space-y-3">
+            {/* Panel Kesehatan Render & Kontrol Mode Hemat SW */}
+            <div className="p-3 bg-cyan-50 border-2 border-black rounded-xl shadow-[2px_2px_0px_#000] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Pill RAM Server Render */}
+                <span className={`px-2.5 py-1 border border-black rounded-md font-mono font-black flex items-center gap-1.5 ${
+                  serverRssMB !== null && serverRssMB >= 260
+                    ? 'bg-amber-300 text-black'
+                    : 'bg-emerald-300 text-black'
+                }`}>
+                  <Server className="w-3.5 h-3.5 shrink-0" />
+                  Render: Zero-Disk {serverRssMB !== null ? `• RAM ${serverRssMB} MB` : '• 512MB Safe'}
+                </span>
+
+                {/* Pill Storage Browser Pengguna */}
+                <span className="px-2.5 py-1 bg-white border border-black rounded-md font-mono font-bold text-neutral-800 flex items-center gap-1.5">
+                  <HardDrive className="w-3.5 h-3.5 shrink-0 text-neutral-600" />
+                  Storage Browser: {vaultStats.estimatedMB} MB ({vaultStats.statusCount} SW)
+                </span>
+              </div>
+
+              {/* Kontrol Mode Muat SW & Bersihkan >24 Jam */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex border-2 border-black rounded-lg overflow-hidden font-bold text-[11px] bg-white">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSwMode('auto')}
+                    className={`px-2.5 py-1 transition-colors cursor-pointer ${
+                      swMode === 'auto' ? 'bg-black text-white font-black' : 'hover:bg-neutral-100 text-neutral-800'
+                    }`}
+                    title="Foto & Video Status langsung siap tonton"
+                  >
+                    Auto Penuh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSwMode('lite')}
+                    className={`px-2.5 py-1 border-l border-black transition-colors cursor-pointer ${
+                      swMode === 'lite' ? 'bg-black text-white font-black' : 'hover:bg-neutral-100 text-neutral-800'
+                    }`}
+                    title="Video tampil thumbnail dulu & dimuat on-demand"
+                  >
+                    Hemat Server
+                  </button>
+                </div>
+
+                {!confirmPruneStatuses ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPruneStatuses(true)}
+                    className="px-2.5 py-1 bg-white hover:bg-neutral-100 text-neutral-800 border-2 border-black rounded-lg font-bold text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                  >
+                    Bersihkan SW &gt; 24 Jam
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5 animate-in fade-in">
+                    <button
+                      type="button"
+                      onClick={handlePruneExpiredStatuses}
+                      className="px-2.5 py-1 bg-rose-500 text-white border-2 border-black rounded-lg font-black text-[11px] hover:bg-rose-600 shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                    >
+                      Yakin Bersihkan?
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmPruneStatuses(false)}
+                      className="px-2 py-1 bg-white text-black border border-black rounded-lg font-bold text-[11px] cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Story Filter Strip (Baris Avatar Kontak Pemilik Status) */}
+            {statusContacts.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                <button
+                  type="button"
+                  onClick={() => setSelectedStatusContact('all')}
+                  className={`px-3 py-1.5 rounded-full border-2 border-black text-xs font-black shadow-[2px_2px_0px_#000] shrink-0 transition-transform active:scale-95 cursor-pointer ${
+                    selectedStatusContact === 'all'
+                      ? 'bg-black text-white'
+                      : 'bg-white text-black hover:bg-neutral-100'
+                  }`}
+                >
+                  Semua Story ({counts.sw})
+                </button>
+
+                {statusContacts.map((c) => {
+                  const isSelected = selectedStatusContact === c.key || selectedStatusContact === c.name;
+                  const initial = (c.name || 'K').slice(0, 1).toUpperCase();
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => setSelectedStatusContact(isSelected ? 'all' : c.key)}
+                      className={`flex items-center gap-2 px-3 py-1 rounded-full border-2 shrink-0 transition-transform active:scale-95 cursor-pointer shadow-[2px_2px_0px_#000] ${
+                        isSelected
+                          ? 'bg-emerald-400 text-black border-black font-black'
+                          : 'bg-white text-neutral-800 border-black hover:bg-neutral-100'
+                      }`}
+                    >
+                      <div className="w-5 h-5 rounded-full bg-black text-white text-[10px] font-black flex items-center justify-center shrink-0">
+                        {initial}
+                      </div>
+                      <span className="text-xs font-bold truncate max-w-[120px]">{c.name}</span>
+                      <span className="px-1.5 py-0.2 bg-black text-white rounded-full text-[9px] font-mono font-bold">
+                        {c.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1589,14 +1885,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               <button
                 type="button"
                 onClick={() => handleExecuteClearTab(confirmClearTab)}
-                className="px-3.5 py-1.5 bg-rose-600 text-white border-2 border-black rounded-lg font-black text-xs hover:bg-rose-700 shadow-[2px_2px_0px_#000]"
+                className="px-3.5 py-1.5 bg-rose-600 text-white border-2 border-black rounded-lg font-black text-xs hover:bg-rose-700 shadow-[2px_2px_0px_#000] cursor-pointer"
               >
                 Ya, Hapus Item Tab Ini
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmClearTab(null)}
-                className="px-3 py-1.5 bg-white text-black border-2 border-black rounded-lg font-bold text-xs hover:bg-neutral-100 shadow-[2px_2px_0px_#000]"
+                className="px-3 py-1.5 bg-white text-black border-2 border-black rounded-lg font-bold text-xs hover:bg-neutral-100 shadow-[2px_2px_0px_#000] cursor-pointer"
               >
                 Batal
               </button>
@@ -1623,14 +1919,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             <div className="flex flex-wrap items-center gap-2 pt-1 sm:pl-12">
               <button
                 onClick={handleConfirmTargetLid}
-                className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center gap-1.5"
+                className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
                 Ya, Ikat ke Target
               </button>
               <button
                 onClick={handleDismissUnmappedLid}
-                className="px-3.5 py-2 bg-white text-neutral-700 border-2 border-black rounded-xl font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px] transition-all"
+                className="px-3.5 py-2 bg-white text-neutral-700 border-2 border-black rounded-xl font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px] transition-all cursor-pointer"
               >
                 Bukan Target (Abaikan)
               </button>
@@ -1658,7 +1954,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         ) : activeTab === 'status_saver' ? (
           /* Grid Khusus Story / Status WhatsApp (1 Kolom Mobile, 2–3 Kolom Desktop) */
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredItems.map((item) => (
+            {filteredItems.map((item, idx) => (
               <div
                 key={item.id}
                 className={`bg-white border-2 rounded-xl p-3 shadow-[3px_3px_0px_#000] flex flex-col justify-between space-y-3 ${
@@ -1684,28 +1980,77 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 </div>
 
                 {/* Media Story */}
-                <div className="relative rounded-lg overflow-hidden border-2 border-black aspect-video flex items-center justify-center bg-black">
+                <div className="relative rounded-lg overflow-hidden border-2 border-black aspect-video flex items-center justify-center bg-black group">
                   {item.mediaType === 'video' ? (
-                    <video
-                      src={item.base64Data}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="w-full h-full object-contain"
-                    />
+                    item.needsOnDemandLoad && !item.base64Data ? (
+                      /* Preview Thumbnail Video On-Demand dengan Tombol Muat */
+                      <div className="relative w-full h-full flex items-center justify-center bg-neutral-900">
+                        {item.thumbnailBase64 ? (
+                          <img
+                            src={item.thumbnailBase64}
+                            alt="Video Thumbnail"
+                            className="w-full h-full object-cover opacity-60"
+                          />
+                        ) : (
+                          <Film className="w-10 h-10 text-neutral-600" />
+                        )}
+                        <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center bg-black/40 space-y-2">
+                          <span className="px-2 py-0.5 bg-black/80 text-white border border-white/60 rounded text-[10px] font-mono">
+                            Video • {item.fileSize ? `${(item.fileSize / (1024 * 1024)).toFixed(1)} MB` : 'Status'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleFetchStatusMedia(item.id)}
+                            disabled={loadingMediaIds.has(item.id)}
+                            className="px-3.5 py-1.5 bg-emerald-400 hover:bg-emerald-300 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {loadingMediaIds.has(item.id) ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Memuat Video...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-3.5 h-3.5 fill-black" />
+                                <span>Muat &amp; Putar Video</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <video
+                        src={item.base64Data}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full h-full object-contain"
+                      />
+                    )
                   ) : item.mediaType === 'image' ? (
-                    <img
-                      src={item.base64Data}
-                      alt={safeText(item.caption) || 'Status WA'}
-                      loading="lazy"
-                      className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
-                      onClick={() => setPreviewMedia(item)}
-                    />
+                    <div className="relative w-full h-full">
+                      <img
+                        src={item.base64Data || item.thumbnailBase64}
+                        alt={safeText(item.caption) || 'Status WA'}
+                        loading="lazy"
+                        className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
+                        onClick={() => setStoryViewerIndex(idx)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setStoryViewerIndex(idx)}
+                        className="absolute bottom-2 right-2 p-1.5 bg-black/70 hover:bg-black text-white rounded-md border border-white/50 cursor-pointer opacity-80 group-hover:opacity-100 transition-opacity"
+                        title="Buka Story Viewer"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   ) : (
                     /* SW Teks dengan Warna Asli */
                     <div
                       style={{ backgroundColor: item.bgColor || '#1e293b' }}
-                      className="w-full h-full p-4 flex items-center justify-center text-center overflow-auto"
+                      className="w-full h-full p-4 flex items-center justify-center text-center overflow-auto cursor-pointer"
+                      onClick={() => setStoryViewerIndex(idx)}
                     >
                       <p className="font-black text-sm md:text-base text-white select-all break-words leading-relaxed">
                         {safeText(item.textContent)}
@@ -1733,7 +2078,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     <button
                       type="button"
                       onClick={() => handleCopyText(item.textContent, item.id)}
-                      className="flex-1 py-1.5 px-3 bg-cyan-300 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-cyan-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5"
+                      className="flex-1 py-1.5 px-3 bg-cyan-300 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-cyan-200 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       {copiedItemId === item.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       Salin Teks SW
@@ -1742,7 +2087,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     <button
                       type="button"
                       onClick={() => handleDownloadItem(item)}
-                      className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5"
+                      disabled={!item.base64Data && !item.thumbnailBase64}
+                      className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
                       Unduh SW
@@ -1751,7 +2097,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => handleDeleteItem(item.id)}
-                    className="p-1.5 bg-rose-100 text-rose-700 border-2 border-black rounded-lg hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000]"
+                    className="p-1.5 bg-rose-100 text-rose-700 border-2 border-black rounded-lg hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
                     title="Hapus dari Vault"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -1939,7 +2285,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     <button
                       type="button"
                       onClick={() => handleCopyText(item.isEdited ? item.editedText : item.textContent, item.id)}
-                      className="flex-1 py-1.5 px-3 bg-neutral-200 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5"
+                      className="flex-1 py-1.5 px-3 bg-neutral-200 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-neutral-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       {copiedItemId === item.id ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                       Salin Teks
@@ -1949,7 +2295,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       type="button"
                       onClick={() => handleDownloadItem(item)}
                       disabled={!item.base64Data}
-                      className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5 disabled:opacity-50"
+                      className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
                       Unduh
@@ -1958,7 +2304,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => handleDeleteItem(item.id)}
-                    className="p-1.5 bg-rose-100 text-rose-700 border-2 border-black rounded-lg hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000]"
+                    className="p-1.5 bg-rose-100 text-rose-700 border-2 border-black rounded-lg hover:bg-rose-200 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
                     title="Hapus dari Vault"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -1971,7 +2317,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
       </div>
 
-      {/* Lightbox Modal Pratinjau Foto Penuh */}
+      {/* Lightbox Modal Pratinjau Foto Penuh Sederhana (View Once / Chat) */}
       {previewMedia && (
         <div
           className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm"
@@ -1988,7 +2334,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               <button
                 type="button"
                 onClick={() => setPreviewMedia(null)}
-                className="w-6 h-6 border-2 border-black rounded bg-neutral-100 font-bold text-xs flex items-center justify-center hover:bg-neutral-200"
+                className="w-6 h-6 border-2 border-black rounded bg-neutral-100 font-bold text-xs flex items-center justify-center hover:bg-neutral-200 cursor-pointer"
               >
                 &times;
               </button>
@@ -2007,10 +2353,156 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               <button
                 type="button"
                 onClick={() => handleDownloadItem(previewMedia)}
-                className="px-4 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300"
+                className="px-4 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg font-bold text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 cursor-pointer"
               >
                 Unduh Foto
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen Story Viewer Modal (Lightbox Khusus Story WA dengan Navigasi Sebelumnya / Berikutnya) */}
+      {currentStoryItem && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-3 sm:p-6 backdrop-blur-md"
+          onClick={() => setStoryViewerIndex(null)}
+        >
+          <div
+            className="relative bg-white border-2 border-black rounded-2xl max-w-2xl w-full max-h-[95vh] overflow-hidden flex flex-col shadow-[8px_8px_0px_#000]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header Story Viewer */}
+            <div className="p-3 bg-neutral-100 border-b-2 border-black flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="px-2 py-0.5 bg-emerald-400 text-black border border-black rounded text-[10px] font-black uppercase shrink-0">
+                  0 VIEW
+                </span>
+                <span className="font-black text-sm truncate text-neutral-900">
+                  {safeText(currentStoryItem.senderName) || `+${safeText(currentStoryItem.senderNumber)}`}
+                </span>
+                <span className="text-[11px] font-mono text-neutral-500 shrink-0 hidden sm:inline-block">
+                  • {formatWaDate(currentStoryItem.sentAt)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold text-neutral-600 bg-white px-2 py-0.5 border border-black rounded">
+                  {storyViewerIndex + 1} / {filteredItems.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setStoryViewerIndex(null)}
+                  className="p-1.5 bg-white hover:bg-neutral-200 border-2 border-black rounded-lg font-black text-xs cursor-pointer"
+                  title="Tutup Viewer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Area Panggung Story */}
+            <div className="relative flex-1 bg-black flex items-center justify-center min-h-[300px] max-h-[70vh] overflow-hidden">
+              {currentStoryItem.mediaType === 'video' ? (
+                currentStoryItem.base64Data ? (
+                  <video
+                    src={currentStoryItem.base64Data}
+                    controls
+                    autoPlay
+                    playsInline
+                    className="w-full h-full max-h-[68vh] object-contain"
+                  />
+                ) : (
+                  <div className="p-6 text-center text-white space-y-3">
+                    <Film className="w-12 h-12 mx-auto text-neutral-400" />
+                    <p className="text-xs font-bold">Video berukuran {currentStoryItem.fileSize ? `${(currentStoryItem.fileSize / (1024 * 1024)).toFixed(1)} MB` : ''}</p>
+                    <button
+                      type="button"
+                      onClick={() => handleFetchStatusMedia(currentStoryItem.id)}
+                      disabled={loadingMediaIds.has(currentStoryItem.id)}
+                      className="px-4 py-2 bg-emerald-400 text-black font-black text-xs border-2 border-black rounded-lg shadow-[2px_2px_0px_#fff] cursor-pointer"
+                    >
+                      {loadingMediaIds.has(currentStoryItem.id) ? 'Memuat Video...' : 'Muat & Putar Video'}
+                    </button>
+                  </div>
+                )
+              ) : currentStoryItem.mediaType === 'image' ? (
+                <img
+                  src={currentStoryItem.base64Data || currentStoryItem.thumbnailBase64}
+                  alt={safeText(currentStoryItem.caption) || 'Story'}
+                  className="w-full h-full max-h-[68vh] object-contain"
+                />
+              ) : (
+                /* SW Teks Layar Penuh */
+                <div
+                  style={{ backgroundColor: currentStoryItem.bgColor || '#1e293b' }}
+                  className="w-full h-full min-h-[360px] p-8 flex items-center justify-center text-center overflow-auto"
+                >
+                  <p className="font-black text-lg sm:text-2xl text-white select-all break-words leading-relaxed max-w-lg">
+                    {safeText(currentStoryItem.textContent)}
+                  </p>
+                </div>
+              )}
+
+              {/* Tombol Geser Sebelumnya (Kiri) */}
+              {storyViewerIndex > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setStoryViewerIndex((prev) => Math.max(0, prev - 1))}
+                  className="absolute left-2.5 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black text-white rounded-full border border-white/40 cursor-pointer shadow-lg"
+                  title="Story Sebelumnya"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+              )}
+
+              {/* Tombol Geser Berikutnya (Kanan) */}
+              {storyViewerIndex < filteredItems.length - 1 && (
+                <button
+                  type="button"
+                  onClick={() => setStoryViewerIndex((prev) => Math.min(filteredItems.length - 1, prev + 1))}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black text-white rounded-full border border-white/40 cursor-pointer shadow-lg"
+                  title="Story Berikutnya"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            {/* Footer Story Viewer */}
+            <div className="p-3 bg-white border-t-2 border-black flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+              <div className="min-w-0 flex-1">
+                {safeText(currentStoryItem.caption) ? (
+                  <p className="text-neutral-800 font-semibold italic truncate">
+                    "{safeText(currentStoryItem.caption)}"
+                  </p>
+                ) : (
+                  <span className="text-neutral-500 font-mono text-[11px]">
+                    Diunggah: {formatWaDate(currentStoryItem.sentAt)}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {currentStoryItem.mediaType === 'text' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText(currentStoryItem.textContent, currentStoryItem.id)}
+                    className="px-3.5 py-1.5 bg-cyan-300 text-black border-2 border-black rounded-lg font-black shadow-[2px_2px_0px_#000] hover:bg-cyan-200 cursor-pointer"
+                  >
+                    Salin Teks SW
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadItem(currentStoryItem)}
+                    disabled={!currentStoryItem.base64Data && !currentStoryItem.thumbnailBase64}
+                    className="px-4 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg font-black shadow-[2px_2px_0px_#000] hover:bg-emerald-300 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Unduh SW
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -32,9 +32,8 @@ const app = express();
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 4000;
-const FRONTEND_URL = process.env.FRONTEND_URL || '*';
-const MAX_SESSIONS = 6;
-const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 60 menit batas idle sesi
+const MAX_ACTIVE_SESSIONS = 5;
+const IDLE_TIMEOUT_MS = 45 * 60 * 1000; // 45 menit batas idle sesi terhubung tanpa klien
 
 const pinoSilent = pino({ level: 'silent' });
 
@@ -79,41 +78,6 @@ app.use(
 );
 app.use(express.json());
 
-// Anti-Sleep Ping Endpoint untuk Render Free Tier (Pre-warm Super Cepat)
-app.get('/ping', (req, res) => {
-  res.set({
-    'Cache-Control': 'no-store, no-cache, must-revalidate',
-    'Access-Control-Allow-Origin': '*'
-  });
-  res.json({
-    status: 'alive',
-    timestamp: new Date().toISOString(),
-    activeSessions: sessions.size,
-    maxSessions: MAX_SESSIONS
-  });
-});
-
-app.get('/', (req, res) => {
-  res.json({
-    service: 'AllToolsKuro WhatsApp 4-in-1 Stealth Vault Backend',
-    status: 'online',
-    version: '2.0.0'
-  });
-});
-
-// Socket.io Server (50 MB Max Payload & Heartbeat)
-const io = new Server(server, {
-  cors: {
-    origin: (origin, callback) => {
-      callback(null, true);
-    },
-    methods: ['GET', 'POST']
-  },
-  maxHttpBufferSize: 5e7, // 50 MB
-  pingTimeout: 60000,
-  pingInterval: 25000
-});
-
 // Map sesi aktif: sessionId -> session object
 const sessions = new Map();
 
@@ -141,6 +105,118 @@ function removeSessionDir(sessionId) {
       }
     } catch (err) {
       console.error(`[Session ${cleanId}] Gagal membersihkan folder auth:`, err.message);
+    }
+  }
+}
+
+// Auto-Janitor Startup: Bersihkan folder auth kedaluwarsa atau tanpa creds.json
+function cleanupOrphanedAuthDirs() {
+  const dirs = [__dirname, path.join(__dirname, 'sessions')];
+  const now = Date.now();
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+  for (const baseDir of dirs) {
+    if (!fs.existsSync(baseDir)) continue;
+    try {
+      const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const name = entry.name;
+        if (name.startsWith('auth_info_') || name.startsWith('auth_sessions_') || baseDir.endsWith('sessions')) {
+          const fullPath = path.join(baseDir, name);
+          try {
+            const stat = fs.statSync(fullPath);
+            const credsFile = path.join(fullPath, 'creds.json');
+            const hasCreds = fs.existsSync(credsFile);
+
+            const isOld = now - stat.mtimeMs > ONE_DAY_MS;
+            const cleanId = name.replace(/^auth_info_|^auth_sessions_/, '');
+            const isActive = sessions.has(cleanId) && sessions.get(cleanId)?.status === 'connected';
+
+            if ((!hasCreds || isOld) && !isActive) {
+              fs.rmSync(fullPath, { recursive: true, force: true });
+              console.log(`[WA-JANITOR] Folder auth kedaluwarsa dibersihkan: ${name}`);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+}
+cleanupOrphanedAuthDirs();
+
+// Anti-Sleep Ping Endpoint untuk Render Free Tier (Pre-warm Super Cepat & Monitor RAM)
+app.get('/ping', (req, res) => {
+  res.set({
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    'Access-Control-Allow-Origin': '*'
+  });
+
+  const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+  let totalPointerQueueCount = 0;
+  for (const s of sessions.values()) {
+    if (s.statusPointers) totalPointerQueueCount += s.statusPointers.size;
+  }
+
+  res.json({
+    status: 'alive',
+    rssMB,
+    activeSessions: sessions.size,
+    pointerQueueCount: totalPointerQueueCount,
+    diskMode: 'zero-media-disk'
+  });
+});
+
+app.get('/', (req, res) => {
+  res.json({
+    service: 'AllToolsKuro WhatsApp 4-in-1 Stealth Vault Backend',
+    status: 'online',
+    version: '2.1.0',
+    zeroDiskMedia: true
+  });
+});
+
+// Socket.io Server (50 MB Max Payload & Heartbeat)
+const io = new Server(server, {
+  cors: {
+    origin: (origin, callback) => {
+      callback(null, true);
+    },
+    methods: ['GET', 'POST']
+  },
+  maxHttpBufferSize: 5e7, // 50 MB
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
+
+// Antrean Unduh Terkendali Ramah RAM (Max 2 Concurrency)
+class MediaDownloadQueue {
+  constructor(concurrency = 2, maxQueueSize = 15) {
+    this.concurrency = concurrency;
+    this.maxQueueSize = maxQueueSize;
+    this.queue = [];
+    this.activeCount = 0;
+  }
+
+  push(taskFn) {
+    if (this.queue.length >= this.maxQueueSize) {
+      this.queue.shift(); // Buang tugas terlama jika antrean penuh
+    }
+    this.queue.push(taskFn);
+    this.runNext();
+  }
+
+  async runNext() {
+    if (this.activeCount >= this.concurrency || this.queue.length === 0) return;
+    this.activeCount++;
+    const task = this.queue.shift();
+    try {
+      await task();
+    } catch (err) {
+      console.warn('[DownloadQueue] Error eksekusi tugas:', err.message);
+    } finally {
+      this.activeCount--;
+      this.runNext();
     }
   }
 }
@@ -204,7 +280,9 @@ function buildVaultPayload({
   editedText = '',
   editedAt = null,
   sentAt = Date.now(),
-  base64Data = ''
+  base64Data = '',
+  thumbnailBase64 = '',
+  needsOnDemandLoad = false
 }) {
   return {
     id: String(id || Date.now()),
@@ -226,7 +304,9 @@ function buildVaultPayload({
     editedText: String(editedText || ''),
     editedAt: editedAt ? Number(editedAt) : null,
     sentAt: Number(sentAt || Date.now()),
-    base64Data: String(base64Data || '')
+    base64Data: String(base64Data || ''),
+    thumbnailBase64: String(thumbnailBase64 || ''),
+    needsOnDemandLoad: Boolean(needsOnDemandLoad)
   };
 }
 
@@ -243,7 +323,7 @@ function emitVaultItem(sessionId, session, payload) {
   if (!room || room.size === 0) {
     if (!session.pendingMedia) session.pendingMedia = [];
     session.pendingMedia.push(payload);
-    if (session.pendingMedia.length > 30) {
+    if (session.pendingMedia.length > 25) {
       session.pendingMedia.shift();
     }
   }
@@ -694,6 +774,201 @@ function deepExtractViewOnce(obj, inheritedViewOnce = false, depth = 0) {
   return null;
 }
 
+// Pipeline Penanganan Status WhatsApp (Zero-Disk & Anti-OOM Pointer Queue)
+async function handleStatusMessage(msg, session, sessionId, sock, msgTimestamp) {
+  if (!msg || !msg.key) return;
+  const msgId = String(msg.key.id || '');
+  if (!msgId) return;
+
+  // Deduplikasi agar status tidak diproses ganda
+  if (session.statusPointers?.has(msgId)) return;
+
+  const senderInfo = resolveSenderInfo(msg, session);
+  const allowed = await isAllowedByMode(senderInfo, msg, session);
+  if (!allowed) return;
+
+  // 1. Status Teks
+  if (msg.message?.extendedTextMessage || msg.message?.conversation) {
+    const textContent = String(msg.message.extendedTextMessage?.text || msg.message.conversation || '');
+    const bgColor = argbToHex(msg.message.extendedTextMessage?.backgroundArgb);
+
+    const payload = buildVaultPayload({
+      id: msgId,
+      category: 'status',
+      senderNumber: senderInfo.phone,
+      senderName: senderInfo.senderName,
+      mediaType: 'text',
+      textContent,
+      bgColor,
+      sentAt: msgTimestamp
+    });
+
+    emitVaultItem(sessionId, session, payload);
+    io.to(sessionId).emit('vault-activity', {
+      time: Date.now(),
+      text: `Status Teks dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
+    });
+    return;
+  }
+
+  // 2. Status Media (Foto atau Video)
+  const isImage = Boolean(msg.message?.imageMessage);
+  const isVideo = Boolean(msg.message?.videoMessage);
+  if (!isImage && !isVideo) return;
+
+  const mediaType = isVideo ? 'video' : 'image';
+  const mediaObj = isVideo ? msg.message.videoMessage : msg.message.imageMessage;
+  const fileSize = Number(mediaObj.fileLength || 0);
+
+  // Ekstrak jpegThumbnail bawaan WhatsApp (4–15 KB)
+  let thumbnailBase64 = '';
+  if (mediaObj.jpegThumbnail) {
+    try {
+      const tBuf = Buffer.isBuffer(mediaObj.jpegThumbnail)
+        ? mediaObj.jpegThumbnail
+        : Buffer.from(mediaObj.jpegThumbnail);
+      if (tBuf && tBuf.length > 0) {
+        thumbnailBase64 = 'data:image/jpeg;base64,' + tBuf.toString('base64');
+      }
+    } catch (_) {}
+  }
+
+  const isLite = session.swMode === 'lite';
+  const isOversized = fileSize > 20 * 1024 * 1024;
+  const isLargeVideo = isVideo && (fileSize > 8 * 1024 * 1024 || isLite);
+  const needsOnDemandLoad = isLargeVideo && !isOversized;
+
+  // Simpan pointer ringan (~1.5 KB) di Map memory session
+  const pointer = {
+    id: msgId,
+    senderNumber: senderInfo.phone,
+    senderName: senderInfo.senderName,
+    mediaType,
+    mimeType: mediaObj.mimetype || (isImage ? 'image/jpeg' : 'video/mp4'),
+    caption: mediaObj.caption || '',
+    textContent: '',
+    bgColor: '',
+    fileSize,
+    sentAt: msgTimestamp,
+    isDeleted: false,
+    deletedAt: null,
+    thumbnailBase64,
+    needsOnDemandLoad,
+    pendingDelivery: false,
+    rawMediaObj: {
+      url: mediaObj.url,
+      mimetype: mediaObj.mimetype,
+      fileSha256: mediaObj.fileSha256,
+      fileLength: mediaObj.fileLength,
+      mediaKey: mediaObj.mediaKey,
+      fileEncSha256: mediaObj.fileEncSha256,
+      directPath: mediaObj.directPath,
+      mediaKeyTimestamp: mediaObj.mediaKeyTimestamp
+    },
+    rawMsgKey: {
+      id: msg.key.id,
+      remoteJid: msg.key.remoteJid,
+      fromMe: false,
+      participant: msg.key.participant
+    }
+  };
+
+  if (!session.statusPointers) session.statusPointers = new Map();
+  if (session.statusPointers.size >= 60) {
+    const firstKey = session.statusPointers.keys().next().value;
+    session.statusPointers.delete(firstKey);
+  }
+  session.statusPointers.set(msgId, pointer);
+
+  const room = io.sockets.adapter.rooms.get(sessionId);
+  const hasListeners = room && room.size > 0;
+
+  // Jika tidak ada browser yang sedang buka, simpan pointer saja (pending delivery)
+  if (!hasListeners) {
+    pointer.pendingDelivery = true;
+    return;
+  }
+
+  // Jika oversized (> 20 MB): kirim info ukuran tanpa dekripsi paksa
+  if (isOversized) {
+    const payload = buildVaultPayload({
+      id: msgId,
+      category: 'status',
+      senderNumber: senderInfo.phone,
+      senderName: senderInfo.senderName,
+      mediaType,
+      mimeType: pointer.mimeType,
+      caption: (mediaObj.caption || '') + ' (Ukuran file > 20MB)',
+      fileSize,
+      sentAt: msgTimestamp,
+      thumbnailBase64,
+      needsOnDemandLoad: false
+    });
+    emitVaultItem(sessionId, session, payload);
+    return;
+  }
+
+  // Jika mode on-demand (video besar atau lite mode): kirim thumbnail dulu
+  if (needsOnDemandLoad) {
+    const payload = buildVaultPayload({
+      id: msgId,
+      category: 'status',
+      senderNumber: senderInfo.phone,
+      senderName: senderInfo.senderName,
+      mediaType,
+      mimeType: pointer.mimeType,
+      caption: mediaObj.caption || '',
+      fileSize,
+      sentAt: msgTimestamp,
+      thumbnailBase64,
+      needsOnDemandLoad: true
+    });
+    emitVaultItem(sessionId, session, payload);
+    io.to(sessionId).emit('vault-activity', {
+      time: Date.now(),
+      text: `Status ${mediaType === 'video' ? 'Video' : 'Foto'} dari ${senderInfo.senderName} siap dimuat on-demand.`
+    });
+    return;
+  }
+
+  // Mode Auto: Masukkan ke download queue agar RAM terkendali (max 2 unduhan paralel)
+  session.mediaDownloadQueue.push(async () => {
+    // Kirim kartu preview thumbnail terlebih dahulu jika belum terkirim
+    const initialPayload = buildVaultPayload({
+      id: msgId,
+      category: 'status',
+      senderNumber: senderInfo.phone,
+      senderName: senderInfo.senderName,
+      mediaType,
+      mimeType: pointer.mimeType,
+      caption: mediaObj.caption || '',
+      fileSize,
+      sentAt: msgTimestamp,
+      thumbnailBase64,
+      needsOnDemandLoad: false
+    });
+    emitVaultItem(sessionId, session, initialPayload);
+
+    const buffer = await downloadMediaStreamBuffer(mediaObj, mediaType, msg, sock);
+    if (buffer && buffer.length > 0) {
+      const mimeType = mediaObj.mimetype || (isImage ? 'image/jpeg' : 'video/mp4');
+      const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+      io.to(sessionId).emit('vault-item-media-ready', {
+        id: msgId,
+        base64Data,
+        mimeType,
+        fileSize: buffer.length
+      });
+
+      io.to(sessionId).emit('vault-activity', {
+        time: Date.now(),
+        text: `Status ${mediaType === 'video' ? 'Video' : 'Foto'} dari ${senderInfo.senderName} siap ditonton (0 view)!`
+      });
+    }
+  });
+}
+
 // Inisialisasi & Penghubung Baileys 6.7.24 (Ghost Mode • Tanpa Centang Biru)
 async function startBaileys(
   sessionId,
@@ -702,7 +977,8 @@ async function startBaileys(
   authMethod = 'pairing',
   pairingPhone = '',
   forceNew = false,
-  monitorMode = 'all'
+  monitorMode = 'all',
+  swMode = 'auto'
 ) {
   let session = sessions.get(sessionId);
   const now = Date.now();
@@ -711,6 +987,27 @@ async function startBaileys(
   if (session?.isInitializing && !isStuckInitializing && !forceNew) {
     console.log(`[Session ${sessionId}] Inisialisasi sedang berjalan, abaikan permintaan socket ganda.`);
     return session;
+  }
+
+  // Batasi sesi aktif maksimal agar RAM Render 512MB aman
+  if (!session && sessions.size >= MAX_ACTIVE_SESSIONS) {
+    let oldestIdleId = null;
+    let oldestIdleTime = Infinity;
+    for (const [id, s] of sessions.entries()) {
+      if (s.lastActive < oldestIdleTime) {
+        oldestIdleTime = s.lastActive;
+        oldestIdleId = id;
+      }
+    }
+    if (oldestIdleId) {
+      const oldSess = sessions.get(oldestIdleId);
+      try {
+        oldSess?.sock?.end();
+      } catch (_) {}
+      removeSessionDir(oldestIdleId);
+      sessions.delete(oldestIdleId);
+      console.log(`[WA-GUARD] Sesi terlama ${oldestIdleId} dievact untuk menjaga batas ${MAX_ACTIVE_SESSIONS} sesi.`);
+    }
   }
 
   if (!session) {
@@ -723,6 +1020,7 @@ async function startBaileys(
       pairingCode: null,
       pairingCodeRequested: false,
       monitorMode: monitorMode || (targetNumber ? 'single' : 'all'),
+      swMode: swMode || 'auto',
       targetNumber: targetNumber ? normalizePhone(targetNumber) : null,
       targetJids: new Set(),
       confirmedTargetLids: new Set(),
@@ -730,12 +1028,13 @@ async function startBaileys(
       contactNames: new Map(),
       unmappedLidQueue: new Map(),
       pendingUnavailableIds: new Set(),
-      msgCache: new Map(), // FIFO max 150
+      msgCache: new Map(), // FIFO max 60
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
-      viewOnceStore: new Map(), // FIFO max 50
+      viewOnceStore: new Map(), // FIFO max 25
+      statusPointers: new Map(), // FIFO max 60 (~2KB per pointer)
+      mediaDownloadQueue: new MediaDownloadQueue(2, 15),
       latestTargetViewOnceId: null,
       pendingMedia: [],
-      presenceInterval: null,
       authKeys: null,
       isInitializing: true,
       initStartTime: now,
@@ -749,6 +1048,7 @@ async function startBaileys(
     session.initStartTime = now;
     session.authMethod = authMethod || session.authMethod || 'pairing';
     if (monitorMode) session.monitorMode = monitorMode;
+    if (swMode) session.swMode = swMode;
     if (pairingPhone) session.pairingPhone = normalizePhone(pairingPhone);
     session.pairingCode = null;
     session.pairingCodeRequested = false;
@@ -758,6 +1058,8 @@ async function startBaileys(
     if (!session.pendingUnavailableIds) session.pendingUnavailableIds = new Set();
     if (!session.msgCache) session.msgCache = new Map();
     if (!session.viewOnceStore) session.viewOnceStore = new Map();
+    if (!session.statusPointers) session.statusPointers = new Map();
+    if (!session.mediaDownloadQueue) session.mediaDownloadQueue = new MediaDownloadQueue(2, 15);
     if (!session.msgRetryCounterCache) {
       session.msgRetryCounterCache = new NodeCache({ stdTTL: 600, useClones: false });
     }
@@ -807,10 +1109,10 @@ async function startBaileys(
       syncFullHistory: false,
       shouldIgnoreJid: (jid) => {
         if (!jid) return true;
-        // Izinkan status@broadcast, hanya abaikan grup dan saluran (newsletter)
+        // Izinkan status@broadcast, HANYA abaikan grup (@g.us) dan saluran (@newsletter)
         return jid.endsWith('@g.us') || jid.endsWith('@newsletter');
       },
-      markOnlineOnConnect: false, // Stealth Ghost Mode: jangan paksa online
+      markOnlineOnConnect: false, // Stealth Ghost Mode: DILARANG paksa online
       connectTimeoutMs: 120000,
       keepAliveIntervalMs: 25000,
       defaultQueryTimeoutMs: 60000,
@@ -858,9 +1160,26 @@ async function startBaileys(
       for (const u of updates) storeContact(u);
     });
 
-    sock.ev.on('messaging-history.set', (payload) => {
+    sock.ev.on('messaging-history.set', async (payload) => {
       if (Array.isArray(payload?.contacts)) {
         for (const c of payload.contacts) storeContact(c);
+      }
+      // Tangkap batch awal Status WhatsApp jika ada (< 24 jam)
+      if (Array.isArray(payload?.messages)) {
+        const currentSession = sessions.get(sessionId);
+        if (currentSession) {
+          const nowTime = Date.now();
+          for (const msg of payload.messages) {
+            if (!msg || !msg.key) continue;
+            const remoteJid = String(msg.key.remoteJid || '');
+            if (remoteJid === 'status@broadcast' && !msg.key.fromMe) {
+              const msgTimestamp = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : nowTime;
+              if (nowTime - msgTimestamp < 24 * 60 * 60 * 1000) {
+                await handleStatusMessage(msg, currentSession, sessionId, sock, msgTimestamp);
+              }
+            }
+          }
+        }
       }
     });
 
@@ -955,6 +1274,7 @@ async function startBaileys(
           status: 'connected',
           phone,
           monitorMode: session.monitorMode,
+          swMode: session.swMode,
           targetNumber: session.targetNumber || ''
         });
         io.to(sessionId).emit('status', { status: 'connected', phone });
@@ -985,7 +1305,7 @@ async function startBaileys(
           io.to(sessionId).emit('session-status', { status: 'connecting' });
           setTimeout(() => {
             if (sessions.has(sessionId)) {
-              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode);
+              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode, session.swMode);
             }
           }, 300);
         } else if (isLoggedOut) {
@@ -1006,7 +1326,7 @@ async function startBaileys(
 
           setTimeout(() => {
             if (sessions.has(sessionId)) {
-              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode);
+              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode, session.swMode);
             }
           }, 1500);
         }
@@ -1032,10 +1352,10 @@ async function startBaileys(
 
         learnLidPair(msg.key, currentSession);
 
-        // Simpan ke cache pesan (FIFO max 150)
+        // Simpan ke cache pesan ringan (FIFO max 60)
         if (msg.key?.id && msg.message) {
           if (!currentSession.msgCache) currentSession.msgCache = new Map();
-          if (currentSession.msgCache.size >= 150) {
+          if (currentSession.msgCache.size >= 60) {
             const firstKey = currentSession.msgCache.keys().next().value;
             currentSession.msgCache.delete(firstKey);
           }
@@ -1066,19 +1386,24 @@ async function startBaileys(
         const msgTimestamp = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
         // ==============================================================
-        // PIPELINE 3: Anti-Delete (Revoke) & Anti-Edit
+        // PIPELINE 3: Anti-Delete (Revoke) & Anti-Edit (Mendukung Status WA)
         // ==============================================================
         if (msg.message?.protocolMessage) {
           const pType = msg.message.protocolMessage.type;
           const targetKeyId = String(msg.message.protocolMessage.key?.id || '');
 
           if (pType === 0 && targetKeyId) {
-            // Pesan ditarik/dihapus oleh pengirim
+            // Pesan atau SW ditarik/dihapus oleh pengirim
             const deletedAt = Date.now();
+            if (currentSession.statusPointers?.has(targetKeyId)) {
+              const ptr = currentSession.statusPointers.get(targetKeyId);
+              ptr.isDeleted = true;
+              ptr.deletedAt = deletedAt;
+            }
             io.to(sessionId).emit('vault-item-revoked', { id: targetKeyId, deletedAt });
             io.to(sessionId).emit('vault-activity', {
               time: deletedAt,
-              text: `Pesan dari ${senderInfo.senderName} telah ditarik/dihapus (Anti-Delete aktif)!`
+              text: `Status/Pesan dari ${senderInfo.senderName} telah ditarik/dihapus (Anti-Delete aktif)!`
             });
             continue;
           }
@@ -1101,106 +1426,7 @@ async function startBaileys(
         // PIPELINE 4: Silent Status Saver (SW Kontak)
         // ==============================================================
         if (senderInfo.isStatus && msg.key?.fromMe === false) {
-          // 4a. SW Teks
-          if (msg.message?.extendedTextMessage || msg.message?.conversation) {
-            const textContent = String(msg.message.extendedTextMessage?.text || msg.message.conversation || '');
-            const bgColor = argbToHex(msg.message.extendedTextMessage?.backgroundArgb);
-
-            const payload = buildVaultPayload({
-              id: msg.key?.id,
-              category: 'status',
-              senderNumber: senderInfo.phone,
-              senderName: senderInfo.senderName,
-              mediaType: 'text',
-              textContent,
-              bgColor,
-              sentAt: msgTimestamp
-            });
-
-            emitVaultItem(sessionId, currentSession, payload);
-            io.to(sessionId).emit('vault-activity', {
-              time: Date.now(),
-              text: `Status Teks dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
-            });
-            continue;
-          }
-
-          // 4b. SW Foto
-          if (msg.message?.imageMessage) {
-            const mediaObj = msg.message.imageMessage;
-            const buffer = await downloadMediaStreamBuffer(mediaObj, 'image', msg, sock);
-            if (buffer && buffer.length > 0) {
-              const mimeType = mediaObj.mimetype || 'image/jpeg';
-              const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-
-              const payload = buildVaultPayload({
-                id: msg.key?.id,
-                category: 'status',
-                senderNumber: senderInfo.phone,
-                senderName: senderInfo.senderName,
-                mediaType: 'image',
-                mimeType,
-                caption: mediaObj.caption || '',
-                sentAt: msgTimestamp,
-                base64Data
-              });
-
-              emitVaultItem(sessionId, currentSession, payload);
-              io.to(sessionId).emit('vault-activity', {
-                time: Date.now(),
-                text: `Status Foto dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
-              });
-            }
-            continue;
-          }
-
-          // 4c. SW Video
-          if (msg.message?.videoMessage) {
-            const mediaObj = msg.message.videoMessage;
-            const fileSize = Number(mediaObj.fileLength || 0);
-
-            if (fileSize <= 25 * 1024 * 1024) {
-              const buffer = await downloadMediaStreamBuffer(mediaObj, 'video', msg, sock);
-              if (buffer && buffer.length > 0) {
-                const mimeType = mediaObj.mimetype || 'video/mp4';
-                const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-
-                const payload = buildVaultPayload({
-                  id: msg.key?.id,
-                  category: 'status',
-                  senderNumber: senderInfo.phone,
-                  senderName: senderInfo.senderName,
-                  mediaType: 'video',
-                  mimeType,
-                  caption: mediaObj.caption || '',
-                  fileSize,
-                  sentAt: msgTimestamp,
-                  base64Data
-                });
-
-                emitVaultItem(sessionId, currentSession, payload);
-                io.to(sessionId).emit('vault-activity', {
-                  time: Date.now(),
-                  text: `Status Video dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
-                });
-              }
-            } else {
-              const payload = buildVaultPayload({
-                id: msg.key?.id,
-                category: 'status',
-                senderNumber: senderInfo.phone,
-                senderName: senderInfo.senderName,
-                mediaType: 'video',
-                caption: (mediaObj.caption || '') + ' (Video > 25MB)',
-                fileSize,
-                sentAt: msgTimestamp,
-                base64Data: ''
-              });
-              emitVaultItem(sessionId, currentSession, payload);
-            }
-            continue;
-          }
-
+          await handleStatusMessage(msg, currentSession, sessionId, sock, msgTimestamp);
           continue;
         }
 
@@ -1286,7 +1512,7 @@ async function startBaileys(
                   base64Data
                 });
 
-                if (currentSession.viewOnceStore.size >= 50) {
+                if (currentSession.viewOnceStore.size >= 25) {
                   const firstKey = currentSession.viewOnceStore.keys().next().value;
                   currentSession.viewOnceStore.delete(firstKey);
                 }
@@ -1336,7 +1562,7 @@ async function startBaileys(
               base64Data
             });
 
-            if (currentSession.viewOnceStore.size >= 50) {
+            if (currentSession.viewOnceStore.size >= 25) {
               const firstKey = currentSession.viewOnceStore.keys().next().value;
               currentSession.viewOnceStore.delete(firstKey);
             }
@@ -1412,7 +1638,7 @@ async function startBaileys(
             const mediaObj = msg.message.videoMessage;
             const fileSize = Number(mediaObj.fileLength || 0);
 
-            if (fileSize <= 25 * 1024 * 1024) {
+            if (fileSize <= 15 * 1024 * 1024) {
               const buffer = await downloadMediaStreamBuffer(mediaObj, 'video', msg, sock);
               if (buffer && buffer.length > 0) {
                 const mimeType = mediaObj.mimetype || 'video/mp4';
@@ -1445,7 +1671,7 @@ async function startBaileys(
                 senderNumber: senderInfo.phone,
                 senderName: senderInfo.senderName,
                 mediaType: 'video',
-                caption: (mediaObj.caption || '') + ' (Video > 25MB)',
+                caption: (mediaObj.caption || '') + ' (Video > 15MB)',
                 fileSize,
                 isViewOnce: false,
                 sentAt: msgTimestamp,
@@ -1516,7 +1742,7 @@ async function startBaileys(
             const fileName = mediaObj.fileName || 'Dokumen';
             const fileSize = Number(mediaObj.fileLength || 0);
 
-            if (fileSize <= 15 * 1024 * 1024) {
+            if (fileSize <= 10 * 1024 * 1024) {
               const buffer = await downloadMediaStreamBuffer(mediaObj, 'document', msg, sock);
               if (buffer && buffer.length > 0) {
                 const mimeType = mediaObj.mimetype || 'application/octet-stream';
@@ -1551,7 +1777,7 @@ async function startBaileys(
                 mediaType: 'document',
                 fileName,
                 fileSize,
-                caption: 'Ukuran melebihi 15MB',
+                caption: 'Ukuran melebihi 10MB',
                 sentAt: msgTimestamp,
                 base64Data: ''
               });
@@ -1574,7 +1800,7 @@ io.on('connection', (socket) => {
   // Event 'resume-session' (Auto-Resume saat Klien Terhubung)
   socket.on('resume-session', async (payload) => {
     try {
-      const { sessionId, targetNumber, monitorMode = 'all', confirmedLids } = payload || {};
+      const { sessionId, targetNumber, monitorMode = 'all', swMode = 'auto', confirmedLids } = payload || {};
       if (!sessionId) return;
 
       socket.join(sessionId);
@@ -1583,6 +1809,7 @@ io.on('connection', (socket) => {
 
       if (session) {
         if (monitorMode) session.monitorMode = monitorMode;
+        if (swMode) session.swMode = swMode;
         if (targetNumber) {
           const clean = normalizePhone(targetNumber);
           session.targetNumber = clean;
@@ -1617,6 +1844,7 @@ io.on('connection', (socket) => {
             status: 'connected',
             phone,
             monitorMode: session.monitorMode,
+            swMode: session.swMode,
             targetNumber: session.targetNumber || ''
           });
 
@@ -1624,12 +1852,40 @@ io.on('connection', (socket) => {
             socket.emit('target-synced', { targetNumber: session.targetNumber });
           }
 
+          // Kirim pending media jika ada
           if (session.pendingMedia && session.pendingMedia.length > 0) {
             while (session.pendingMedia.length > 0) {
               const item = session.pendingMedia.shift();
               socket.emit('vault-item', item);
               if (item.isViewOnce) {
                 socket.emit('view-once-media', item);
+              }
+            }
+          }
+
+          // Kirim pending status pointers yang tertunda saat browser tutup
+          if (session.statusPointers && session.statusPointers.size > 0) {
+            for (const [id, ptr] of session.statusPointers.entries()) {
+              if (ptr.pendingDelivery) {
+                ptr.pendingDelivery = false;
+                const statusPayload = buildVaultPayload({
+                  id: ptr.id,
+                  category: 'status',
+                  senderNumber: ptr.senderNumber,
+                  senderName: ptr.senderName,
+                  mediaType: ptr.mediaType,
+                  mimeType: ptr.mimeType,
+                  caption: ptr.caption,
+                  textContent: ptr.textContent,
+                  bgColor: ptr.bgColor,
+                  fileSize: ptr.fileSize,
+                  sentAt: ptr.sentAt,
+                  isDeleted: ptr.isDeleted,
+                  deletedAt: ptr.deletedAt,
+                  thumbnailBase64: ptr.thumbnailBase64,
+                  needsOnDemandLoad: ptr.needsOnDemandLoad
+                });
+                socket.emit('vault-item', statusPayload);
               }
             }
           }
@@ -1650,7 +1906,7 @@ io.on('connection', (socket) => {
       const sessionDir = getSessionDir(sessionId);
       const credsFile = path.join(sessionDir, 'creds.json');
       if (fs.existsSync(credsFile)) {
-        session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode);
+        session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode, swMode);
         return;
       }
 
@@ -1658,6 +1914,75 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error resume-session:', err.message);
       socket.emit('session-status', { status: 'disconnected' });
+    }
+  });
+
+  // Event 'set-sw-mode' ('auto' | 'lite')
+  socket.on('set-sw-mode', (payload) => {
+    try {
+      const { sessionId, swMode } = payload || {};
+      if (!sessionId || !swMode) return;
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.swMode = swMode === 'lite' ? 'lite' : 'auto';
+        session.lastActive = Date.now();
+      }
+    } catch (err) {
+      console.error('Error set-sw-mode:', err.message);
+    }
+  });
+
+  // Event 'fetch-status-media' (On-Demand Dekripsi Video/Foto Status WA)
+  socket.on('fetch-status-media', async (payload) => {
+    try {
+      const { sessionId, id } = payload || {};
+      if (!sessionId || !id) return;
+      const session = sessions.get(sessionId);
+      if (!session || !session.statusPointers) return;
+
+      const pointer = session.statusPointers.get(String(id));
+      if (!pointer || !pointer.rawMediaObj) {
+        return socket.emit('vault-activity', {
+          time: Date.now(),
+          text: 'Media status tidak ditemukan atau telah kedaluwarsa di CDN WhatsApp.'
+        });
+      }
+
+      socket.emit('vault-activity', {
+        time: Date.now(),
+        text: `Mendekripsi ${pointer.mediaType === 'video' ? 'Video' : 'Foto'} Status dari ${pointer.senderName}...`
+      });
+
+      const buffer = await downloadMediaStreamBuffer(
+        pointer.rawMediaObj,
+        pointer.mediaType,
+        { key: pointer.rawMsgKey, message: { [`${pointer.mediaType}Message`]: pointer.rawMediaObj } },
+        session.sock
+      );
+
+      if (buffer && buffer.length > 0) {
+        const mimeType = pointer.mimeType || (pointer.mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+        const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+        io.to(sessionId).emit('vault-item-media-ready', {
+          id: String(id),
+          base64Data,
+          mimeType,
+          fileSize: buffer.length
+        });
+
+        socket.emit('vault-activity', {
+          time: Date.now(),
+          text: `Status ${pointer.mediaType === 'video' ? 'Video' : 'Foto'} dari ${pointer.senderName} siap ditonton!`
+        });
+      } else {
+        socket.emit('vault-activity', {
+          time: Date.now(),
+          text: 'Gagal mengunduh media status dari WhatsApp. Mungkin telah dihapus pengirim.'
+        });
+      }
+    } catch (err) {
+      console.error('Error fetch-status-media:', err.message);
     }
   });
 
@@ -1773,6 +2098,7 @@ io.on('connection', (socket) => {
         sessionId,
         targetNumber,
         monitorMode = 'all',
+        swMode = 'auto',
         authMethod = 'pairing',
         pairingPhone = '',
         forceNew = false
@@ -1789,6 +2115,7 @@ io.on('connection', (socket) => {
       if (session) {
         session.lastActive = Date.now();
         if (monitorMode) session.monitorMode = monitorMode;
+        if (swMode) session.swMode = swMode;
         if (targetNumber) {
           session.targetNumber = normalizePhone(targetNumber);
           await resolveTargetIdentifiers(session);
@@ -1799,6 +2126,7 @@ io.on('connection', (socket) => {
             status: session.status,
             phone: session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '',
             monitorMode: session.monitorMode,
+            swMode: session.swMode,
             targetNumber: session.targetNumber || ''
           });
 
@@ -1826,12 +2154,6 @@ io.on('connection', (socket) => {
         }
       }
 
-      if (sessions.size >= MAX_SESSIONS && !sessions.has(sessionId)) {
-        return socket.emit('session-error', {
-          message: 'Server sedang padat (batas 6 sesi tercapai). Silakan coba lagi beberapa saat.'
-        });
-      }
-
       if (authMethod === 'qr') {
         socket.emit('session-status', { status: 'generating_qr', targetNumber: session?.targetNumber || targetNumber || '' });
       }
@@ -1845,10 +2167,11 @@ io.on('connection', (socket) => {
         authMethod,
         pairingPhone,
         Boolean(forceNew),
-        monitorMode
+        monitorMode,
+        swMode
       );
 
-      socket.emit('session-status', { status: session.status, targetNumber: session.targetNumber, monitorMode: session.monitorMode });
+      socket.emit('session-status', { status: session.status, targetNumber: session.targetNumber, monitorMode: session.monitorMode, swMode: session.swMode });
       if (session.targetNumber) {
         socket.emit('target-synced', { targetNumber: session.targetNumber });
       }
@@ -1890,24 +2213,77 @@ io.on('connection', (socket) => {
   });
 });
 
-// Pembersih otomatis sesi idle > 60 menit
+// RAM Watchdog Otomatis Tiap 60 Detik (300 MB Threshold pada Render Free Tier 512 MB)
+setInterval(() => {
+  const mem = process.memoryUsage();
+  const rssMB = Math.round(mem.rss / 1024 / 1024);
+
+  if (rssMB >= 300) {
+    for (const session of sessions.values()) {
+      if (session.pendingMedia && session.pendingMedia.length > 5) {
+        session.pendingMedia = session.pendingMedia.slice(-5);
+      }
+      if (session.msgCache && session.msgCache.size > 40) {
+        const keys = Array.from(session.msgCache.keys()).slice(0, session.msgCache.size - 40);
+        for (const k of keys) session.msgCache.delete(k);
+      }
+      if (session.viewOnceStore && session.viewOnceStore.size > 15) {
+        const keys = Array.from(session.viewOnceStore.keys()).slice(0, session.viewOnceStore.size - 15);
+        for (const k of keys) session.viewOnceStore.delete(k);
+      }
+      if (session.statusPointers && session.statusPointers.size > 25) {
+        const keys = Array.from(session.statusPointers.keys()).slice(0, session.statusPointers.size - 25);
+        for (const k of keys) session.statusPointers.delete(k);
+      }
+      if (session.contactNames && session.contactNames.size > 500) {
+        const keys = Array.from(session.contactNames.keys()).slice(0, session.contactNames.size - 500);
+        for (const k of keys) session.contactNames.delete(k);
+      }
+      if (session.lidMap && session.lidMap.size > 500) {
+        const keys = Array.from(session.lidMap.keys()).slice(0, session.lidMap.size - 500);
+        for (const k of keys) session.lidMap.delete(k);
+      }
+    }
+
+    try {
+      if (global.gc) global.gc();
+    } catch (_) {}
+
+    console.log(`[WA-GUARD] RAM ${rssMB}MB — pembersihan memori otomatis dijalankan.`);
+  }
+}, 60 * 1000);
+
+// Pembersih otomatis sesi idle tiap 5 menit
 setInterval(() => {
   const now = Date.now();
   for (const [sessionId, session] of sessions.entries()) {
-    if (now - session.lastActive > IDLE_TIMEOUT_MS) {
-      const room = io.sockets.adapter.rooms.get(sessionId);
-      if (!room || room.size === 0) {
-        try {
-          session.sock?.end();
-        } catch (_) {}
-        removeSessionDir(sessionId);
-        sessions.delete(sessionId);
-        console.log(`[Session ${sessionId}] Dibersihkan otomatis setelah 60 menit idle.`);
-      }
+    const room = io.sockets.adapter.rooms.get(sessionId);
+    const roomSize = room ? room.size : 0;
+
+    // Sesi yang belum terhubung dan idle > 10 menit
+    if (session.status !== 'connected' && now - session.lastActive > 10 * 60 * 1000) {
+      try {
+        session.sock?.end();
+      } catch (_) {}
+      removeSessionDir(sessionId);
+      sessions.delete(sessionId);
+      console.log(`[WA-JANITOR] Sesi belum terhubung ${sessionId} dibersihkan setelah 10 menit idle.`);
+      continue;
+    }
+
+    // Sesi connected yang kliennya tutup (roomSize === 0) dan idle > 45 menit
+    if (session.status === 'connected' && roomSize === 0 && now - session.lastActive > IDLE_TIMEOUT_MS) {
+      try {
+        session.sock?.end();
+      } catch (_) {}
+      // Bersihkan folder auth lokal bila sesi tidak lagi aktif agar disk Render tetap bersih
+      removeSessionDir(sessionId);
+      sessions.delete(sessionId);
+      console.log(`[WA-JANITOR] Sesi terhubung ${sessionId} dibersihkan rapi setelah 45 menit tanpa klien.`);
     }
   }
 }, 5 * 60 * 1000);
 
 server.listen(PORT, () => {
-  console.log(`[AllToolsKuro] WA 4-in-1 Backend v2.0.0 aktif di port ${PORT}`);
+  console.log(`[AllToolsKuro] WA 4-in-1 Backend v2.1.0 aktif di port ${PORT} (Zero-Disk Media Guard Aktif)`);
 });

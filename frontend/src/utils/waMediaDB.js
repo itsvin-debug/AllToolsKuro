@@ -55,66 +55,81 @@ export async function saveMediaItem(item) {
   if (!item || typeof item !== 'object') return null;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
 
-    const sanitizedItem = {
-      ...item,
-      id: String(item.id || Date.now()),
-      category: item.category === 'status' ? 'status' : 'chat',
-      senderNumber: String(item.senderNumber || ''),
-      senderName: String(item.senderName || ''),
-      mediaType: String(item.mediaType || 'text'),
-      mimeType: String(item.mimeType || ''),
-      textContent: String(item.textContent || ''),
-      caption: String(item.caption || ''),
-      bgColor: String(item.bgColor || ''),
-      fileName: String(item.fileName || ''),
-      fileSize: Number(item.fileSize || 0),
-      isVoiceNote: Boolean(item.isVoiceNote),
-      isViewOnce: Boolean(item.isViewOnce),
-      isDeleted: Boolean(item.isDeleted),
-      deletedAt: item.deletedAt ? Number(item.deletedAt) : null,
-      isEdited: Boolean(item.isEdited),
-      editedText: String(item.editedText || ''),
-      editedAt: item.editedAt ? Number(item.editedAt) : null,
-      sentAt: Number(item.sentAt || item.timestamp || Date.now()),
-      base64Data: typeof item.base64Data === 'string' ? item.base64Data : ''
-    };
+      const sanitizedItem = {
+        ...item,
+        id: String(item.id || Date.now()),
+        category: item.category === 'status' ? 'status' : 'chat',
+        senderNumber: String(item.senderNumber || ''),
+        senderName: String(item.senderName || ''),
+        mediaType: String(item.mediaType || 'text'),
+        mimeType: String(item.mimeType || ''),
+        textContent: String(item.textContent || ''),
+        caption: String(item.caption || ''),
+        bgColor: String(item.bgColor || ''),
+        fileName: String(item.fileName || ''),
+        fileSize: Number(item.fileSize || 0),
+        isVoiceNote: Boolean(item.isVoiceNote),
+        isViewOnce: Boolean(item.isViewOnce),
+        isDeleted: Boolean(item.isDeleted),
+        deletedAt: item.deletedAt ? Number(item.deletedAt) : null,
+        isEdited: Boolean(item.isEdited),
+        editedText: String(item.editedText || ''),
+        editedAt: item.editedAt ? Number(item.editedAt) : null,
+        sentAt: Number(item.sentAt || item.timestamp || Date.now()),
+        base64Data: typeof item.base64Data === 'string' ? item.base64Data : '',
+        thumbnailBase64: typeof item.thumbnailBase64 === 'string' ? item.thumbnailBase64 : '',
+        needsOnDemandLoad: Boolean(item.needsOnDemandLoad)
+      };
 
-    const request = store.put(sanitizedItem);
+      const request = store.put(sanitizedItem);
 
-    request.onsuccess = () => resolve(sanitizedItem);
-    request.onerror = () => reject(request.error || new Error('Gagal menyimpan item ke IndexedDB.'));
+      request.onsuccess = () => resolve(sanitizedItem);
+      request.onerror = (e) => {
+        if (e?.target?.error?.name === 'QuotaExceededError') {
+          console.warn('[IndexedDB] Kuota penyimpanan browser penuh! Hapus status lama untuk mengosongkan ruang.');
+        }
+        reject(request.error || new Error('Gagal menyimpan item ke IndexedDB.'));
+      };
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
-// Perbarui sebagian field item (misal status isDeleted atau isEdited)
+// Perbarui sebagian field item (misal status isDeleted atau isEdited, atau saat media on-demand selesai)
 export async function updateMediaItem(id, patch = {}) {
   if (!id) return null;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite');
-    const store = tx.objectStore(STORE_NAME);
-    const getReq = store.get(String(id));
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const getReq = store.get(String(id));
 
-    getReq.onsuccess = () => {
-      const existing = getReq.result;
-      if (!existing) {
-        resolve(null);
-        return;
-      }
-      const updated = {
-        ...existing,
-        ...patch,
-        id: existing.id
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) {
+          resolve(null);
+          return;
+        }
+        const updated = {
+          ...existing,
+          ...patch,
+          id: existing.id
+        };
+        const putReq = store.put(updated);
+        putReq.onsuccess = () => resolve(updated);
+        putReq.onerror = () => reject(putReq.error || new Error('Gagal memperbarui item IndexedDB.'));
       };
-      const putReq = store.put(updated);
-      putReq.onsuccess = () => resolve(updated);
-      putReq.onerror = () => reject(putReq.error || new Error('Gagal memperbarui item IndexedDB.'));
-    };
 
-    getReq.onerror = () => reject(getReq.error || new Error('Gagal membaca item dari IndexedDB.'));
+      getReq.onerror = () => reject(getReq.error || new Error('Gagal membaca item dari IndexedDB.'));
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -134,11 +149,13 @@ export async function getAllMediaItems() {
           ...it,
           id: String(it.id),
           category: it.category === 'status' ? 'status' : 'chat',
-          isViewOnce: it.isViewOnce !== undefined ? Boolean(it.isViewOnce) : true, // Jika data lama tanpa isViewOnce, default true
+          isViewOnce: it.isViewOnce !== undefined ? Boolean(it.isViewOnce) : true,
           mediaType: it.mediaType || (it.base64Data?.includes('video') ? 'video' : 'image'),
           sentAt: Number(it.sentAt || it.timestamp || Date.now()),
           isDeleted: Boolean(it.isDeleted),
-          isEdited: Boolean(it.isEdited)
+          isEdited: Boolean(it.isEdited),
+          thumbnailBase64: it.thumbnailBase64 || '',
+          needsOnDemandLoad: Boolean(it.needsOnDemandLoad)
         }));
 
       normalized.sort((a, b) => {
@@ -194,6 +211,67 @@ export async function clearAllMediaItems() {
 
     request.onsuccess = () => resolve(true);
     request.onerror = () => reject(request.error || new Error('Gagal membersihkan database IndexedDB.'));
+  });
+}
+
+// Dapatkan statistik kapasitas penyimpanan IndexedDB browser pengguna
+export async function getVaultStorageStats() {
+  try {
+    const items = await getAllMediaItems();
+    let totalBytes = 0;
+    let statusCount = 0;
+
+    for (const it of items) {
+      if (it.category === 'status') statusCount++;
+      if (it.base64Data) totalBytes += it.base64Data.length;
+      if (it.thumbnailBase64) totalBytes += it.thumbnailBase64.length;
+      if (it.textContent) totalBytes += it.textContent.length * 2;
+      if (it.caption) totalBytes += it.caption.length * 2;
+    }
+
+    const estimatedMB = (totalBytes / (1024 * 1024)).toFixed(2);
+    return {
+      totalItems: items.length,
+      statusCount,
+      estimatedMB
+    };
+  } catch (err) {
+    console.error('Gagal menghitung statistik vault:', err);
+    return { totalItems: 0, statusCount: 0, estimatedMB: '0.00' };
+  }
+}
+
+// Bersihkan Status WA yang sudah kedaluwarsa (> 24 jam) untuk menghemat storage HP/browser
+export async function pruneExpiredStatuses(maxAgeMs = 24 * 60 * 60 * 1000) {
+  const db = await openWaDB();
+  return new Promise((resolve, reject) => {
+    try {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.getAll();
+
+      req.onsuccess = () => {
+        const items = req.result || [];
+        const now = Date.now();
+        let pruned = 0;
+
+        for (const it of items) {
+          if (it.category === 'status') {
+            const age = now - (Number(it.sentAt) || 0);
+            if (age > maxAgeMs) {
+              store.delete(it.id);
+              pruned++;
+            }
+          }
+        }
+
+        tx.oncomplete = () => resolve(pruned);
+      };
+
+      req.onerror = () => reject(req.error || new Error('Gagal memangkas status kedaluwarsa.'));
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
