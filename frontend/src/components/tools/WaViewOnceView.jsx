@@ -20,7 +20,8 @@ import {
   Film,
   Image as ImageIcon,
   ShieldAlert,
-  Activity
+  Activity,
+  Copy
 } from 'lucide-react';
 import {
   saveMediaItem,
@@ -32,6 +33,7 @@ import {
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
 const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
 const STORAGE_CONFIRMED_LIDS = 'wa_vault_confirmed_lids';
+const STORAGE_PAIRING_PHONE = 'wa_vault_pairing_phone';
 
 // Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
 const safeText = (val) => {
@@ -97,7 +99,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     return id;
   });
 
-  // 2. Kunci HANYA 1 nomor target aktif (Single Locked Target)
+  // 2. Metode Penautan: Kode Pairing (Rekomendasi) atau Scan QR Code
+  const [authMethod, setAuthMethod] = useState('pairing'); // pairing | qr
+  const [pairingPhone, setPairingPhone] = useState(() => {
+    return localStorage.getItem(STORAGE_PAIRING_PHONE) || '';
+  });
+  const [pairingCode, setPairingCode] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  // 3. Kunci HANYA 1 nomor target aktif (Single Locked Target)
   const [lockedTarget, setLockedTarget] = useState(() => {
     const saved = localStorage.getItem(STORAGE_LOCKED_TARGET);
     return saved ? normalizePhone(saved) : null;
@@ -110,7 +120,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   const [inputTarget, setInputTarget] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState(null);
-  const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | qr_ready | connected | reconnecting
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | pairing_ready | qr_ready | connected | reconnecting
   const [connectedPhone, setConnectedPhone] = useState(null);
   const [backendError, setBackendError] = useState(null);
   const [vaultActivity, setVaultActivity] = useState(null); // Status aktivitas real-time deteksi/dekripsi
@@ -124,7 +134,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   });
 
-  // 3. Galeri Media Tersimpan di IndexedDB
+  // 4. Galeri Media Tersimpan di IndexedDB
   const [mediaList, setMediaList] = useState([]);
   const [mediaFilter, setMediaFilter] = useState('all'); // all | image | video
   const [previewMedia, setPreviewMedia] = useState(null);
@@ -144,6 +154,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('connect_error');
         socketRef.current.off('session-status');
         socketRef.current.off('status');
+        socketRef.current.off('pairing-code');
         socketRef.current.off('qr-code');
         socketRef.current.off('qr');
         socketRef.current.off('target-synced');
@@ -216,15 +227,20 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       );
     });
 
-    // Event status sesi terkini dari backend (dengan sanitasi nilai primitif ketat)
+    // Event status sesi terkini dari backend
     socket.on('session-status', (payload) => {
       const status = safeText(payload?.status) || 'connecting';
       const phone = safeText(payload?.phone);
       const reason = safeText(payload?.reason);
       const message = safeText(payload?.message);
       const targetNumber = safeText(payload?.targetNumber);
+      const code = safeText(payload?.code);
 
       setConnectionStatus(status);
+
+      if (code) {
+        setPairingCode(code);
+      }
 
       if (targetNumber && !lockedTargetRef.current) {
         const clean = normalizePhone(targetNumber);
@@ -234,11 +250,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
       if (status === 'connected') {
         setQrCodeDataUrl(null);
+        setPairingCode('');
         setBackendError(null);
         if (phone) setConnectedPhone(phone);
         triggerToast('WhatsApp berhasil terhubung!', 'success');
 
-        // Pastikan targetNumber dan confirmedLids tersinkronisasi kembali saat status connected
         const currentSavedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
         let savedLids = [];
         try {
@@ -251,12 +267,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             confirmedLids: savedLids
           });
         }
+      } else if (status === 'pairing_ready') {
+        setConnectedPhone(null);
       } else if (status === 'qr_ready') {
         setConnectedPhone(null);
       } else if (status === 'reconnecting') {
         setQrCodeDataUrl(null);
       } else if (status === 'disconnected') {
         setQrCodeDataUrl(null);
+        setPairingCode('');
         setConnectedPhone(null);
         if (reason === 'logged_out' || message) {
           triggerToast(message || 'Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
@@ -271,10 +290,23 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       if (status) setConnectionStatus(status);
       if (status === 'connected') {
         setQrCodeDataUrl(null);
+        setPairingCode('');
         if (phone) setConnectedPhone(phone);
       } else if (status === 'disconnected') {
         setQrCodeDataUrl(null);
+        setPairingCode('');
         setConnectedPhone(null);
+      }
+    });
+
+    // Penerimaan Kode Pairing 8 Karakter
+    socket.on('pairing-code', (payload) => {
+      const code = safeText(payload?.code);
+      if (code) {
+        setPairingCode(code);
+        setConnectionStatus('pairing_ready');
+        setBackendError(null);
+        triggerToast('Kode pairing WhatsApp berhasil dibuat!', 'success');
       }
     });
 
@@ -342,7 +374,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
     });
 
-    // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas Langsung Terbuka)
+    // Tangkap Media View Once Real-Time (Simpan ke IndexedDB & Tampilkan Paling Atas)
     socket.on('view-once-media', async (rawPayload) => {
       try {
         const mediaPayload = {
@@ -367,18 +399,56 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
   }
 
-  // Tombol Mulai & Buat QR Code Baru secara manual
-  const handleStartSession = () => {
+  // Mulai Sesi WhatsApp: Mode Pairing Code atau QR Code
+  const handleStartSession = (method = authMethod) => {
     if (!socketRef.current || !socketRef.current.connected) {
       initSocketConnection();
     }
-    setConnectionStatus('connecting');
-    setBackendError(null);
-    if (socketRef.current) {
-      socketRef.current.emit('start-session', {
-        sessionId,
-        targetNumber: lockedTargetRef.current
-      });
+
+    if (method === 'pairing') {
+      const cleanPhone = normalizePhone(pairingPhone);
+      if (!cleanPhone || cleanPhone.length < 9) {
+        triggerToast('Masukkan nomor HP WhatsApp Anda yang valid (minimal 9 digit).', 'error');
+        return;
+      }
+      localStorage.setItem(STORAGE_PAIRING_PHONE, cleanPhone);
+      setConnectionStatus('connecting');
+      setBackendError(null);
+      setPairingCode('');
+
+      if (socketRef.current) {
+        socketRef.current.emit('start-session', {
+          sessionId,
+          targetNumber: lockedTargetRef.current,
+          authMethod: 'pairing',
+          pairingPhone: cleanPhone
+        });
+      }
+    } else {
+      setConnectionStatus('connecting');
+      setBackendError(null);
+      setQrCodeDataUrl(null);
+
+      if (socketRef.current) {
+        socketRef.current.emit('start-session', {
+          sessionId,
+          targetNumber: lockedTargetRef.current,
+          authMethod: 'qr'
+        });
+      }
+    }
+  };
+
+  // Salin Kode Pairing ke Clipboard
+  const handleCopyPairingCode = () => {
+    if (!pairingCode) return;
+    try {
+      navigator.clipboard.writeText(pairingCode);
+      setCopiedCode(true);
+      triggerToast('Kode pairing berhasil disalin!', 'success');
+      setTimeout(() => setCopiedCode(false), 2500);
+    } catch (_) {
+      triggerToast('Gagal menyalin kode.', 'error');
     }
   };
 
@@ -389,6 +459,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
     setConnectionStatus('disconnected');
     setQrCodeDataUrl(null);
+    setPairingCode('');
     setConnectedPhone(null);
     setBackendError(null);
     triggerToast('Sesi WhatsApp berhasil diputuskan.', 'info');
@@ -480,7 +551,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   };
 
-  // Hapus Satu Item Media dari UI & IndexedDB (Ikon tempat sampah merah)
+  // Hapus Satu Item Media dari UI & IndexedDB
   const handleDeleteMedia = async (id) => {
     try {
       await deleteMediaById(id);
@@ -554,6 +625,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 Terhubung {safeText(connectedPhone) ? `(+${safeText(connectedPhone)})` : ''}
               </span>
             )}
+            {connectionStatus === 'pairing_ready' && (
+              <span className="px-2.5 py-1 bg-emerald-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-black animate-pulse" />
+                Kode Pairing Siap
+              </span>
+            )}
             {connectionStatus === 'qr_ready' && (
               <span className="px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-black animate-pulse" />
@@ -598,12 +675,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       {/* Grid 2 Kolom Panel Kontrol (Tautkan Perangkat & Kunci 1 Nomor Target) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
-        {/* Panel 1: Tautkan Perangkat WhatsApp (QR Code) */}
+        {/* Panel 1: Tautkan Perangkat WhatsApp (Kode Pairing & Scan QR) */}
         <div className="bg-white border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b-2 border-black pb-3">
               <div className="flex items-center gap-2">
-                <QrCode className="w-5 h-5 text-neutral-900" />
+                <Smartphone className="w-5 h-5 text-neutral-900" />
                 <h2 className="font-black text-sm md:text-base uppercase tracking-tight">
                   Tautkan Perangkat WhatsApp
                 </h2>
@@ -619,26 +696,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               )}
             </div>
 
-            {/* Area Tampilan QR Code / Panduan */}
-            {connectionStatus === 'qr_ready' && qrCodeDataUrl ? (
-              <div className="flex flex-col items-center justify-center p-4 bg-neutral-50 border-2 border-black rounded-xl space-y-3">
-                <div className="p-2 bg-white border-2 border-black rounded-lg shadow-[3px_3px_0px_#000]">
-                  <img
-                    src={qrCodeDataUrl}
-                    alt="WhatsApp QR Code"
-                    className="w-52 h-52 object-contain"
-                  />
-                </div>
-                <div className="text-center space-y-1">
-                  <p className="font-black text-xs text-neutral-900">Pindai QR ini di aplikasi WhatsApp HP kamu</p>
-                  <ol className="text-[11px] text-neutral-600 space-y-0.5 text-left list-decimal list-inside bg-white p-2.5 border border-black rounded">
-                    <li>Buka WhatsApp di HP Anda</li>
-                    <li>Ketuk <b>Titik Tiga</b> atau <b>Pengaturan</b></li>
-                    <li>Pilih <b>Perangkat Tertaut</b> &gt; <b>Tautkan Perangkat</b></li>
-                  </ol>
-                </div>
-              </div>
-            ) : connectionStatus === 'connected' ? (
+            {/* Jika Terhubung */}
+            {connectionStatus === 'connected' ? (
               <div className="flex flex-col items-center justify-center py-8 px-4 bg-emerald-50 border-2 border-black rounded-xl text-center space-y-2">
                 <div className="w-12 h-12 rounded-full bg-emerald-400 border-2 border-black flex items-center justify-center shadow-[2px_2px_0px_#000]">
                   <CheckCircle2 className="w-7 h-7 text-black" />
@@ -654,36 +713,187 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-8 px-4 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center space-y-2">
-                <Smartphone className="w-10 h-10 text-neutral-400" />
-                <p className="font-bold text-xs text-neutral-700">Perangkat belum terhubung</p>
-                <p className="text-[11px] text-neutral-500 max-w-xs">
-                  Tekan tombol di bawah untuk meminta kode QR penautan WhatsApp.
-                </p>
+              /* Jika Belum Terhubung: Pilihan Tab Kode Pairing | Scan QR */
+              <div className="space-y-3">
+                {/* Compact Tab Switcher */}
+                <div className="flex border-2 border-black rounded-lg overflow-hidden text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setAuthMethod('pairing')}
+                    className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 ${
+                      authMethod === 'pairing'
+                        ? 'bg-black text-white font-black'
+                        : 'bg-white text-neutral-700 hover:bg-neutral-100'
+                    }`}
+                  >
+                    <Smartphone className="w-3.5 h-3.5" />
+                    <span>Kode Pairing</span>
+                    <span className="text-[10px] bg-emerald-400 text-black px-1.5 py-0.2 rounded font-black tracking-tight">
+                      Rekomendasi
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthMethod('qr')}
+                    className={`flex-1 py-1.5 px-2 text-center border-l-2 border-black transition-colors flex items-center justify-center gap-1.5 ${
+                      authMethod === 'qr'
+                        ? 'bg-black text-white font-black'
+                        : 'bg-white text-neutral-700 hover:bg-neutral-100'
+                    }`}
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Scan QR Code</span>
+                  </button>
+                </div>
+
+                {/* Konten Tab Kode Pairing */}
+                {authMethod === 'pairing' && (
+                  <div className="space-y-3">
+                    {connectionStatus === 'pairing_ready' && pairingCode ? (
+                      <div className="flex flex-col items-center justify-center p-4 bg-emerald-50 border-2 border-black rounded-xl space-y-3">
+                        <div className="text-center space-y-1 w-full">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                            Kode Pairing WhatsApp Anda
+                          </span>
+                          <div className="p-3 bg-white border-2 border-black rounded-xl shadow-[3px_3px_0px_#000] flex items-center justify-center gap-3">
+                            <span className="font-mono text-2xl md:text-3xl font-black tracking-widest text-neutral-900 select-all">
+                              {pairingCode.length === 8
+                                ? `${pairingCode.slice(0, 4)}-${pairingCode.slice(4)}`
+                                : pairingCode}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleCopyPairingCode}
+                              className="px-2.5 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] shadow-[1.5px_1.5px_0px_#000] font-black text-xs flex items-center gap-1"
+                              title="Salin Kode"
+                            >
+                              {copiedCode ? (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-black" />
+                                  <span>Tersalin!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5 text-black" />
+                                  <span>Salin</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="text-center space-y-1 w-full">
+                          <p className="font-black text-xs text-neutral-900">Langkah di aplikasi WhatsApp HP Anda:</p>
+                          <ol className="text-[11px] text-neutral-700 space-y-1 text-left list-decimal list-inside bg-white p-2.5 border border-black rounded leading-relaxed">
+                            <li>Buka WhatsApp di HP Anda</li>
+                            <li>Buka <b>Perangkat Tertaut</b> &gt; <b>Tautkan Perangkat</b></li>
+                            <li>Pilih <b>Tautkan dengan nomor telepon saja</b> di bagian bawah</li>
+                            <li>Masukkan kode 8 karakter di atas</li>
+                          </ol>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="p-3 bg-neutral-50 border-2 border-black rounded-xl space-y-2">
+                          <div className="space-y-0.5">
+                            <label className="text-xs font-black text-neutral-900 flex items-center gap-1.5">
+                              <Smartphone className="w-3.5 h-3.5 text-neutral-700" />
+                              Nomor HP Akun WhatsApp Anda:
+                            </label>
+                            <p className="text-[11px] text-neutral-600">
+                              Masukkan nomor WhatsApp yang sedang aktif di HP Anda untuk meminta kode tautan (8 digit).
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={pairingPhone}
+                              onChange={(e) => setPairingPhone(e.target.value)}
+                              placeholder="Contoh: 08123456789 atau 628xxx"
+                              className="flex-1 px-3 py-2 bg-white border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:ring-2 focus:ring-black"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleStartSession('pairing')}
+                              disabled={connectionStatus === 'connecting'}
+                              className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                            >
+                              {connectionStatus === 'connecting' ? (
+                                <>
+                                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                  <span>Meminta...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Smartphone className="w-3.5 h-3.5" />
+                                  <span>Minta Kode</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center py-3 text-neutral-600 text-[11px] leading-relaxed">
+                          <b>Tips:</b> Penautan via Kode Pairing lebih stabil, cepat, dan tidak mudah terputus dibandingkan scan kamera QR.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Konten Tab Scan QR Code */}
+                {authMethod === 'qr' && (
+                  <div className="space-y-3">
+                    {connectionStatus === 'qr_ready' && qrCodeDataUrl ? (
+                      <div className="flex flex-col items-center justify-center p-4 bg-neutral-50 border-2 border-black rounded-xl space-y-3">
+                        <div className="p-2 bg-white border-2 border-black rounded-lg shadow-[3px_3px_0px_#000]">
+                          <img
+                            src={qrCodeDataUrl}
+                            alt="WhatsApp QR Code"
+                            className="w-52 h-52 object-contain"
+                          />
+                        </div>
+                        <div className="text-center space-y-1">
+                          <p className="font-black text-xs text-neutral-900">Pindai QR ini di aplikasi WhatsApp HP kamu</p>
+                          <ol className="text-[11px] text-neutral-600 space-y-0.5 text-left list-decimal list-inside bg-white p-2.5 border border-black rounded">
+                            <li>Buka WhatsApp di HP Anda</li>
+                            <li>Ketuk <b>Titik Tiga</b> atau <b>Pengaturan</b></li>
+                            <li>Pilih <b>Perangkat Tertaut</b> &gt; <b>Tautkan Perangkat</b></li>
+                          </ol>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-6 px-4 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center space-y-2">
+                        <QrCode className="w-10 h-10 text-neutral-400" />
+                        <p className="font-bold text-xs text-neutral-700">Scan QR Code WhatsApp</p>
+                        <p className="text-[11px] text-neutral-500 max-w-xs">
+                          Klik tombol di bawah untuk membuat QR Code penautan WhatsApp.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleStartSession('qr')}
+                          disabled={connectionStatus === 'connecting'}
+                          className="mt-2 py-2 px-4 bg-black text-white border-2 border-black rounded-xl font-black text-xs shadow-[3px_3px_0px_#22c55e] hover:bg-neutral-800 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                        >
+                          {connectionStatus === 'connecting' ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin" />
+                              Sedang Menghubungkan...
+                            </>
+                          ) : (
+                            <>
+                              <QrCode className="w-4 h-4" />
+                              Mulai &amp; Buat QR Code
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
-
-          {/* Tombol Aksi Sesi */}
-          {connectionStatus !== 'connected' && (
-            <button
-              onClick={handleStartSession}
-              disabled={connectionStatus === 'connecting'}
-              className="w-full py-2.5 px-4 bg-black text-white border-2 border-black rounded-xl font-black text-xs md:text-sm shadow-[3px_3px_0px_#22c55e] hover:bg-neutral-800 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {connectionStatus === 'connecting' ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Sedang Menghubungkan...
-                </>
-              ) : (
-                <>
-                  <QrCode className="w-4 h-4" />
-                  Mulai &amp; Buat QR Code
-                </>
-              )}
-            </button>
-          )}
         </div>
 
         {/* Panel 2: Kunci 1 Nomor Target Terpantau */}
@@ -926,7 +1136,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 key={item.id}
                 className="bg-white border-2 border-black rounded-xl p-3 shadow-[3px_3px_0px_#000] flex flex-col justify-between space-y-3"
               >
-                {/* Header Metadata Kartu: Badge Nomor Pengirim Mencolok */}
+                {/* Header Metadata Kartu: Badge Nomor Pengirim */}
                 <div className="flex items-center justify-between gap-2 border-b-2 border-black pb-2">
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px]">
                     <Smartphone className="w-3.5 h-3.5 shrink-0" />
@@ -954,7 +1164,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   </span>
                 </div>
 
-                {/* Visual Media Preview (Langsung terbuka tanpa klik di HP) */}
+                {/* Visual Media Preview (Langsung terbuka) */}
                 <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
                   {item.mediaType === 'video' ? (
                     <video
