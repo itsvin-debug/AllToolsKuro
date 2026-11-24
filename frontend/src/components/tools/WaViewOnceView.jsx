@@ -107,6 +107,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const [pairingCode, setPairingCode] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
 
+  // Status pembuatan QR & Watchdog Timeout
+  const [qrGenerating, setQrGenerating] = useState(false);
+  const [qrWatchdogExpired, setQrWatchdogExpired] = useState(false);
+  const qrWatchdogRef = useRef(null);
+
   // 3. Kunci HANYA 1 nomor target aktif (Single Locked Target)
   const [lockedTarget, setLockedTarget] = useState(() => {
     const saved = localStorage.getItem(STORAGE_LOCKED_TARGET);
@@ -120,7 +125,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   const [inputTarget, setInputTarget] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState(null);
-  const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | pairing_ready | qr_ready | connected | reconnecting
+  const [socketConnected, setSocketConnected] = useState(false); // Terhubung ke socket server backend
+  const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | generating_qr | pairing_ready | qr_ready | connected | reconnecting
   const [connectedPhone, setConnectedPhone] = useState(null);
   const [backendError, setBackendError] = useState(null);
   const [vaultActivity, setVaultActivity] = useState(null); // Status aktivitas real-time deteksi/dekripsi
@@ -143,14 +149,41 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const socketRef = useRef(null);
   const backendUrl = import.meta.env.VITE_WA_BACKEND_URL || 'http://localhost:4000';
 
+  // Helper watchdog QR
+  const startQrWatchdog = () => {
+    if (qrWatchdogRef.current) clearTimeout(qrWatchdogRef.current);
+    setQrGenerating(true);
+    setQrWatchdogExpired(false);
+    qrWatchdogRef.current = setTimeout(() => {
+      setQrGenerating(false);
+      setQrWatchdogExpired(true);
+    }, 15000);
+  };
+
+  const clearQrWatchdog = () => {
+    if (qrWatchdogRef.current) {
+      clearTimeout(qrWatchdogRef.current);
+      qrWatchdogRef.current = null;
+    }
+    setQrGenerating(false);
+    setQrWatchdogExpired(false);
+  };
+
   // Muat galeri dari IndexedDB dan otomatis inisialisasi koneksi saat halaman dibuka
   useEffect(() => {
+    // Pre-warm backend Render Free Tier secara paralel seketika komponen dibuka
+    try {
+      fetch(`${backendUrl}/ping`, { mode: 'cors' }).catch(() => {});
+    } catch (_) {}
+
     loadSavedMedia();
     initSocketConnection();
 
     return () => {
+      clearQrWatchdog();
       if (socketRef.current) {
         socketRef.current.off('connect');
+        socketRef.current.off('disconnect');
         socketRef.current.off('connect_error');
         socketRef.current.off('session-status');
         socketRef.current.off('status');
@@ -188,7 +221,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   }
 
-  // Inisialisasi koneksi Socket.IO & Auto-Resume sesi (Anti-Scan Ulang)
+  // Inisialisasi koneksi Socket.IO & Auto-Resume sesi (Transports polling -> websocket)
   function initSocketConnection() {
     if (socketRef.current && socketRef.current.connected) return;
 
@@ -196,22 +229,25 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     setBackendError(null);
 
     const socket = io(backendUrl, {
-      transports: ['websocket', 'polling'],
-      timeout: 30000,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1500
+      transports: ['polling', 'websocket'],
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1500,
+      timeout: 20000
     });
 
     socketRef.current = socket;
 
-    // Setiap kali terhubung, kirim 'resume-session' beserta targetNumber dan confirmedLids dari localStorage
     socket.on('connect', () => {
+      setSocketConnected(true);
       setBackendError(null);
+
       const savedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
       let savedLids = [];
       try {
         savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
       } catch (_) {}
+
       socket.emit('resume-session', {
         sessionId,
         targetNumber: savedTarget ? normalizePhone(savedTarget) : null,
@@ -219,11 +255,16 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       });
     });
 
+    socket.on('disconnect', () => {
+      setSocketConnected(false);
+    });
+
     socket.on('connect_error', (err) => {
       console.warn('Socket connect error:', err?.message || err);
+      setSocketConnected(false);
       setConnectionStatus('connecting');
       setBackendError(
-        'Menghubungkan ke backend server... (jika backend Render sedang bangun dari mode tidur, proses membutuhkan waktu ~30 detik).'
+        'Membangunkan server backend Render... (jika server sedang tidur, proses butuh ~30-50 detik).'
       );
     });
 
@@ -242,6 +283,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         setPairingCode(code);
       }
 
+      if (status === 'generating_qr') {
+        setQrGenerating(true);
+      } else if (status === 'qr_ready') {
+        clearQrWatchdog();
+      } else if (status === 'pairing_ready') {
+        clearQrWatchdog();
+        setConnectedPhone(null);
+      }
+
       if (targetNumber && !lockedTargetRef.current) {
         const clean = normalizePhone(targetNumber);
         setLockedTarget(clean);
@@ -249,6 +299,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
 
       if (status === 'connected') {
+        clearQrWatchdog();
         setQrCodeDataUrl(null);
         setPairingCode('');
         setBackendError(null);
@@ -267,13 +318,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             confirmedLids: savedLids
           });
         }
-      } else if (status === 'pairing_ready') {
-        setConnectedPhone(null);
-      } else if (status === 'qr_ready') {
-        setConnectedPhone(null);
       } else if (status === 'reconnecting') {
         setQrCodeDataUrl(null);
       } else if (status === 'disconnected') {
+        clearQrWatchdog();
         setQrCodeDataUrl(null);
         setPairingCode('');
         setConnectedPhone(null);
@@ -289,10 +337,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       const phone = safeText(payload?.phone);
       if (status) setConnectionStatus(status);
       if (status === 'connected') {
+        clearQrWatchdog();
         setQrCodeDataUrl(null);
         setPairingCode('');
         if (phone) setConnectedPhone(phone);
       } else if (status === 'disconnected') {
+        clearQrWatchdog();
         setQrCodeDataUrl(null);
         setPairingCode('');
         setConnectedPhone(null);
@@ -303,6 +353,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     socket.on('pairing-code', (payload) => {
       const code = safeText(payload?.code);
       if (code) {
+        clearQrWatchdog();
         setPairingCode(code);
         setConnectionStatus('pairing_ready');
         setBackendError(null);
@@ -310,8 +361,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
     });
 
-    // Penerimaan QR Code
+    // Penerimaan QR Code Instan
     const handleQrReceive = async (payload) => {
+      clearQrWatchdog();
       const qr = typeof payload?.qr === 'string' ? payload.qr : '';
       const qrDataUrl = typeof payload?.qrDataUrl === 'string' ? payload.qrDataUrl : '';
 
@@ -322,7 +374,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         setQrCodeDataUrl(qrDataUrl);
       } else if (qr) {
         try {
-          const generated = await QRCode.toDataURL(qr, { margin: 1, scale: 7 });
+          const generated = await QRCode.toDataURL(qr, { margin: 1, width: 260, errorCorrectionLevel: 'M' });
           setQrCodeDataUrl(generated);
         } catch (_) {
           setQrCodeDataUrl(null);
@@ -347,6 +399,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     socket.on('target-updated', handleTargetSync);
 
     socket.on('session-error', (payload) => {
+      clearQrWatchdog();
       const message = safeText(payload?.message) || 'Terjadi kendala pada sesi WhatsApp.';
       setBackendError(message);
       triggerToast(message, 'error');
@@ -400,12 +453,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   }
 
   // Mulai Sesi WhatsApp: Mode Pairing Code atau QR Code
-  const handleStartSession = (method = authMethod) => {
+  const handleStartSession = (method = authMethod, forceNew = false) => {
     if (!socketRef.current || !socketRef.current.connected) {
       initSocketConnection();
     }
 
     if (method === 'pairing') {
+      clearQrWatchdog();
       const cleanPhone = normalizePhone(pairingPhone);
       if (!cleanPhone || cleanPhone.length < 9) {
         triggerToast('Masukkan nomor HP WhatsApp Anda yang valid (minimal 9 digit).', 'error');
@@ -421,11 +475,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           sessionId,
           targetNumber: lockedTargetRef.current,
           authMethod: 'pairing',
-          pairingPhone: cleanPhone
+          pairingPhone: cleanPhone,
+          forceNew
         });
       }
     } else {
-      setConnectionStatus('connecting');
+      // Mode QR Code: Aktifkan watchdog 15 detik
+      startQrWatchdog();
+      setConnectionStatus('generating_qr');
       setBackendError(null);
       setQrCodeDataUrl(null);
 
@@ -433,8 +490,20 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.emit('start-session', {
           sessionId,
           targetNumber: lockedTargetRef.current,
-          authMethod: 'qr'
+          authMethod: 'qr',
+          forceNew
         });
+      }
+    }
+  };
+
+  // Ganti Tab Mode Penautan (Otomatis reset watchdog agar user tidak terkunci)
+  const switchAuthMethod = (method) => {
+    setAuthMethod(method);
+    if (connectionStatus !== 'connected') {
+      clearQrWatchdog();
+      if (connectionStatus === 'generating_qr') {
+        setConnectionStatus('disconnected');
       }
     }
   };
@@ -454,6 +523,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   // Putuskan Sesi WhatsApp (Logout)
   const handleLogoutSession = () => {
+    clearQrWatchdog();
     if (socketRef.current) {
       socketRef.current.emit('logout-session', { sessionId });
     }
@@ -637,10 +707,16 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 Menunggu Scan QR
               </span>
             )}
-            {connectionStatus === 'connecting' && (
+            {(connectionStatus === 'generating_qr' || qrGenerating) && (
+              <span className="px-2.5 py-1 bg-amber-200 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                Membuat QR...
+              </span>
+            )}
+            {connectionStatus === 'connecting' && !qrGenerating && (
               <span className="px-2.5 py-1 bg-blue-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[2px_2px_0px_#000] flex items-center gap-1.5">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                Menghubungkan...
+                {socketConnected ? 'Inisialisasi Sesi...' : 'Menghubungkan Server...'}
               </span>
             )}
             {connectionStatus === 'reconnecting' && (
@@ -649,9 +725,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 Menyambung Ulang...
               </span>
             )}
-            {connectionStatus === 'disconnected' && (
+            {connectionStatus === 'disconnected' && !qrGenerating && (
               <span className="px-2.5 py-1 bg-neutral-200 text-neutral-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000]">
-                Terputus
+                {socketConnected ? 'Siap Ditautkan' : 'Terputus'}
               </span>
             )}
           </div>
@@ -719,7 +795,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 <div className="flex border-2 border-black rounded-lg overflow-hidden text-xs font-bold">
                   <button
                     type="button"
-                    onClick={() => setAuthMethod('pairing')}
+                    onClick={() => switchAuthMethod('pairing')}
                     className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 ${
                       authMethod === 'pairing'
                         ? 'bg-black text-white font-black'
@@ -734,7 +810,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAuthMethod('qr')}
+                    onClick={() => switchAuthMethod('qr')}
                     className={`flex-1 py-1.5 px-2 text-center border-l-2 border-black transition-colors flex items-center justify-center gap-1.5 ${
                       authMethod === 'qr'
                         ? 'bg-black text-white font-black'
@@ -815,10 +891,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                             <button
                               type="button"
                               onClick={() => handleStartSession('pairing')}
-                              disabled={connectionStatus === 'connecting'}
+                              disabled={connectionStatus === 'connecting' && !socketConnected}
                               className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50"
                             >
-                              {connectionStatus === 'connecting' ? (
+                              {connectionStatus === 'connecting' && !socketConnected ? (
                                 <>
                                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                                   <span>Meminta...</span>
@@ -841,7 +917,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   </div>
                 )}
 
-                {/* Konten Tab Scan QR Code */}
+                {/* Konten Tab Scan QR Code (Instan 1-2 Detik & Anti-Stuck Watchdog) */}
                 {authMethod === 'qr' && (
                   <div className="space-y-3">
                     {connectionStatus === 'qr_ready' && qrCodeDataUrl ? (
@@ -861,6 +937,48 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                             <li>Pilih <b>Perangkat Tertaut</b> &gt; <b>Tautkan Perangkat</b></li>
                           </ol>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => handleStartSession('qr', true)}
+                          className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-neutral-800 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-neutral-100 active:translate-x-[1px] active:translate-y-[1px]"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Muat Ulang QR Baru
+                        </button>
+                      </div>
+                    ) : qrWatchdogExpired ? (
+                      <div className="p-5 bg-amber-50 border-2 border-black rounded-xl space-y-3 text-center">
+                        <div className="flex items-center justify-center gap-2 text-amber-900 font-bold text-xs">
+                          <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+                          <span>Pembuatan QR memakan waktu lebih lama dari biasanya.</span>
+                        </div>
+                        <p className="text-[11px] text-amber-800 leading-relaxed">
+                          Server backend Render mungkin baru bangun atau jaringan sedang padat. Silakan coba buat ulang sekarang.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleStartSession('qr', true)}
+                          className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] inline-flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Coba Buat QR Lagi
+                        </button>
+                      </div>
+                    ) : qrGenerating || connectionStatus === 'generating_qr' ? (
+                      <div className="flex flex-col items-center justify-center py-8 px-4 bg-neutral-50 border-2 border-dashed border-neutral-400 rounded-xl text-center space-y-3">
+                        <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin" />
+                        <div className="space-y-1">
+                          <p className="font-black text-xs text-neutral-900">
+                            {socketConnected
+                              ? 'Membuat QR Code WhatsApp...'
+                              : 'Membangunkan server backend Render (maks ~50 detik saat server tidur)...'}
+                          </p>
+                          <p className="text-[11px] text-neutral-500 max-w-xs">
+                            {socketConnected
+                              ? 'QR Code akan muncul dalam 1–2 detik.'
+                              : 'Mohon tunggu sebentar, server sedang diaktifkan secara otomatis.'}
+                          </p>
+                        </div>
                       </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center py-6 px-4 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center space-y-2">
@@ -872,20 +990,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                         <button
                           type="button"
                           onClick={() => handleStartSession('qr')}
-                          disabled={connectionStatus === 'connecting'}
-                          className="mt-2 py-2 px-4 bg-black text-white border-2 border-black rounded-xl font-black text-xs shadow-[3px_3px_0px_#22c55e] hover:bg-neutral-800 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                          className="mt-2 py-2 px-4 bg-black text-white border-2 border-black rounded-xl font-black text-xs shadow-[3px_3px_0px_#22c55e] hover:bg-neutral-800 active:translate-x-[1px] active:translate-y-[1px] transition-all flex items-center justify-center gap-2"
                         >
-                          {connectionStatus === 'connecting' ? (
-                            <>
-                              <RefreshCw className="w-4 h-4 animate-spin" />
-                              Sedang Menghubungkan...
-                            </>
-                          ) : (
-                            <>
-                              <QrCode className="w-4 h-4" />
-                              Mulai &amp; Buat QR Code
-                            </>
-                          )}
+                          <QrCode className="w-4 h-4" />
+                          Mulai &amp; Buat QR Code
                         </button>
                       </div>
                     )}
@@ -1031,23 +1139,44 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           </div>
         </div>
 
-        {/* Baris Status Aktivitas Real-Time Vault (Wajib Terlihat) */}
+        {/* Baris Status Aktivitas Real-Time Vault */}
         <div className="flex items-center gap-2 px-3 py-2 bg-neutral-100 border-2 border-black rounded-lg text-xs font-mono shadow-[2px_2px_0px_#000] text-neutral-800">
-          <span className={`w-2 h-2 rounded-full shrink-0 ${vaultActivity ? 'bg-emerald-500 animate-ping' : connectionStatus === 'connected' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${
+              vaultActivity
+                ? 'bg-emerald-500 animate-ping'
+                : connectionStatus === 'connected'
+                ? 'bg-emerald-500'
+                : socketConnected
+                ? 'bg-emerald-400'
+                : 'bg-amber-500 animate-pulse'
+            }`}
+          />
           <Activity className="w-3.5 h-3.5 text-neutral-700 shrink-0" />
           {vaultActivity && (
             <span className="font-bold text-neutral-500 shrink-0">
-              {new Date(vaultActivity.time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}:
+              {new Date(vaultActivity.time).toLocaleTimeString('id-ID', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+              })}
+              :
             </span>
           )}
           <span className="truncate font-semibold">
             {vaultActivity && safeText(vaultActivity.text)
               ? safeText(vaultActivity.text)
               : connectionStatus === 'connected'
-                ? lockedTarget
-                  ? `Server aktif memantau pesan View Once dari +${safeText(lockedTarget)} (menunggu kiriman media...)`
-                  : 'WhatsApp terhubung. Silakan kunci 1 nomor target untuk mulai memantau.'
-                : 'Menghubungkan ke backend server WhatsApp...'}
+              ? lockedTarget
+                ? `Server aktif memantau pesan View Once dari +${safeText(lockedTarget)} (menunggu kiriman media...)`
+                : 'WhatsApp terhubung. Silakan kunci 1 nomor target untuk mulai memantau.'
+              : qrGenerating || connectionStatus === 'generating_qr'
+              ? socketConnected
+                ? 'Membuat QR Code WhatsApp baru...'
+                : 'Membangunkan server backend Render (maks ~50 detik saat server tidur)...'
+              : socketConnected
+              ? 'Terhubung ke server backend. Siap menautkan perangkat WhatsApp.'
+              : 'Menghubungkan ke backend server WhatsApp...'}
           </span>
         </div>
 
@@ -1164,7 +1293,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   </span>
                 </div>
 
-                {/* Visual Media Preview (Langsung terbuka) */}
+                {/* Visual Media Preview */}
                 <div className="relative rounded-lg overflow-hidden border-2 border-black bg-black aspect-video flex items-center justify-center">
                   {item.mediaType === 'video' ? (
                     <video
