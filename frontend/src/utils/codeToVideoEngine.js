@@ -174,12 +174,28 @@ function createCloudTexture() {
 
 /**
  * Master Compositor (True Full-Screen Cinematic + Optional 3D Stage)
+ * Arsitektur Terpisah: Canvas Preview DOM adalah 2D murni, Three.js berjalan di offscreen canvas independen.
  */
 export class CodeToVideoCompositor {
   constructor(containerCanvas, width = 1280, height = 720) {
     this.containerCanvas = containerCanvas;
     this.width = width;
     this.height = height;
+
+    if (this.containerCanvas) {
+      this.containerCanvas.width = width;
+      this.containerCanvas.height = height;
+      // Konteks 2D DOM Preview Canvas - JANGAN pernah diikat ke WebGL!
+      this.previewCtx = this.containerCanvas.getContext('2d', { alpha: false });
+    } else {
+      this.previewCtx = null;
+    }
+
+    // Master Output Canvas (dimensi piksel native eksak)
+    this.masterCanvas = document.createElement('canvas');
+    this.masterCanvas.width = width;
+    this.masterCanvas.height = height;
+    this.masterCtx = this.masterCanvas.getContext('2d', { alpha: false });
 
     // Buffer internal hasil render kode pengguna
     this.codeCanvas = document.createElement('canvas');
@@ -193,22 +209,21 @@ export class CodeToVideoCompositor {
     this.hudCanvas.height = height;
     this.hudCtx = this.hudCanvas.getContext('2d', { alpha: true });
 
-    // Master Output Canvas (dimensi piksel native eksak)
-    this.masterCanvas = document.createElement('canvas');
-    this.masterCanvas.width = width;
-    this.masterCanvas.height = height;
-    this.masterCtx = this.masterCanvas.getContext('2d', { alpha: false });
+    // Three.js 3D Engine di Offscreen Canvas Khusus (Bebas Konflik Konteks WebGL)
+    this.offscreenThreeCanvas = document.createElement('canvas');
+    this.offscreenThreeCanvas.width = width;
+    this.offscreenThreeCanvas.height = height;
 
-    // Three.js 3D Engine
     this.renderer = new THREE.WebGLRenderer({
-      canvas: this.containerCanvas,
+      canvas: this.offscreenThreeCanvas,
       antialias: true,
       alpha: true,
       preserveDrawingBuffer: true,
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(width, height, false);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(1);
+    this.renderer.setClearColor(0x000000, 0);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
@@ -222,22 +237,40 @@ export class CodeToVideoCompositor {
     };
     this.cloudTexture = createCloudTexture();
 
+    this.latestBitmap = null;
+
     this.initBackgroundLayer();
     this.initCodePlane();
     this.initAtmosphericEffects();
+  }
+
+  updateBitmap(bmp) {
+    if (this.latestBitmap && this.latestBitmap !== bmp) {
+      try { this.latestBitmap.close(); } catch {}
+    }
+    this.latestBitmap = bmp;
   }
 
   resize(width, height) {
     this.width = width;
     this.height = height;
 
+    if (this.containerCanvas) {
+      this.containerCanvas.width = width;
+      this.containerCanvas.height = height;
+    }
+
+    this.masterCanvas.width = width;
+    this.masterCanvas.height = height;
+
     this.codeCanvas.width = width;
     this.codeCanvas.height = height;
 
     this.hudCanvas.width = width;
     this.hudCanvas.height = height;
-    this.masterCanvas.width = width;
-    this.masterCanvas.height = height;
+
+    this.offscreenThreeCanvas.width = width;
+    this.offscreenThreeCanvas.height = height;
 
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
@@ -486,7 +519,7 @@ export class CodeToVideoCompositor {
     const ctx = this.hudCtx;
     ctx.save();
 
-    let x = 40;
+    let x = 44;
     let y = this.height - 100;
     let align = 'left';
 
@@ -561,31 +594,31 @@ export class CodeToVideoCompositor {
    * Render satu frame komprehensif
    * Mendukung TRUE FULL-SCREEN CINEMATIC (stage3d: false) & OPTIONAL 3D TV STAGE (stage3d: true)
    */
-  renderFrame(t, settings) {
+  renderFrame(t, settings = {}) {
     const is3dStage = Boolean(settings?.stage3d);
+    const source = this.latestBitmap || this.codeCanvas;
 
     if (!is3dStage) {
-      // --- MODE FULLSCREEN SINEMATIK (DEFAULT: TANPA BINGKAI TV, TANPA BORDER, 100% PENUH) ---
+      // --- MODE FULLSCREEN SINEMATIK (DEFAULT: 100% PENUH, TANPA BINGKAI TV, BEBAS BORDER) ---
       this.masterCtx.clearRect(0, 0, this.width, this.height);
 
       // 1. Gambar canvas kode pengguna langsung menutupi 100% kanvas
-      this.masterCtx.drawImage(this.codeCanvas, 0, 0, this.width, this.height);
+      if (source) {
+        this.masterCtx.drawImage(source, 0, 0, this.width, this.height);
+      }
 
-      // 2. Efek Partikel & Awan jika diaktifkan pengguna (komposabel di atas Full-Screen)
+      // 2. Efek Partikel & Awan jika diaktifkan (komposabel di atas Full-Screen via offscreenThreeCanvas)
       if (settings?.clouds || settings?.particles) {
-        // Matikan code group dan background quad di Three.js agar render partikel/awan transparan
         this.codeGroup.visible = false;
         this.bgMesh.visible = false;
 
         this.updateScene(t, settings);
         this.renderer.render(this.scene, this.camera);
 
-        // Komposisikan lapisan atmosferik di atas video dengan blending halus
         this.masterCtx.save();
-        this.masterCtx.drawImage(this.containerCanvas, 0, 0, this.width, this.height);
+        this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
         this.masterCtx.restore();
 
-        // Kembalikan visibilitas untuk mode 3D
         this.codeGroup.visible = true;
         this.bgMesh.visible = true;
       }
@@ -617,22 +650,26 @@ export class CodeToVideoCompositor {
         this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
       }
 
-      // Tampilkan hasil master ke container canvas pratinjau
-      const cCtx = this.containerCanvas.getContext('2d');
-      if (cCtx) {
-        cCtx.clearRect(0, 0, this.width, this.height);
-        cCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
+      // 6. Blit masterCanvas ke DOM Preview Canvas jika tersedia
+      if (this.previewCtx) {
+        this.previewCtx.clearRect(0, 0, this.width, this.height);
+        this.previewCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
       }
     } else {
       // --- MODE BINGKAI TV / PANGGUNG 3D (ON) ---
+      if (this.latestBitmap) {
+        this.codeCtx.clearRect(0, 0, this.width, this.height);
+        this.codeCtx.drawImage(this.latestBitmap, 0, 0, this.width, this.height);
+      }
+      this.codeTexture.needsUpdate = true;
+
       this.codeGroup.visible = true;
       this.bgMesh.visible = true;
 
       this.updateBackground(settings);
       this.updateScene(t, settings);
-      this.codeTexture.needsUpdate = true;
 
-      // Render Three.js 3D TV Frame
+      // Render Three.js 3D TV Frame ke offscreenThreeCanvas
       this.renderer.render(this.scene, this.camera);
 
       // Render HUD Tipografi
@@ -640,14 +677,24 @@ export class CodeToVideoCompositor {
 
       // Komposisikan ke Master Output Canvas
       this.masterCtx.clearRect(0, 0, this.width, this.height);
-      this.masterCtx.drawImage(this.containerCanvas, 0, 0, this.width, this.height);
+      this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
       if (settings.hudEnabled) {
         this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
+      }
+
+      // Blit ke DOM Preview Canvas
+      if (this.previewCtx) {
+        this.previewCtx.clearRect(0, 0, this.width, this.height);
+        this.previewCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
       }
     }
   }
 
   dispose() {
+    if (this.latestBitmap) {
+      try { this.latestBitmap.close(); } catch {}
+      this.latestBitmap = null;
+    }
     this.renderer.dispose();
     this.particleGeo.dispose();
     this.particleMat.dispose();
@@ -668,34 +715,77 @@ export class CodeSandboxRunner {
     this.isHtmlMode = false;
     this.lastT = 0;
     this.renderStepResolver = null;
+    this.hasReceivedFirstFrame = false;
 
-    // Siapkan Iframe sandbox
+    // Siapkan Iframe sandbox dengan visibilitas penuh agar browser tidak men-throttle rAF
     this.iframe = document.createElement('iframe');
     this.iframe.style.position = 'fixed';
-    this.iframe.style.top = '-9999px';
-    this.iframe.style.left = '-9999px';
+    this.iframe.style.left = '-20000px';
+    this.iframe.style.top = '-20000px';
     this.iframe.style.width = '1280px';
     this.iframe.style.height = '720px';
+    this.iframe.style.opacity = '0.01';
+    this.iframe.style.pointerEvents = 'none';
     this.iframe.style.border = 'none';
+    this.iframe.style.visibility = 'visible';
+    this.iframe.style.zIndex = '-99999';
     this.iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
     document.body.appendChild(this.iframe);
 
     // Tangkap balasan frame deterministik dari iframe
     this.handleMessage = (e) => {
       const data = e.data;
-      if (data && data.type === 'ctv-render-frame') {
+      if (!data) return;
+
+      if (data.type === 'ctv-render-frame') {
         if (this.renderStepResolver) {
           this.renderStepResolver(data.bitmap || null);
           this.renderStepResolver = null;
         }
+      } else if (data.type === 'ctv-error') {
+        this.lastError = data.error;
       }
     };
     window.addEventListener('message', this.handleMessage);
   }
 
+  findPrimaryCanvas(doc) {
+    if (!doc) return null;
+    const canvases = doc.querySelectorAll('canvas');
+    if (!canvases || canvases.length === 0) return null;
+    if (canvases.length === 1) return canvases[0];
+
+    let largest = null;
+    let maxArea = -1;
+    for (let i = 0; i < canvases.length; i++) {
+      const c = canvases[i];
+      const area = (c.width || c.clientWidth || 0) * (c.height || c.clientHeight || 0);
+      if (area > maxArea) {
+        maxArea = area;
+        largest = c;
+      }
+    }
+    return largest;
+  }
+
+  resize(width, height) {
+    if (this.iframe) {
+      this.iframe.style.width = `${width}px`;
+      this.iframe.style.height = `${height}px`;
+      try {
+        this.iframe.contentWindow?.postMessage({
+          type: 'ctv-resize',
+          width,
+          height
+        }, '*');
+      } catch {}
+    }
+  }
+
   updateCode(code, type = 'auto') {
     this.lastError = null;
     this.code = code;
+    this.hasReceivedFirstFrame = false;
 
     const trimmed = (code || '').trim();
     const isHtml =
@@ -732,7 +822,12 @@ export class CodeSandboxRunner {
         this.compiledCanvasFn = null;
       }
     } else {
-      // Injeksi Virtual Clock Controller Bridge ke dalam Iframe
+      if (this.iframe && this.compositor) {
+        this.iframe.style.width = `${this.compositor.width}px`;
+        this.iframe.style.height = `${this.compositor.height}px`;
+      }
+
+      // Injeksi Virtual Clock Controller Bridge + WebGL Preserve Drawing Buffer
       const bridgeScript = `
         <script>
         (function() {
@@ -743,6 +838,16 @@ export class CodeSandboxRunner {
           var _origPerfNow = performance.now.bind(performance);
           var _origDateNow = Date.now.bind(Date);
 
+          // 1. Bungkus WebGL getContext untuk mengaktifkan preserveDrawingBuffer: true
+          var _origGetContext = HTMLCanvasElement.prototype.getContext;
+          HTMLCanvasElement.prototype.getContext = function(type, attributes) {
+            if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
+              attributes = Object.assign({}, attributes, { preserveDrawingBuffer: true });
+            }
+            return _origGetContext.call(this, type, attributes);
+          };
+
+          // 2. Intersepsi rAF & Virtual Clock
           window.requestAnimationFrame = function(cb) {
             if (!_virtualMode) return _origRAF(cb);
             _rafQueue.push(cb);
@@ -759,6 +864,33 @@ export class CodeSandboxRunner {
             return _virtualTime;
           };
 
+          // Tangkap error runtime di dalam iframe
+          window.addEventListener('error', function(e) {
+            window.parent.postMessage({
+              type: 'ctv-error',
+              error: 'Iframe Runtime: ' + (e.message || 'Unknown error')
+            }, '*');
+          });
+
+          // Helper pencari canvas utama
+          function findCanvas() {
+            var canvases = document.querySelectorAll('canvas');
+            if (!canvases || canvases.length === 0) return null;
+            if (canvases.length === 1) return canvases[0];
+            var largest = null;
+            var maxArea = -1;
+            for (var i = 0; i < canvases.length; i++) {
+              var c = canvases[i];
+              var area = (c.width || c.clientWidth || 0) * (c.height || c.clientHeight || 0);
+              if (area > maxArea) {
+                maxArea = area;
+                largest = c;
+              }
+            }
+            return largest;
+          }
+
+          // Listener Pesan Parent
           window.addEventListener('message', async function(e) {
             var data = e.data;
             if (!data || !data.type) return;
@@ -768,7 +900,7 @@ export class CodeSandboxRunner {
               document.documentElement.style.height = data.height + 'px';
               document.body.style.width = data.width + 'px';
               document.body.style.height = data.height + 'px';
-              var c = document.querySelector('canvas');
+              var c = findCanvas();
               if (c) { c.width = data.width; c.height = data.height; }
               window.dispatchEvent(new Event('resize'));
             } else if (data.type === 'ctv-render-start') {
@@ -780,6 +912,8 @@ export class CodeSandboxRunner {
               _rafQueue = [];
             } else if (data.type === 'ctv-render-step') {
               _virtualTime = data.timeMs;
+
+              // Majukan CSS Animations jika ada
               if (document.getAnimations) {
                 try {
                   document.getAnimations().forEach(function(anim) {
@@ -788,19 +922,22 @@ export class CodeSandboxRunner {
                   });
                 } catch(err) {}
               }
-              var cbs = _rafQueue.slice();
-              _rafQueue = [];
-              for (var i = 0; i < cbs.length; i++) {
-                try { cbs[i](_virtualTime); } catch(err) {}
+
+              // Jalankan antrean rAF deterministik dengan splice
+              var currentBatch = _rafQueue.splice(0, _rafQueue.length);
+              for (var i = 0; i < currentBatch.length; i++) {
+                try { currentBatch[i](_virtualTime); } catch(err) {}
               }
 
-              var canvas = document.querySelector('canvas');
+              // Tangkap bitmap canvas utama
+              var canvas = findCanvas();
               var bmp = null;
               if (canvas && canvas.width > 0 && canvas.height > 0) {
                 try {
                   bmp = await createImageBitmap(canvas);
                 } catch(err) {}
               }
+
               window.parent.postMessage({
                 type: 'ctv-render-frame',
                 frame: data.frame,
@@ -849,6 +986,7 @@ export class CodeSandboxRunner {
         }
 
         this.compiledCanvasFn(c, ctx, c.width, c.height, t, dt, frame, t, window);
+        this.hasReceivedFirstFrame = true;
       } catch (err) {
         this.lastError = `Runtime Error: ${err.message}`;
       }
@@ -856,8 +994,14 @@ export class CodeSandboxRunner {
       try {
         const iframeDoc = this.iframe.contentDocument || this.iframe.contentWindow?.document;
         if (iframeDoc) {
-          const innerCanvas = iframeDoc.querySelector('canvas');
+          const innerCanvas = this.findPrimaryCanvas(iframeDoc);
           if (innerCanvas && innerCanvas.width > 0 && innerCanvas.height > 0) {
+            this.compositor.codeCtx.clearRect(
+              0,
+              0,
+              this.compositor.codeCanvas.width,
+              this.compositor.codeCanvas.height
+            );
             this.compositor.codeCtx.drawImage(
               innerCanvas,
               0,
@@ -865,6 +1009,7 @@ export class CodeSandboxRunner {
               this.compositor.codeCanvas.width,
               this.compositor.codeCanvas.height
             );
+            this.hasReceivedFirstFrame = true;
           }
         }
       } catch {
@@ -933,14 +1078,16 @@ export class CodeSandboxRunner {
 
       const bitmap = await bitmapPromise;
       if (bitmap) {
+        this.compositor.codeCtx.clearRect(0, 0, targetW, targetH);
         this.compositor.codeCtx.drawImage(bitmap, 0, 0, targetW, targetH);
         bitmap.close();
       } else {
         // Fallback: baca canvas DOM langsung
         try {
           const doc = this.iframe.contentDocument || this.iframe.contentWindow?.document;
-          const c = doc?.querySelector('canvas');
+          const c = this.findPrimaryCanvas(doc);
           if (c && c.width > 0 && c.height > 0) {
+            this.compositor.codeCtx.clearRect(0, 0, targetW, targetH);
             this.compositor.codeCtx.drawImage(c, 0, 0, targetW, targetH);
           }
         } catch {}
@@ -990,6 +1137,7 @@ export async function exportVideo({
 
   // Sesuaikan resolusi master compositor dan buffer kode ke piksel eksak
   compositor.resize(width, height);
+  sandbox.resize(width, height);
 
   const supportsWebCodecs = typeof window !== 'undefined' && 'VideoEncoder' in window && 'VideoFrame' in window;
 

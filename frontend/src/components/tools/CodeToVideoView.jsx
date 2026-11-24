@@ -180,6 +180,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (!compositorRef.current) return;
     const { width, height } = computeTargetDimensions('720p', exportAspect);
     compositorRef.current.resize(width, height);
+    sandboxRef.current?.resize(width, height);
   }, [exportAspect]);
 
   // Terapkan perubahan kode ke Sandbox
@@ -231,6 +232,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (sandboxRef.current) sandboxRef.current.updateCode(tmpl.code, 'canvas');
     } else {
       setEditorMode('hybrid');
+      setHybridTab('all');
       setCodeHtml(tmpl.html || '');
       setCodeCss(tmpl.css || '');
       setCodeJs(tmpl.js || '');
@@ -778,11 +780,21 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             ref={viewportRef}
             className="bg-black border-2 border-black shadow-[4px_4px_0px_#000] p-2 relative flex flex-col items-center justify-center overflow-hidden"
           >
-            <div className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden">
+            <div className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden min-h-[220px]">
               <canvas
                 ref={canvasRef}
                 className="w-full h-auto object-contain max-h-[420px] rounded-sm"
               />
+              {!isPlaying && (
+                <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 text-yellow-300 border border-yellow-400 font-mono text-[10px] font-bold">
+                  PAUSED
+                </div>
+              )}
+              {isRendering && (
+                <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600 text-white font-mono text-[10px] font-black animate-pulse">
+                  REC ●
+                </div>
+              )}
             </div>
 
             {/* Viewport Controls Bar */}

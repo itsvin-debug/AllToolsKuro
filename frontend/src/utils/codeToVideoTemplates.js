@@ -38,19 +38,6 @@ export const CODE_TEMPLATES = [
     },
     html: `<div class="ad-container">
   <canvas id="ad-canvas"></canvas>
-  <div class="ad-content">
-    <div class="badge-pill">LIMITED TIME &bull; 50% OFF</div>
-    <h1 class="ad-title">CYBER DROP <span class="highlight">X-01</span></h1>
-    <p class="ad-desc">Sneaker futuristik dengan bantalan ionik dan material serat karbon quantum.</p>
-    <div class="price-row">
-      <span class="old-price">$299.00</span>
-      <span class="new-price">$149.00</span>
-    </div>
-    <div class="cta-button">
-      <span>DAPATKAN SEKARANG</span>
-      <div class="cta-glow"></div>
-    </div>
-  </div>
 </div>`,
     css: `* { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
@@ -59,105 +46,18 @@ html, body {
   overflow: hidden;
   background: #080711;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #fff;
 }
 .ad-container {
-  position: relative;
   width: 100vw;
   height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
 }
 #ad-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
   height: 100%;
   display: block;
-  z-index: 1;
-}
-.ad-content {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 36px 44px;
-  background: rgba(14, 12, 28, 0.78);
-  border: 2px solid rgba(0, 240, 255, 0.45);
-  border-radius: 28px;
-  backdrop-filter: blur(20px);
-  box-shadow: 0 25px 60px rgba(0,0,0,0.85), 0 0 35px rgba(0,240,255,0.25);
-  max-width: 600px;
-}
-.badge-pill {
-  font-size: 13px;
-  font-weight: 900;
-  letter-spacing: 3px;
-  color: #ff007f;
-  background: rgba(255, 0, 127, 0.16);
-  border: 1.5px solid #ff007f;
-  padding: 6px 18px;
-  border-radius: 999px;
-  margin-bottom: 18px;
-  box-shadow: 0 0 18px rgba(255, 0, 127, 0.35);
-}
-.ad-title {
-  font-size: 52px;
-  font-weight: 900;
-  letter-spacing: -1.5px;
-  line-height: 1.05;
-  margin-bottom: 14px;
-}
-.highlight {
-  background: linear-gradient(90deg, #00f0ff, #ff007f);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.ad-desc {
-  font-size: 15px;
-  color: #a8a8c8;
-  max-width: 460px;
-  line-height: 1.55;
-  margin-bottom: 26px;
-}
-.price-row {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  margin-bottom: 26px;
-}
-.old-price {
-  font-size: 20px;
-  color: #666;
-  text-decoration: line-through;
-  font-family: monospace;
-}
-.new-price {
-  font-size: 42px;
-  font-weight: 900;
-  color: #00ff88;
-  font-family: monospace;
-  text-shadow: 0 0 24px rgba(0,255,136,0.5);
-}
-.cta-button {
-  position: relative;
-  padding: 16px 42px;
-  background: linear-gradient(90deg, #00f0ff, #7928ca);
-  border: none;
-  border-radius: 999px;
-  font-weight: 900;
-  letter-spacing: 2px;
-  font-size: 15px;
-  color: #000;
-  box-shadow: 0 0 30px rgba(0,240,255,0.7);
-  cursor: pointer;
-  overflow: hidden;
 }`,
-    js: `const canvas = document.getElementById('ad-canvas');
+    js: `const canvas = document.getElementById('ad-canvas') || document.querySelector('canvas');
 if (canvas) {
   const ctx = canvas.getContext('2d');
   function resize() {
@@ -167,41 +67,182 @@ if (canvas) {
   resize();
   window.addEventListener('resize', resize);
 
+  // Inisialisasi Partikel Cyber
   const particles = [];
-  for (let i = 0; i < 70; i++) {
+  for (let i = 0; i < 60; i++) {
     particles.push({
-      x: Math.random() * 1280,
-      y: Math.random() * 720,
+      x: Math.random() * 1920,
+      y: Math.random() * 1080,
       r: Math.random() * 3 + 1,
-      vx: (Math.random() - 0.5) * 1.4,
-      vy: (Math.random() - 0.5) * 1.4,
+      vx: (Math.random() - 0.5) * 1.2,
+      vy: (Math.random() - 0.5) * 1.2,
       color: Math.random() > 0.5 ? '#00f0ff' : '#ff007f'
     });
   }
 
-  function loop() {
-    ctx.fillStyle = 'rgba(8, 7, 17, 0.22)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  function loop(now) {
+    const t = (now || performance.now()) * 0.001;
+    const w = canvas.width;
+    const h = canvas.height;
+    const scale = Math.min(w / 1280, h / 720);
 
+    // 1. Latar Belakang Gradien Ruang Angkasa
+    const bgGrad = ctx.createRadialGradient(w * 0.5, h * 0.45, 10, w * 0.5, h * 0.5, Math.max(w, h) * 0.7);
+    bgGrad.addColorStop(0, '#150f28');
+    bgGrad.addColorStop(0.6, '#080712');
+    bgGrad.addColorStop(1, '#040308');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. Partikel Ambien
     particles.forEach(p => {
       p.x += p.vx;
       p.y += p.vy;
-      if (p.x < 0) p.x = canvas.width;
-      if (p.x > canvas.width) p.x = 0;
-      if (p.y < 0) p.y = canvas.height;
-      if (p.y > canvas.height) p.y = 0;
+      if (p.x < 0) p.x = w;
+      if (p.x > w) p.x = 0;
+      if (p.y < 0) p.y = h;
+      if (p.y > h) p.y = 0;
 
+      ctx.save();
       ctx.fillStyle = p.color;
       ctx.shadowColor = p.color;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = 8 * scale;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, p.r * scale, 0, Math.PI * 2);
       ctx.fill();
+      ctx.restore();
     });
+
+    // 3. Kartu Promo Sinematik di Tengah
+    const cardW = Math.min(w * 0.88, 540 * scale);
+    const cardH = Math.min(h * 0.88, 440 * scale);
+    const cardX = (w - cardW) / 2;
+    const cardY = (h - cardH) / 2;
+
+    ctx.save();
+    // Bayangan Kartu
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(cardX + 8 * scale, cardY + 8 * scale, cardW, cardH);
+
+    // Kotak Kaca Kartu
+    ctx.fillStyle = 'rgba(14, 12, 28, 0.86)';
+    ctx.fillRect(cardX, cardY, cardW, cardH);
+    ctx.strokeStyle = 'rgba(0, 240, 255, 0.5)';
+    ctx.lineWidth = 2 * scale;
+    ctx.strokeRect(cardX, cardY, cardW, cardH);
+
+    // Garis Aksen Atas Neon
+    const lineGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY);
+    lineGrad.addColorStop(0, '#00f0ff');
+    lineGrad.addColorStop(0.5, '#ff007f');
+    lineGrad.addColorStop(1, '#00f0ff');
+    ctx.strokeStyle = lineGrad;
+    ctx.lineWidth = 3.5 * scale;
+    ctx.beginPath();
+    ctx.moveTo(cardX, cardY);
+    ctx.lineTo(cardX + cardW, cardY);
+    ctx.stroke();
+
+    const cx = w * 0.5;
+
+    // Badge Pill
+    const badgeY = cardY + 48 * scale;
+    ctx.font = \`900 \${11 * scale}px monospace\`;
+    ctx.textAlign = 'center';
+    const badgeText = 'LIMITED TIME • 50% OFF';
+    const badgeWidth = ctx.measureText(badgeText).width + 28 * scale;
+    const badgeHeight = 26 * scale;
+
+    ctx.fillStyle = 'rgba(255, 0, 127, 0.2)';
+    ctx.fillRect(cx - badgeWidth / 2, badgeY - 18 * scale, badgeWidth, badgeHeight);
+    ctx.strokeStyle = '#ff007f';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.strokeRect(cx - badgeWidth / 2, badgeY - 18 * scale, badgeWidth, badgeHeight);
+
+    ctx.fillStyle = '#ff007f';
+    ctx.shadowColor = '#ff007f';
+    ctx.shadowBlur = 8 * scale;
+    ctx.fillText(badgeText, cx, badgeY);
+
+    // Judul Utama (CYBER DROP X-01)
+    const titleY = badgeY + 68 * scale;
+    ctx.font = \`900 \${40 * scale}px sans-serif\`;
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = '#ffffff';
+    ctx.shadowBlur = 10 * scale;
+    ctx.fillText('CYBER DROP', cx, titleY);
+
+    // X-01 Highlight Neon
+    const subTitleY = titleY + 42 * scale;
+    ctx.font = \`900 \${36 * scale}px sans-serif\`;
+    ctx.fillStyle = '#00f0ff';
+    ctx.shadowColor = '#00f0ff';
+    ctx.shadowBlur = 18 * scale;
+    ctx.fillText('EDITION X-01', cx, subTitleY);
+
+    // Deskripsi Produk
+    ctx.shadowBlur = 0;
+    const descY = subTitleY + 36 * scale;
+    ctx.font = \`500 \${13 * scale}px sans-serif\`;
+    ctx.fillStyle = '#a8a8c8';
+    ctx.fillText('Sneaker Futuristik dengan Bantalan Ionik Quantum', cx, descY);
+
+    // Baris Harga
+    const priceY = descY + 54 * scale;
+    ctx.font = \`700 \${16 * scale}px monospace\`;
+    ctx.fillStyle = '#777777';
+    ctx.fillText('$299.00', cx - 55 * scale, priceY);
+
+    // Coretan Harga Lama
+    const oldPriceWidth = ctx.measureText('$299.00').width;
+    ctx.strokeStyle = '#ff0055';
+    ctx.lineWidth = 2 * scale;
+    ctx.beginPath();
+    ctx.moveTo(cx - 55 * scale - oldPriceWidth / 2, priceY - 5 * scale);
+    ctx.lineTo(cx - 55 * scale + oldPriceWidth / 2, priceY - 5 * scale);
+    ctx.stroke();
+
+    // Harga Baru
+    ctx.font = \`900 \${34 * scale}px monospace\`;
+    ctx.fillStyle = '#00ff88';
+    ctx.shadowColor = '#00ff88';
+    ctx.shadowBlur = 16 * scale;
+    ctx.fillText('$149.00', cx + 55 * scale, priceY + 2 * scale);
+
+    // Tombol CTA (DAPATKAN SEKARANG)
+    const btnY = priceY + 54 * scale;
+    const btnW = 240 * scale;
+    const btnH = 46 * scale;
+    const btnPulse = Math.sin(t * 4) * 0.15 + 0.85;
+
+    ctx.save();
+    ctx.translate(cx, btnY);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(-btnW / 2 + 3 * scale, -btnH / 2 + 3 * scale, btnW, btnH);
+
+    const btnGrad = ctx.createLinearGradient(-btnW / 2, 0, btnW / 2, 0);
+    btnGrad.addColorStop(0, '#00f0ff');
+    btnGrad.addColorStop(1, '#7928ca');
+    ctx.fillStyle = btnGrad;
+    ctx.shadowColor = '#00f0ff';
+    ctx.shadowBlur = (15 * btnPulse) * scale;
+    ctx.fillRect(-btnW / 2, -btnH / 2, btnW, btnH);
+
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.strokeRect(-btnW / 2, -btnH / 2, btnW, btnH);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowBlur = 0;
+    ctx.font = \`900 \${13 * scale}px sans-serif\`;
+    ctx.fillText('DAPATKAN SEKARANG', 0, 5 * scale);
+    ctx.restore();
+
+    ctx.restore();
 
     requestAnimationFrame(loop);
   }
-  loop();
+  requestAnimationFrame(loop);
 }`
   },
   {
@@ -239,7 +280,7 @@ if (canvas) {
     css: `* { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; background: #070714; overflow: hidden; }
 #canvas { width: 100%; height: 100%; display: block; }`,
-    js: `const canvas = document.getElementById('canvas') || window.canvas;
+    js: `const canvas = document.getElementById('canvas') || document.querySelector('canvas');
 if (canvas) {
   const ctx = canvas.getContext('2d');
   function resize() {
@@ -424,8 +465,8 @@ for (let r = 1; r <= 2; r++) {
     id: 'kinetic-ad',
     name: 'Kinetic Ad Typography',
     category: 'hybrid',
-    badge: 'HTML + CSS (9:16)',
-    description: 'Animasi tipografi kinetik bergaya agensi modern vertikal untuk TikTok, Instagram Reels, dan YouTube Shorts.',
+    badge: 'KINETIC / REEL (9:16 / 16:9)',
+    description: 'Animasi tipografi kinetik bertenaga tinggi bergaya agensi modern dengan aksen neon berdenyut untuk TikTok, Reels, dan Shorts.',
     defaults: {
       stage3d: false, // Default: OFF (Full Layar Sinematik)
       vignette: true,
@@ -451,91 +492,158 @@ for (let r = 1; r <= 2; r++) {
       hudSubtitle: 'VERTICAL MOTION POSTER',
       hudPosition: 'bottom-center'
     },
-    html: `<div class="poster">
-  <div class="top-tag">AGENCY REEL &bull; 2026</div>
-  <div class="line-wrap">
-    <div class="huge-text line-1">MAKE IT</div>
-  </div>
-  <div class="line-wrap">
-    <div class="huge-text line-2 highlight">BOLD.</div>
-  </div>
-  <div class="line-wrap">
-    <div class="huge-text line-3">MAKE IT</div>
-  </div>
-  <div class="line-wrap">
-    <div class="huge-text line-4 highlight-pink">LOUD.</div>
-  </div>
-  <div class="footer-bar">
-    <div class="pill">CREATIVE STUDIO</div>
-    <div class="pill">ALLTOOLSKURO</div>
-  </div>
-</div>`,
+    html: `<canvas id="kinetic-canvas"></canvas>`,
     css: `* { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
   width: 100%;
   height: 100%;
   background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: Impact, "Arial Black", -apple-system, sans-serif;
   overflow: hidden;
-  color: #fff;
+  font-family: Impact, "Arial Black", -apple-system, sans-serif;
 }
-.poster {
-  width: 100vw;
-  height: 100vh;
-  padding: 48px 32px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  border: 4px solid #fff;
-  background: radial-gradient(circle at 50% 50%, #151515 0%, #000000 100%);
-}
-.top-tag {
-  font-family: monospace;
-  font-size: 14px;
-  letter-spacing: 4px;
-  color: #aaa;
-  border-bottom: 2px solid #333;
-  padding-bottom: 12px;
-}
-.huge-text {
-  font-size: 82px;
-  line-height: 0.9;
-  letter-spacing: -2px;
-  text-transform: uppercase;
-  animation: floatText 3s ease-in-out infinite alternate;
-}
-.highlight {
-  color: #00ff66;
-  text-shadow: 0 0 30px rgba(0,255,102,0.6);
-}
-.highlight-pink {
-  color: #ff0055;
-  text-shadow: 0 0 30px rgba(255,0,85,0.6);
-}
-.footer-bar {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-.pill {
-  font-family: monospace;
-  font-size: 13px;
-  padding: 8px 16px;
-  border: 1.5px solid #fff;
-  background: #fff;
-  color: #000;
-  font-weight: 900;
-  letter-spacing: 1px;
-}
-@keyframes floatText {
-  0% { transform: scale(0.98) translateY(0); }
-  100% { transform: scale(1.02) translateY(-6px); }
+#kinetic-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
 }`,
-    js: `// Animasi ticker
-console.log('Kinetic Ad Active');`
+    js: `const canvas = document.getElementById('kinetic-canvas') || document.querySelector('canvas');
+if (canvas) {
+  const ctx = canvas.getContext('2d');
+  function resize() {
+    canvas.width = window.innerWidth || 1280;
+    canvas.height = window.innerHeight || 720;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function loop(now) {
+    const t = (now || performance.now()) * 0.001;
+    const w = canvas.width;
+    const h = canvas.height;
+    const scale = Math.min(w / 720, h / 1080) > 0.5 ? Math.min(w / 720, h / 1080) : Math.min(w / 1280, h / 720) * 1.2;
+
+    // 1. Background Radial Hitam Pekat
+    const bg = ctx.createRadialGradient(w * 0.5, h * 0.5, 20, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
+    bg.addColorStop(0, '#1a1a1a');
+    bg.addColorStop(1, '#050505');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. Garis Aksen Kecepatan di Latar Belakang
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 1.5 * scale;
+    for (let i = 0; i < 8; i++) {
+      const y = ((t * 80 + i * (h / 8)) % h);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 3. Bingkai Neobrutalist Luar
+    const pad = 24 * scale;
+    ctx.save();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4 * scale;
+    ctx.strokeRect(pad, pad, w - pad * 2, h - pad * 2);
+
+    // Sudut Crosshair
+    const crossSize = 12 * scale;
+    ctx.lineWidth = 2 * scale;
+    [[pad, pad], [w - pad, pad], [pad, h - pad], [w - pad, h - pad]].forEach(([cx, cy]) => {
+      ctx.beginPath();
+      ctx.moveTo(cx - crossSize, cy); ctx.lineTo(cx + crossSize, cy);
+      ctx.moveTo(cx, cy - crossSize); ctx.lineTo(cx, cy + crossSize);
+      ctx.stroke();
+    });
+
+    // 4. Header Monospace Atas
+    const topY = pad + 38 * scale;
+    ctx.font = \`900 \${13 * scale}px monospace\`;
+    ctx.fillStyle = '#888888';
+    ctx.textAlign = 'left';
+    ctx.fillText('AGENCY REEL • 2026', pad + 20 * scale, topY);
+
+    // Status Dot Neon Hijau Berkedip
+    const pulse = (Math.sin(t * 6) + 1) * 0.5;
+    ctx.fillStyle = '#00ff66';
+    ctx.shadowColor = '#00ff66';
+    ctx.shadowBlur = (8 * pulse + 4) * scale;
+    ctx.beginPath();
+    ctx.arc(w - pad - 26 * scale, topY - 4 * scale, 5 * scale, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // 5. Tipografi Kinetik Utama (MAKE IT BOLD / MAKE IT LOUD)
+    ctx.textAlign = 'center';
+    const centerX = w * 0.5;
+    const fontSize = Math.round(Math.min(w * 0.14, 76 * scale));
+    ctx.font = \`900 \${fontSize}px Impact, "Arial Black", sans-serif\`;
+
+    const startY = h * 0.35;
+    const lineSpacing = fontSize * 1.05;
+
+    // Baris 1: MAKE IT
+    const bob1 = Math.sin(t * 3.5) * 4 * scale;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('MAKE IT', centerX, startY + bob1);
+
+    // Baris 2: BOLD. (Neon Green)
+    const bob2 = Math.cos(t * 3.5) * 4 * scale;
+    ctx.save();
+    ctx.fillStyle = '#00ff66';
+    ctx.shadowColor = '#00ff66';
+    ctx.shadowBlur = (20 + Math.sin(t * 5) * 8) * scale;
+    ctx.fillText('BOLD.', centerX, startY + lineSpacing + bob2);
+    ctx.restore();
+
+    // Baris 3: MAKE IT
+    const bob3 = Math.sin(t * 3.5 + 1.2) * 4 * scale;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('MAKE IT', centerX, startY + lineSpacing * 2 + bob3);
+
+    // Baris 4: LOUD. (Neon Pink)
+    const bob4 = Math.cos(t * 3.5 + 1.2) * 4 * scale;
+    ctx.save();
+    ctx.fillStyle = '#ff0055';
+    ctx.shadowColor = '#ff0055';
+    ctx.shadowBlur = (20 + Math.cos(t * 5) * 8) * scale;
+    ctx.fillText('LOUD.', centerX, startY + lineSpacing * 3 + bob4);
+    ctx.restore();
+
+    // 6. Footer Pills di Bagian Bawah
+    const bottomY = h - pad - 24 * scale;
+    const pillH = 32 * scale;
+    const pillFont = \`900 \${11 * scale}px monospace\`;
+    ctx.font = pillFont;
+
+    // Pill Kiri: CREATIVE STUDIO
+    const pill1Text = 'CREATIVE STUDIO';
+    const p1W = ctx.measureText(pill1Text).width + 24 * scale;
+    const p1X = pad + 18 * scale;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(p1X, bottomY - pillH, p1W, pillH);
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'left';
+    ctx.fillText(pill1Text, p1X + 12 * scale, bottomY - 11 * scale);
+
+    // Pill Kanan: ALLTOOLSKURO
+    const pill2Text = 'ALLTOOLSKURO';
+    const p2W = ctx.measureText(pill2Text).width + 24 * scale;
+    const p2X = w - pad - 18 * scale - p2W;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(p2X, bottomY - pillH, p2W, pillH);
+    ctx.fillStyle = '#000000';
+    ctx.fillText(pill2Text, p2X + 12 * scale, bottomY - 11 * scale);
+
+    ctx.restore();
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}`
   },
   {
     id: 'glsl-aurora',
@@ -572,7 +680,7 @@ console.log('Kinetic Ad Active');`
     css: `* { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
 #glcanvas { width: 100%; height: 100%; display: block; }`,
-    js: `const canvas = document.getElementById('glcanvas');
+    js: `const canvas = document.getElementById('glcanvas') || document.querySelector('canvas');
 if (canvas) {
   function resize() {
     canvas.width = window.innerWidth || 1280;
