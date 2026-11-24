@@ -163,6 +163,13 @@ const KURO_TOOLS_CATALOG = [
     tag: 'WA Media Vault',
     desc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor WhatsApp target secara real-time via perangkat tertaut.',
     howToUse: 'Tautkan perangkat dengan scan QR Code, masukkan nomor WA target yang ingin dipantau, lalu media sekali lihat akan otomatis tersimpan di galeri lokal browser.'
+  },
+  {
+    id: 'codeToVideo',
+    name: 'Code to Video Studio',
+    tag: '3D Render & MP4 Video',
+    desc: 'Ubah kode visual HTML/CSS/JS menjadi video animasi 3D sinematik dengan efek awan, partikel udara, dan ekspor MP4 langsung di browser.',
+    howToUse: 'Pilih template animasi atau ketik kode HTML/Canvas kamu, sesuaikan rotasi 3D dan partikel di panel visual, lalu klik Mulai Render Video untuk mengunduh berkas MP4/WebM.'
   }
 ];
 

@@ -24,7 +24,8 @@ import {
   Radio,
   ShieldCheck,
   Globe2,
-  X
+  X,
+  Clapperboard
 } from 'lucide-react';
 import { translations } from '../utils/translations';
 import { useAppUpdate } from '../hooks/useAppUpdate';
@@ -65,7 +66,8 @@ export default function Navbar({
     { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen },
     { id: 'ipChecker', label: t.welcome?.tools?.ipChecker?.name || 'IP & DNS Checker', icon: ShieldCheck },
     { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'Social Media Stalker', icon: Globe2 },
-    { id: 'waViewOnce', label: t.welcome?.tools?.waViewOnce?.name || 'WA View Once Vault', icon: ShieldCheck }
+    { id: 'waViewOnce', label: t.welcome?.tools?.waViewOnce?.name || 'WA View Once Vault', icon: ShieldCheck },
+    { id: 'codeToVideo', label: t.welcome?.tools?.codeToVideo?.name || 'Code to Video Studio', icon: Clapperboard }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);

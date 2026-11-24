@@ -15,6 +15,7 @@ import ManhwaFinderScreen from './components/ManhwaFinderScreen';
 import IpCheckerScreen from './components/IpCheckerScreen';
 import TiktokStalkerScreen from './components/TiktokStalkerScreen';
 import WaViewOnceView from './components/tools/WaViewOnceView';
+import CodeToVideoView from './components/tools/CodeToVideoView';
 import PngToPdfScreen from './components/PngToPdfScreen';
 import MediaCompressorScreen from './components/MediaCompressorScreen';
 import QrStudioScreen from './components/QrStudioScreen';
@@ -51,7 +52,8 @@ const TOOL_NAMES = {
   manhwaFinder: 'Rekomendasi Manhwa',
   ipChecker: 'IP & DNS Checker',
   tiktokStalker: 'Social Media Stalker',
-  waViewOnce: 'WA View Once Vault'
+  waViewOnce: 'WA View Once Vault',
+  codeToVideo: 'Code to Video Studio'
 };
 
 export default function App() {
@@ -354,6 +356,14 @@ export default function App() {
 
           {currentScreen === 'waViewOnce' && (
             <WaViewOnceView
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'codeToVideo' && (
+            <CodeToVideoView
               onBack={() => handleNavigate('welcome')}
               onShowToast={handleShowToast}
               lang={settings.language || 'id'}

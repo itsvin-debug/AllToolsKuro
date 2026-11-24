@@ -21,7 +21,8 @@ import {
   Globe,
   Radio,
   Globe2,
-  ShieldCheck
+  ShieldCheck,
+  Clapperboard
 } from 'lucide-react';
 import KuroIdentityCard from './KuroIdentityCard';
 import { translations } from '../utils/translations';
@@ -226,6 +227,15 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
       tag: wt.tools.waViewOnce?.tag || 'WA MEDIA',
       icon: ShieldCheck,
       onClick: () => onOpenTool('waViewOnce')
+    },
+    {
+      id: 'codeToVideo',
+      category: 'creative',
+      name: wt.tools?.codeToVideo?.name || 'Code to Video Studio',
+      desc: wt.tools?.codeToVideo?.desc || 'Ubah kode visual HTML/CSS/JS menjadi video animasi 3D sinematik dengan partikel, awan, dan ekspor MP4/WebM.',
+      tag: 'NEW • 3D RENDER',
+      icon: Clapperboard,
+      onClick: () => onOpenTool('codeToVideo')
     }
   ];
 

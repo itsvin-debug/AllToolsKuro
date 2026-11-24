@@ -151,6 +151,11 @@ export const translations = {
           name: 'WA View Once Vault',
           desc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat tertaut.',
           tag: 'WA MEDIA'
+        },
+        codeToVideo: {
+          name: 'Code to Video Studio',
+          desc: 'Ubah kode visual HTML/CSS/JS menjadi video animasi 3D sinematik dengan partikel, awan, dan ekspor MP4/WebM.',
+          tag: 'NEW • 3D RENDER'
         }
       }
     },
@@ -743,6 +748,11 @@ export const translations = {
           name: 'WA View Once Vault',
           desc: 'Capture and securely save View Once photos/videos from target numbers in real-time via linked device.',
           tag: 'WA MEDIA'
+        },
+        codeToVideo: {
+          name: 'Code to Video Studio',
+          desc: 'Convert HTML/CSS/JS code into cinematic 3D animated videos with atmospheric clouds, air particles, and MP4 export.',
+          tag: 'NEW • 3D RENDER'
         }
       }
     },
