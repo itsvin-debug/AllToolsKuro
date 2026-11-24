@@ -409,7 +409,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           const index = prev.findIndex((m) => m.id === cleanItem.id);
           if (index !== -1) {
             const next = [...prev];
-            next[index] = { ...next[index], ...cleanItem };
+            next[index] = { ...cleanItem };
             return next;
           }
           return [cleanItem, ...prev];
@@ -526,13 +526,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     socket.on('view-once-media', (rawPayload) => {
       try {
         const cleanItem = normalizeVaultItem(rawPayload);
-        if (!cleanItem || !cleanItem.base64Data) return;
+        if (!cleanItem) return;
 
         setMediaList((prev) => {
           const index = prev.findIndex((m) => m.id === cleanItem.id);
           if (index !== -1) {
             const next = [...prev];
-            next[index] = { ...next[index], ...cleanItem };
+            next[index] = { ...cleanItem };
             return next;
           }
           return [cleanItem, ...prev];
