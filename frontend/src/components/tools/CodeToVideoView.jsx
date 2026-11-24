@@ -1,8 +1,6 @@
 /**
- * Kuro Studio - Code to Video Studio v2
- * Studio kreasi video sinematik berbasis kode (HTML/CSS/JS/SVG & Pure Canvas)
- * dengan Compositor 3D Three.js, Mode Polos (Clean), Awan, Partikel, Tipografi HUD,
- * dan Ekspor Video Anti-Crash (WebCodecs MP4 & MediaRecorder WebM).
+ * Kuro Studio - Code to Video Studio v3
+ * Re-Architecture: True Full-Screen Cinematic + Deterministic 60fps HD Video Renderer.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -18,21 +16,20 @@ import {
   Code2,
   Sparkles,
   Cloud,
-  Layers,
   Type,
   Sliders,
   AlertCircle,
   Clapperboard,
   Film,
   Video,
-  Eye,
   Maximize2,
   Minimize2,
   CheckCircle2,
-  FileCode,
-  Layout,
-  Palette,
-  Monitor
+  Tv,
+  Maximize,
+  SlidersHorizontal,
+  Flame,
+  Layers
 } from 'lucide-react';
 import {
   CODE_TEMPLATES,
@@ -54,9 +51,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
   // State potongan kode
   const [codeAll, setCodeAll] = useState(() => {
-    return localStorage.getItem('kuro_c2v_code_all') || CODE_TEMPLATES[0].html
-      ? buildCompositeHtml(CODE_TEMPLATES[0].html, CODE_TEMPLATES[0].css, CODE_TEMPLATES[0].js)
-      : CODE_TEMPLATES[0].code || '';
+    return localStorage.getItem('kuro_c2v_code_all') ||
+      buildCompositeHtml(CODE_TEMPLATES[0].html, CODE_TEMPLATES[0].css, CODE_TEMPLATES[0].js);
   });
   const [codeHtml, setCodeHtml] = useState(CODE_TEMPLATES[0].html || '');
   const [codeCss, setCodeCss] = useState(CODE_TEMPLATES[0].css || '');
@@ -67,9 +63,14 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const [errorLog, setErrorLog] = useState(null);
 
-  // --- SETTINGS REAKTIF (ANTI STALE CLOSURE VIA settingsRef) ---
+  // --- SETTINGS (SYNCHRONIZED VIA settingsRef) ---
   const [settings, setSettings] = useState(() => {
-    return { ...CODE_TEMPLATES[0].defaults };
+    return {
+      stage3d: false, // Default: OFF (100% Full Layar Sinematik Murni)
+      vignette: true,
+      colorBoost: false,
+      ...CODE_TEMPLATES[0].defaults
+    };
   });
 
   const settingsRef = useRef(settings);
@@ -77,6 +78,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     settingsRef.current = settings;
   }, [settings]);
 
+  // Tab Pengaturan Visual & Tab Mobile
   const [activeTab, setActiveTab] = useState('camera'); // 'camera' | 'fx' | 'hud'
   const [mobileSection, setMobileSection] = useState('preview'); // 'preview' | 'editor' | 'export'
 
@@ -85,12 +87,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const [fpsDisplay, setFpsDisplay] = useState(60);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // --- EKSPOR VIDEO STATE ---
+  // --- EKSPOR VIDEO SETTINGS ---
   const [exportRes, setExportRes] = useState('1080p');
   const [exportAspect, setExportAspect] = useState('16:9');
-  const [exportFps, setExportFps] = useState(30);
+  const [exportFps, setExportFps] = useState(60);
   const [exportDuration, setExportDuration] = useState(10);
-  const [exportBitrate, setExportBitrate] = useState('standard');
+  const [exportBitrate, setExportBitrate] = useState('high');
   const [autoDownload, setAutoDownload] = useState(true);
 
   const [isRendering, setIsRendering] = useState(false);
@@ -102,7 +104,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   });
   const [renderResult, setRenderResult] = useState(null);
 
-  // --- REFS ENGINE & CANVAS ---
+  // --- REFS ---
   const canvasRef = useRef(null);
   const viewportRef = useRef(null);
   const compositorRef = useRef(null);
@@ -113,16 +115,14 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
 
-  // Simpan kode otomatis
+  // Auto-save kode ke storage
   useEffect(() => {
     try {
       localStorage.setItem('kuro_c2v_code_all', codeAll);
-    } catch {
-      // Abaikan jika storage penuh
-    }
+    } catch {}
   }, [codeAll]);
 
-  // Inisialisasi Compositor & Sandbox Runner saat komponen dimuat
+  // Inisialisasi Engine & Sandbox Runner
   useEffect(() => {
     if (!canvasRef.current) return;
 
@@ -133,7 +133,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     const sand = new CodeSandboxRunner(comp);
     sandboxRef.current = sand;
 
-    // Load initial code
     const initialCode = editorMode === 'canvas' ? codeCanvas : codeAll;
     sand.updateCode(initialCode, editorMode === 'canvas' ? 'canvas' : 'html');
 
@@ -142,23 +141,20 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
 
-    // Render loop bebas stale-closure: SELALU membaca settingsRef.current
+    // Loop animasi live preview bebas stale-closure
     const loop = (now) => {
       if (isPlaying && compositorRef.current && sandboxRef.current) {
         const curSettings = settingsRef.current;
         const spd = curSettings.motionSpeed || 1.0;
         const elapsed = ((now - startTimeRef.current) / 1000) * spd;
 
-        // 1. Eksekusi sandbox animasi
         sandboxRef.current.renderStep(elapsed);
         if (sandboxRef.current.lastError) {
           setErrorLog(sandboxRef.current.lastError);
         }
 
-        // 2. Render frame pada compositor (Clean atau 3D Studio)
         compositorRef.current.renderFrame(elapsed, curSettings);
 
-        // Hitung FPS live
         frameCount++;
         if (now - lastFpsUpdate >= 1000) {
           setFpsDisplay(frameCount);
@@ -173,19 +169,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     animationFrameId.current = requestAnimationFrame(loop);
 
     return () => {
-      if (animationFrameId.current) {
-        cancelAnimationFrame(animationFrameId.current);
-      }
-      if (sandboxRef.current) {
-        sandboxRef.current.dispose();
-      }
-      if (compositorRef.current) {
-        compositorRef.current.dispose();
-      }
+      if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
+      if (sandboxRef.current) sandboxRef.current.dispose();
+      if (compositorRef.current) compositorRef.current.dispose();
     };
   }, []);
 
-  // Update dimensi canvas pratinjau saat rasio aspek berubah
+  // Update dimensi pratinjau saat rasio aspek berubah
   useEffect(() => {
     if (!compositorRef.current) return;
     const { width, height } = computeTargetDimensions('720p', exportAspect);
@@ -223,21 +213,22 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   }, [editorMode, hybridTab, codeAll, codeHtml, codeCss, codeJs, codeCanvas, onShowToast]);
 
-  // Ganti Template Siap Pakai
+  // Ganti Template Preset
   const handleSelectTemplate = (templateId) => {
     const tmpl = CODE_TEMPLATES.find((t) => t.id === templateId);
     if (!tmpl) return;
 
     setSelectedTemplateId(templateId);
-    setSettings({ ...tmpl.defaults });
+    setSettings((prev) => ({
+      ...prev,
+      ...tmpl.defaults
+    }));
     setErrorLog(null);
 
     if (tmpl.category === 'canvas') {
       setEditorMode('canvas');
       setCodeCanvas(tmpl.code);
-      if (sandboxRef.current) {
-        sandboxRef.current.updateCode(tmpl.code, 'canvas');
-      }
+      if (sandboxRef.current) sandboxRef.current.updateCode(tmpl.code, 'canvas');
     } else {
       setEditorMode('hybrid');
       setCodeHtml(tmpl.html || '');
@@ -246,15 +237,51 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
       const comp = buildCompositeHtml(tmpl.html, tmpl.css, tmpl.js);
       setCodeAll(comp);
-      if (sandboxRef.current) {
-        sandboxRef.current.updateCode(comp, 'html');
-      }
+      if (sandboxRef.current) sandboxRef.current.updateCode(comp, 'html');
     }
 
-    onShowToast?.(`Template "${tmpl.name}" dimuat.`, 'info');
+    onShowToast?.(`Template "${tmpl.name}" aktif.`, 'info');
   };
 
-  // Salin Kode ke Clipboard
+  // Preset Cepat Komposisi
+  const handleQuickPreset = (presetName) => {
+    if (presetName === 'clean-full') {
+      setSettings((s) => ({
+        ...s,
+        stage3d: false,
+        clouds: false,
+        particles: false,
+        hudEnabled: false,
+        vignette: false,
+        colorBoost: false
+      }));
+      onShowToast?.('Mode Fullscreen Murni aktif (semua efek dimatikan).', 'info');
+    } else if (presetName === 'cinematic-full') {
+      setSettings((s) => ({
+        ...s,
+        stage3d: false,
+        particles: true,
+        particleStyle: 'sparks',
+        particleCount: 100,
+        vignette: true,
+        colorBoost: true
+      }));
+      onShowToast?.('Preset Sinematik aktif (Full Layar + Partikel + Vignette).', 'info');
+    } else if (presetName === 'studio-3d') {
+      setSettings((s) => ({
+        ...s,
+        stage3d: true,
+        autoOrbit: true,
+        clouds: true,
+        particles: true,
+        particleStyle: 'stars',
+        vignette: false
+      }));
+      onShowToast?.('Preset Studio 3D aktif (Bingkai TV + Orbit + Awan).', 'info');
+    }
+  };
+
+  // Salin Kode
   const handleCopyCode = async () => {
     try {
       const activeCode =
@@ -270,13 +297,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       await navigator.clipboard.writeText(activeCode);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      onShowToast?.('Kode berhasil disalin ke clipboard.', 'success');
+      onShowToast?.('Kode berhasil disalin.', 'success');
     } catch {
       onShowToast?.('Gagal menyalin kode.', 'error');
     }
   };
 
-  // Reset Kode ke bawaan template saat ini
+  // Reset Kode
   const handleResetCode = () => {
     if (!confirmReset) {
       setConfirmReset(true);
@@ -286,10 +313,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     const currentTmpl = CODE_TEMPLATES.find((t) => t.id === selectedTemplateId) || CODE_TEMPLATES[0];
     handleSelectTemplate(currentTmpl.id);
     setConfirmReset(false);
-    onShowToast?.('Kode berhasil direset ke bawaan template.', 'info');
+    onShowToast?.('Kode direset ke bawaan template.', 'info');
   };
 
-  // Ekspor File Kode (.html atau .json)
+  // Ekspor File Kode
   const handleExportCodeFile = () => {
     const activeCode = editorMode === 'canvas' ? codeCanvas : codeAll;
     const ext = editorMode === 'canvas' ? 'js' : 'html';
@@ -300,10 +327,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     a.download = `kuro_studio_${selectedTemplateId}.${ext}`;
     a.click();
     URL.revokeObjectURL(url);
-    onShowToast?.(`Berkas kuro_studio_${selectedTemplateId}.${ext} berhasil diunduh.`, 'success');
+    onShowToast?.(`Berkas kuro_studio_${selectedTemplateId}.${ext} diunduh.`, 'success');
   };
 
-  // Impor File Kode (.html, .js, .css, .json)
+  // Impor File Kode
   const handleImportFile = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -313,8 +340,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       const content = event.target?.result;
       if (typeof content === 'string') {
         const trimmed = content.trim();
-
-        // Auto-deteksi tipe kode
         if (
           trimmed.includes('<!DOCTYPE') ||
           trimmed.includes('<html') ||
@@ -357,18 +382,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Toggle Play / Pause
-  const handleTogglePlay = () => {
-    setIsPlaying((prev) => !prev);
-  };
-
-  // Restart Animasi
+  // Controls Player
+  const handleTogglePlay = () => setIsPlaying((prev) => !prev);
   const handleRestart = () => {
     startTimeRef.current = performance.now();
     setIsPlaying(true);
   };
-
-  // Fullscreen Viewport
   const handleToggleFullscreen = () => {
     if (!viewportRef.current) return;
     if (!document.fullscreenElement) {
@@ -380,7 +399,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // --- MULAI RENDER VIDEO ---
+  // --- MULAI RENDER VIDEO DETERMINISTIK 60 FPS ---
   const handleStartRender = async () => {
     if (!compositorRef.current || !sandboxRef.current) return;
 
@@ -417,11 +436,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       setRenderResult(result);
       onShowToast?.(`Video ${result.format.toUpperCase()} berhasil dirender (${result.sizeMB} MB)!`, 'success');
 
-      // Unduh otomatis jika opsi aktif
       if (autoDownload && result.url) {
         const a = document.createElement('a');
         a.href = result.url;
-        a.download = `KuroStudio_CodeToVideo_${Date.now()}.${result.format}`;
+        a.download = `KuroStudio_Video_${Date.now()}.${result.format}`;
         a.click();
       }
     } catch (err) {
@@ -434,34 +452,30 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       setIsRendering(false);
       abortControllerRef.current = null;
 
-      // Kembalikan ukuran canvas pratinjau ke resolusi viewport
       const { width, height } = computeTargetDimensions('720p', exportAspect);
       compositorRef.current.resize(width, height);
     }
   };
 
-  // Batalkan Render
   const handleCancelRender = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    if (abortControllerRef.current) abortControllerRef.current.abort();
   };
 
-  // Unduh Video Manual
   const handleDownloadVideo = () => {
     if (!renderResult?.url) return;
     const a = document.createElement('a');
     a.href = renderResult.url;
-    a.download = `KuroStudio_CodeToVideo_${Date.now()}.${renderResult.format}`;
+    a.download = `KuroStudio_Video_${Date.now()}.${renderResult.format}`;
     a.click();
-    onShowToast?.('Mengunduh video hasil render...', 'success');
+    onShowToast?.('Mengunduh video...', 'success');
   };
 
-  // Estimasi ukuran file video
-  const activeBitrateVal = BITRATE_PRESETS[exportBitrate] || 6_000_000;
+  // Ringkasan real-time
+  const targetDims = computeTargetDimensions(exportRes, exportAspect);
+  const activeBitrateVal = BITRATE_PRESETS[exportBitrate] || 16_000_000;
   const estimatedMB = (((activeBitrateVal * (Number(exportDuration) || 10)) / 8) / (1024 * 1024)).toFixed(1);
 
-  // Menentukan teks aktif di editor
+  // Teks aktif editor
   let activeCodeText = codeAll;
   let activeCodeSetter = setCodeAll;
   if (editorMode === 'canvas') {
@@ -498,22 +512,22 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl sm:text-2xl font-black uppercase tracking-tight text-black flex items-center gap-2">
                 <Clapperboard className="w-6 h-6 text-black fill-yellow-400" />
-                Code to Video Studio <span className="text-xs bg-black text-white px-1.5 py-0.5 font-mono">v2.0</span>
+                Code to Video Studio
               </h1>
               <span className="px-2.5 py-0.5 bg-yellow-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000]">
-                NEW • 3D RENDER
+                TRUE FULLSCREEN
               </span>
               <span className="px-2.5 py-0.5 bg-cyan-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000] hidden sm:inline-block">
-                CLIENT-SIDE MP4
+                60 FPS DETERMINISTIC
               </span>
             </div>
             <p className="text-xs sm:text-sm text-neutral-600 font-semibold mt-0.5">
-              Konversi kode HTML/CSS/JS/Canvas menjadi video animasi 3D sinematik dan iklan motion full-bleed.
+              Video animasi sinematik full-bleed 100% layar penuh atau panggung TV 3D dengan WebCodecs MP4.
             </p>
           </div>
         </div>
 
-        {/* Pemilih Template */}
+        {/* Template Selector */}
         <div className="flex items-center gap-2 w-full md:w-auto">
           <span className="text-xs font-black uppercase text-neutral-500 whitespace-nowrap">
             Template:
@@ -540,7 +554,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             mobileSection === 'preview' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
-          Studio & Preview
+          Studio & Efek
         </button>
         <button
           onClick={() => setMobileSection('editor')}
@@ -560,10 +574,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         </button>
       </div>
 
-      {/* ─── 2. MAIN WORKSPACE (2-COLUMN DI DESKTOP / TAB DI MOBILE) ─── */}
+      {/* ─── 2. MAIN 2-COLUMN WORKSPACE ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* ─── KOLOM KIRI: EDITOR KODE (Desktop: Col 6, Mobile: conditional) ─── */}
+        {/* ─── KOLOM KIRI: EDITOR KODE ─── */}
         <div
           className={`lg:col-span-6 bg-white border-2 border-black shadow-[4px_4px_0px_#000] flex flex-col overflow-hidden ${
             mobileSection === 'editor' ? 'block' : 'hidden lg:flex'
@@ -583,7 +597,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                       setEditorMode('hybrid');
                       if (sandboxRef.current) sandboxRef.current.updateCode(codeAll, 'html');
                     }}
-                    className={`px-2.5 py-1 text-xs font-black ${
+                    className={`px-2.5 py-1 text-xs font-black cursor-pointer ${
                       editorMode === 'hybrid' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
                     }`}
                   >
@@ -594,7 +608,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                       setEditorMode('canvas');
                       if (sandboxRef.current) sandboxRef.current.updateCode(codeCanvas, 'canvas');
                     }}
-                    className={`px-2.5 py-1 text-xs font-black border-l-2 border-black ${
+                    className={`px-2.5 py-1 text-xs font-black border-l-2 border-black cursor-pointer ${
                       editorMode === 'canvas' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
                     }`}
                   >
@@ -610,7 +624,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
             {/* Sub-tab untuk Mode Gabungan */}
             {editorMode === 'hybrid' && (
-              <div className="flex gap-1 border-t border-neutral-300 pt-2">
+              <div className="flex gap-1 border-t border-neutral-300 pt-2 overflow-x-auto scrollbar-none">
                 {[
                   { id: 'all', label: 'Semua (Single File)' },
                   { id: 'html', label: 'HTML / SVG' },
@@ -620,7 +634,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   <button
                     key={st.id}
                     onClick={() => setHybridTab(st.id)}
-                    className={`px-2.5 py-1 text-xs font-bold border border-black transition-colors ${
+                    className={`px-2.5 py-1 text-xs font-bold border border-black transition-colors cursor-pointer whitespace-nowrap ${
                       hybridTab === st.id ? 'bg-black text-white' : 'bg-white text-neutral-800 hover:bg-neutral-200'
                     }`}
                   >
@@ -631,7 +645,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             )}
           </div>
 
-          {/* Area Editor Teks dengan Baris Nomor */}
+          {/* Area Editor Teks */}
           <div className="relative flex bg-[#121218] text-white font-mono text-xs sm:text-sm min-h-[440px] max-h-[560px] overflow-hidden">
             <div className="w-12 bg-[#09090d] text-neutral-500 py-3 select-none text-right pr-3 font-mono text-xs border-r border-neutral-800 overflow-hidden leading-relaxed">
               {lineNumbers.map((num) => (
@@ -650,7 +664,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             />
           </div>
 
-          {/* Log Kesalahan (Error Console) */}
+          {/* Error Console */}
           {errorLog && (
             <div className="p-3 bg-red-100 border-t-2 border-black text-red-900 font-mono text-xs flex items-start gap-2">
               <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
@@ -728,40 +742,38 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             mobileSection === 'preview' ? 'block' : 'hidden lg:block'
           }`}
         >
-          {/* SAKELAR UTAMA: MODE POLOS vs MODE STUDIO 3D */}
-          <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Monitor className="w-4 h-4 text-black" />
-              <span className="text-xs font-black uppercase text-black">Mode Panggung:</span>
-            </div>
-
-            <div className="flex border-2 border-black bg-white">
+          {/* Quick Preset Action Bar */}
+          <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-2.5 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-black uppercase text-neutral-600 flex items-center gap-1.5">
+              <SlidersHorizontal className="w-4 h-4 text-black" />
+              Preset Komposisi:
+            </span>
+            <div className="flex flex-wrap gap-1.5">
               <button
-                onClick={() =>
-                  setSettings((s) => ({
-                    ...s,
-                    stageMode: 'clean',
-                    hudEnabled: false
-                  }))
-                }
-                className={`px-3 py-1.5 text-xs font-black transition-colors ${
-                  settings.stageMode === 'clean' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
-                }`}
+                onClick={() => handleQuickPreset('clean-full')}
+                className="px-2.5 py-1 bg-yellow-300 hover:bg-yellow-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                title="100% Layar Penuh Tanpa Efek Tambahan"
               >
-                Mode Polos (Clean)
+                Fullscreen Murni
               </button>
               <button
-                onClick={() => setSettings((s) => ({ ...s, stageMode: '3d' }))}
-                className={`px-3 py-1.5 text-xs font-black border-l-2 border-black transition-colors ${
-                  settings.stageMode === '3d' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
-                }`}
+                onClick={() => handleQuickPreset('cinematic-full')}
+                className="px-2.5 py-1 bg-cyan-300 hover:bg-cyan-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                title="Layar Penuh + Partikel + Vignette Sinematik"
               >
-                Mode Studio 3D (Sinematik)
+                Sinematik HD
+              </button>
+              <button
+                onClick={() => handleQuickPreset('studio-3d')}
+                className="px-2.5 py-1 bg-pink-300 hover:bg-pink-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                title="Bingkai TV 3D + Orbit + Awan"
+              >
+                Panggung 3D
               </button>
             </div>
           </div>
 
-          {/* Viewport Box (Canvas Three.js / Master Preview) */}
+          {/* Viewport Box (Canvas Output) */}
           <div
             ref={viewportRef}
             className="bg-black border-2 border-black shadow-[4px_4px_0px_#000] p-2 relative flex flex-col items-center justify-center overflow-hidden"
@@ -779,7 +791,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 <button
                   onClick={handleTogglePlay}
                   className="p-1.5 bg-white text-black hover:bg-neutral-200 border border-black font-black cursor-pointer"
-                  title={isPlaying ? 'Jeda Pratinjau' : 'Jalankan Pratinjau'}
+                  title={isPlaying ? 'Jeda' : 'Putar'}
                 >
                   {isPlaying ? <Pause className="w-3.5 h-3.5 fill-black" /> : <Play className="w-3.5 h-3.5 fill-black" />}
                 </button>
@@ -797,7 +809,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-mono px-2 py-0.5 bg-neutral-800 border border-neutral-700 text-yellow-300">
-                  {exportAspect} &bull; {settings.stageMode === 'clean' ? 'CLEAN 2D' : '3D STUDIO'}
+                  {exportAspect} &bull; {settings.stage3d ? '3D TV FRAME' : '100% FULLSCREEN'}
                 </span>
                 <button
                   onClick={handleToggleFullscreen}
@@ -810,34 +822,30 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             </div>
           </div>
 
-          {/* Tabbed Controls Panel */}
+          {/* 3 Tab Pengaturan: SELALU Tersedia & Bebas Dikombinasi */}
           <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4">
             
-            {/* Navigasi Tab */}
+            {/* Header Tab */}
             <div className="flex border-b-2 border-black mb-4 gap-2 overflow-x-auto pb-1 scrollbar-none">
-              {settings.stageMode === '3d' && (
-                <>
-                  <button
-                    onClick={() => setActiveTab('camera')}
-                    className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
-                      activeTab === 'camera' ? 'bg-yellow-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    <Sliders className="w-3.5 h-3.5" />
-                    3D Kamera & Latar
-                  </button>
+              <button
+                onClick={() => setActiveTab('camera')}
+                className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
+                  activeTab === 'camera' ? 'bg-yellow-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                <Tv className="w-3.5 h-3.5" />
+                Panggung & 3D TV
+              </button>
 
-                  <button
-                    onClick={() => setActiveTab('fx')}
-                    className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
-                      activeTab === 'fx' ? 'bg-cyan-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Awan & Partikel
-                  </button>
-                </>
-              )}
+              <button
+                onClick={() => setActiveTab('fx')}
+                className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
+                  activeTab === 'fx' ? 'bg-cyan-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Awan & Partikel
+              </button>
 
               <button
                 onClick={() => setActiveTab('hud')}
@@ -850,217 +858,265 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               </button>
             </div>
 
-            {/* Kontrol di Mode Polos (Clean) */}
-            {settings.stageMode === 'clean' && activeTab !== 'hud' && (
-              <div className="p-3 bg-neutral-50 border border-black space-y-3 text-xs">
-                <span className="font-bold text-neutral-800 block">
-                  Mode Polos Aktif: Animasi kode dirender 100% full-bleed datar (tanpa kemiringan 3D, tanpa awan, dan tanpa partikel latar).
-                </span>
-                <div>
-                  <div className="flex justify-between font-bold mb-1">
-                    <span>Kecepatan Gerak (Speed):</span>
-                    <span className="font-mono">{settings.motionSpeed}x</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.25"
-                    max="3.0"
-                    step="0.25"
-                    value={settings.motionSpeed}
-                    onChange={(e) => setSettings((s) => ({ ...s, motionSpeed: Number(e.target.value) }))}
-                    className="w-full accent-black cursor-pointer h-2"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* TAB 1: 3D KAMERA & LATAR (HANYA MODE 3D) */}
-            {settings.stageMode === '3d' && activeTab === 'camera' && (
+            {/* TAB 1: PANGGUNG & KAMERA 3D */}
+            {activeTab === 'camera' && (
               <div className="space-y-4 text-xs">
-                {/* Preset Sudut 3D */}
-                <div>
-                  <span className="font-bold text-neutral-700 block mb-1.5">Preset Sudut 3D:</span>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                    {[
-                      { name: 'Flat Depan', rx: 0, ry: 0, rz: 0 },
-                      { name: 'Isometric', rx: 22, ry: -25, rz: 0 },
-                      { name: 'Cinematic Tilt', rx: 16, ry: -20, rz: 0 },
-                      { name: 'Top-Down', rx: 45, ry: 0, rz: 0 }
-                    ].map((p) => (
-                      <button
-                        key={p.name}
-                        onClick={() =>
-                          setSettings((s) => ({
-                            ...s,
-                            rotateX: p.rx,
-                            rotateY: p.ry,
-                            rotateZ: p.rz
-                          }))
-                        }
-                        className="p-2 bg-neutral-100 hover:bg-neutral-200 border border-black font-bold text-center active:bg-yellow-200 transition-colors cursor-pointer"
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Slider Pitch, Yaw, Roll */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                
+                {/* Sakelar Toggle Utama: Bingkai TV / Panggung 3D */}
+                <div className="p-3 bg-neutral-50 border-2 border-black flex items-center justify-between">
                   <div>
-                    <div className="flex justify-between font-bold mb-1">
-                      <span>Pitch (X):</span>
-                      <span className="font-mono">{settings.rotateX}°</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="-60"
-                      max="60"
-                      value={settings.rotateX}
-                      onChange={(e) => setSettings((s) => ({ ...s, rotateX: Number(e.target.value) }))}
-                      className="w-full accent-black cursor-pointer h-2"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between font-bold mb-1">
-                      <span>Yaw (Y):</span>
-                      <span className="font-mono">{settings.rotateY}°</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="-60"
-                      max="60"
-                      value={settings.rotateY}
-                      onChange={(e) => setSettings((s) => ({ ...s, rotateY: Number(e.target.value) }))}
-                      className="w-full accent-black cursor-pointer h-2"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between font-bold mb-1">
-                      <span>Roll (Z):</span>
-                      <span className="font-mono">{settings.rotateZ}°</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="-45"
-                      max="45"
-                      value={settings.rotateZ}
-                      onChange={(e) => setSettings((s) => ({ ...s, rotateZ: Number(e.target.value) }))}
-                      className="w-full accent-black cursor-pointer h-2"
-                    />
-                  </div>
-                </div>
-
-                {/* Zoom & Kecepatan Gerak */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-neutral-200">
-                  <div>
-                    <div className="flex justify-between font-bold mb-1">
-                      <span>Zoom Kamera:</span>
-                      <span className="font-mono">{settings.zoom}x</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="2.0"
-                      step="0.05"
-                      value={settings.zoom}
-                      onChange={(e) => setSettings((s) => ({ ...s, zoom: Number(e.target.value) }))}
-                      className="w-full accent-black cursor-pointer h-2"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between font-bold mb-1">
-                      <span>Kecepatan Gerak:</span>
-                      <span className="font-mono">{settings.motionSpeed}x</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.25"
-                      max="3.0"
-                      step="0.25"
-                      value={settings.motionSpeed}
-                      onChange={(e) => setSettings((s) => ({ ...s, motionSpeed: Number(e.target.value) }))}
-                      className="w-full accent-black cursor-pointer h-2"
-                    />
-                  </div>
-                </div>
-
-                {/* Auto-Orbit Toggle */}
-                <div className="flex items-center justify-between p-2.5 bg-neutral-50 border border-black">
-                  <div>
-                    <span className="font-black text-black block">Auto-Orbit / Melayang 3D</span>
-                    <span className="text-[11px] text-neutral-500">Gerakan mengambang halus bernapas di ruang 3D</span>
+                    <span className="font-black text-black block text-sm">
+                      Aktifkan Bingkai TV / Panggung 3D
+                    </span>
+                    <span className="text-[11px] text-neutral-500">
+                      {settings.stage3d
+                        ? 'Animasi dimuat ke dalam bingkai TV 3D mengambang dengan latar.'
+                        : 'OFF: Animasi tampil 100% Layar Penuh (Full-Bleed, 0px margin, tanpa TV).'}
+                    </span>
                   </div>
                   <input
                     type="checkbox"
-                    checked={settings.autoOrbit}
-                    onChange={(e) => setSettings((s) => ({ ...s, autoOrbit: e.target.checked }))}
+                    checked={settings.stage3d}
+                    onChange={(e) => setSettings((s) => ({ ...s, stage3d: e.target.checked }))}
                     className="w-5 h-5 accent-black cursor-pointer"
                   />
                 </div>
 
-                {/* Latar Belakang */}
-                <div className="pt-2 border-t border-neutral-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-neutral-800">Tipe Latar:</span>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setSettings((s) => ({ ...s, bgType: 'gradient' }))}
-                        className={`px-2.5 py-1 border border-black font-bold text-[11px] cursor-pointer ${
-                          settings.bgType === 'gradient' ? 'bg-black text-white' : 'bg-white text-black'
-                        }`}
-                      >
-                        Gradien
-                      </button>
-                      <button
-                        onClick={() => setSettings((s) => ({ ...s, bgType: 'solid' }))}
-                        className={`px-2.5 py-1 border border-black font-bold text-[11px] cursor-pointer ${
-                          settings.bgType === 'solid' ? 'bg-black text-white' : 'bg-white text-black'
-                        }`}
-                      >
-                        Solid
-                      </button>
+                {/* Kontrol saat Mode Full Layar (stage3d === false) */}
+                {!settings.stage3d && (
+                  <div className="space-y-3 pt-1">
+                    <div className="p-2.5 bg-green-50 border border-green-800 text-green-950 font-bold text-xs flex items-center gap-2">
+                      <Maximize className="w-4 h-4 text-green-700" />
+                      Mode Full Layar Sinematik Aktif: Video memenuhi 100% kanvas secara murni.
                     </div>
-                  </div>
 
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-neutral-600">Warna 1:</span>
+                    <div>
+                      <div className="flex justify-between font-bold mb-1">
+                        <span>Kecepatan Gerak (Speed Multiplier):</span>
+                        <span className="font-mono">{settings.motionSpeed}x</span>
+                      </div>
                       <input
-                        type="color"
-                        value={settings.bgColor1}
-                        onChange={(e) => setSettings((s) => ({ ...s, bgColor1: e.target.value }))}
-                        className="w-8 h-8 p-0 border border-black cursor-pointer"
+                        type="range"
+                        min="0.25"
+                        max="3.0"
+                        step="0.25"
+                        value={settings.motionSpeed}
+                        onChange={(e) => setSettings((s) => ({ ...s, motionSpeed: Number(e.target.value) }))}
+                        className="w-full accent-black cursor-pointer h-2"
                       />
                     </div>
-                    {settings.bgType === 'gradient' && (
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold text-neutral-600">Warna 2:</span>
+
+                    <div className="pt-2 border-t border-neutral-200 space-y-2">
+                      <span className="font-black text-neutral-800 block">Polesan Sinematik HD:</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <label className="flex items-center gap-2 p-2 bg-neutral-50 border border-black cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(settings.vignette)}
+                            onChange={(e) => setSettings((s) => ({ ...s, vignette: e.target.checked }))}
+                            className="w-4 h-4 accent-black cursor-pointer"
+                          />
+                          <span className="font-bold">Vignette Halus (Edge Shadow)</span>
+                        </label>
+
+                        <label className="flex items-center gap-2 p-2 bg-neutral-50 border border-black cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(settings.colorBoost)}
+                            onChange={(e) => setSettings((s) => ({ ...s, colorBoost: e.target.checked }))}
+                            className="w-4 h-4 accent-black cursor-pointer"
+                          />
+                          <span className="font-bold">Color & Contrast Polish</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Kontrol saat Mode Bingkai TV 3D (stage3d === true) */}
+                {settings.stage3d && (
+                  <div className="space-y-4 pt-1">
+                    <div>
+                      <span className="font-bold text-neutral-700 block mb-1.5">Preset Sudut 3D:</span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        {[
+                          { name: 'Flat Depan', rx: 0, ry: 0, rz: 0 },
+                          { name: 'Isometric', rx: 22, ry: -25, rz: 0 },
+                          { name: 'Cinematic Tilt', rx: 16, ry: -20, rz: 0 },
+                          { name: 'Top-Down', rx: 45, ry: 0, rz: 0 }
+                        ].map((p) => (
+                          <button
+                            key={p.name}
+                            onClick={() =>
+                              setSettings((s) => ({
+                                ...s,
+                                rotateX: p.rx,
+                                rotateY: p.ry,
+                                rotateZ: p.rz
+                              }))
+                            }
+                            className="p-2 bg-neutral-100 hover:bg-neutral-200 border border-black font-bold text-center active:bg-yellow-200 transition-colors cursor-pointer"
+                          >
+                            {p.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <div className="flex justify-between font-bold mb-1">
+                          <span>Pitch (X):</span>
+                          <span className="font-mono">{settings.rotateX}°</span>
+                        </div>
                         <input
-                          type="color"
-                          value={settings.bgColor2}
-                          onChange={(e) => setSettings((s) => ({ ...s, bgColor2: e.target.value }))}
-                          className="w-8 h-8 p-0 border border-black cursor-pointer"
+                          type="range"
+                          min="-60"
+                          max="60"
+                          value={settings.rotateX}
+                          onChange={(e) => setSettings((s) => ({ ...s, rotateX: Number(e.target.value) }))}
+                          className="w-full accent-black cursor-pointer h-2"
                         />
                       </div>
-                    )}
+
+                      <div>
+                        <div className="flex justify-between font-bold mb-1">
+                          <span>Yaw (Y):</span>
+                          <span className="font-mono">{settings.rotateY}°</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="-60"
+                          max="60"
+                          value={settings.rotateY}
+                          onChange={(e) => setSettings((s) => ({ ...s, rotateY: Number(e.target.value) }))}
+                          className="w-full accent-black cursor-pointer h-2"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between font-bold mb-1">
+                          <span>Roll (Z):</span>
+                          <span className="font-mono">{settings.rotateZ}°</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="-45"
+                          max="45"
+                          value={settings.rotateZ}
+                          onChange={(e) => setSettings((s) => ({ ...s, rotateZ: Number(e.target.value) }))}
+                          className="w-full accent-black cursor-pointer h-2"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-neutral-200">
+                      <div>
+                        <div className="flex justify-between font-bold mb-1">
+                          <span>Zoom Kamera:</span>
+                          <span className="font-mono">{settings.zoom}x</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="2.0"
+                          step="0.05"
+                          value={settings.zoom}
+                          onChange={(e) => setSettings((s) => ({ ...s, zoom: Number(e.target.value) }))}
+                          className="w-full accent-black cursor-pointer h-2"
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between font-bold mb-1">
+                          <span>Kecepatan Gerak:</span>
+                          <span className="font-mono">{settings.motionSpeed}x</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.25"
+                          max="3.0"
+                          step="0.25"
+                          value={settings.motionSpeed}
+                          onChange={(e) => setSettings((s) => ({ ...s, motionSpeed: Number(e.target.value) }))}
+                          className="w-full accent-black cursor-pointer h-2"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between p-2.5 bg-neutral-50 border border-black">
+                      <div>
+                        <span className="font-black text-black block">Auto-Orbit 3D</span>
+                        <span className="text-[11px] text-neutral-500">Gerakan melayang bernapas di ruang 3D</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={settings.autoOrbit}
+                        onChange={(e) => setSettings((s) => ({ ...s, autoOrbit: e.target.checked }))}
+                        className="w-5 h-5 accent-black cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="pt-2 border-t border-neutral-200 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-neutral-800">Latar Belakang TV:</span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setSettings((s) => ({ ...s, bgType: 'gradient' }))}
+                            className={`px-2.5 py-1 border border-black font-bold text-[11px] cursor-pointer ${
+                              settings.bgType === 'gradient' ? 'bg-black text-white' : 'bg-white text-black'
+                            }`}
+                          >
+                            Gradien
+                          </button>
+                          <button
+                            onClick={() => setSettings((s) => ({ ...s, bgType: 'solid' }))}
+                            className={`px-2.5 py-1 border border-black font-bold text-[11px] cursor-pointer ${
+                              settings.bgType === 'solid' ? 'bg-black text-white' : 'bg-white text-black'
+                            }`}
+                          >
+                            Solid
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-neutral-600">Warna 1:</span>
+                          <input
+                            type="color"
+                            value={settings.bgColor1}
+                            onChange={(e) => setSettings((s) => ({ ...s, bgColor1: e.target.value }))}
+                            className="w-8 h-8 p-0 border border-black cursor-pointer"
+                          />
+                        </div>
+                        {settings.bgType === 'gradient' && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-semibold text-neutral-600">Warna 2:</span>
+                            <input
+                              type="color"
+                              value={settings.bgColor2}
+                              onChange={(e) => setSettings((s) => ({ ...s, bgColor2: e.target.value }))}
+                              className="w-8 h-8 p-0 border border-black cursor-pointer"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             )}
 
-            {/* TAB 2: AWAN & PARTIKEL (HANYA MODE 3D) */}
-            {settings.stageMode === '3d' && activeTab === 'fx' && (
+            {/* TAB 2: AWAN & PARTIKEL */}
+            {activeTab === 'fx' && (
               <div className="space-y-4 text-xs">
-                {/* Awan Atmosferik 3D */}
+                {/* Awan Atmosferik */}
                 <div className="p-3 bg-neutral-50 border border-black space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Cloud className="w-4 h-4 text-black" />
-                      <span className="font-black text-black">Awan Atmosferik 3D</span>
+                      <span className="font-black text-black">Awan Atmosferik</span>
                     </div>
                     <input
                       type="checkbox"
@@ -1074,7 +1130,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                     <div className="space-y-2 pt-1 border-t border-neutral-200">
                       <div>
                         <div className="flex justify-between font-bold mb-1">
-                          <span>Densitas / Ketebalan:</span>
+                          <span>Densitas / Opasitas:</span>
                           <span className="font-mono">{Math.round(settings.cloudDensity * 100)}%</span>
                         </div>
                         <input
@@ -1101,12 +1157,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   )}
                 </div>
 
-                {/* Partikel Udara 3D */}
+                {/* Partikel Udara */}
                 <div className="p-3 bg-neutral-50 border border-black space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-black" />
-                      <span className="font-black text-black">Partikel Udara 3D</span>
+                      <span className="font-black text-black">Partikel Udara</span>
                     </div>
                     <input
                       type="checkbox"
@@ -1142,7 +1198,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
                       <div>
                         <div className="flex justify-between font-bold mb-1">
-                          <span>Kepadatan Partikel:</span>
+                          <span>Kepadatan:</span>
                           <span className="font-mono">{settings.particleCount} titik</span>
                         </div>
                         <input
@@ -1176,8 +1232,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               <div className="space-y-3 text-xs">
                 <div className="flex items-center justify-between p-2.5 bg-neutral-50 border border-black">
                   <div>
-                    <span className="font-black text-black block">Tampilkan HUD Overlay</span>
-                    <span className="text-[11px] text-neutral-500">Badge judul & subjudul tajam di lapisan paling atas</span>
+                    <span className="font-black text-black block">Tampilkan Judul & Subjudul</span>
+                    <span className="text-[11px] text-neutral-500">Badge teks tajam langsung di video (Full Layar & 3D)</span>
                   </div>
                   <input
                     type="checkbox"
@@ -1190,29 +1246,29 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 {settings.hudEnabled && (
                   <div className="space-y-3 pt-2">
                     <div>
-                      <label className="font-bold text-neutral-800 block mb-1">Judul Utama (Title):</label>
+                      <label className="font-bold text-neutral-800 block mb-1">Judul Utama:</label>
                       <input
                         type="text"
                         value={settings.hudTitle}
                         onChange={(e) => setSettings((s) => ({ ...s, hudTitle: e.target.value }))}
-                        placeholder="Contoh: CYBER HARMONICS"
+                        placeholder="Contoh: SPECIAL LAUNCH"
                         className="w-full bg-white border-2 border-black p-2 font-bold font-mono text-xs focus:outline-none"
                       />
                     </div>
 
                     <div>
-                      <label className="font-bold text-neutral-800 block mb-1">Subjudul (Subtitle):</label>
+                      <label className="font-bold text-neutral-800 block mb-1">Subjudul:</label>
                       <input
                         type="text"
                         value={settings.hudSubtitle}
                         onChange={(e) => setSettings((s) => ({ ...s, hudSubtitle: e.target.value }))}
-                        placeholder="Contoh: NEON OSCILLOSCOPE FREQUENCY"
+                        placeholder="Contoh: LIMITED EDITION COLLECTION"
                         className="w-full bg-white border-2 border-black p-2 font-bold font-mono text-xs focus:outline-none"
                       />
                     </div>
 
                     <div>
-                      <label className="font-bold text-neutral-800 block mb-1">Posisi HUD di Layar:</label>
+                      <label className="font-bold text-neutral-800 block mb-1">Posisi HUD:</label>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                         {[
                           { id: 'bottom-left', label: 'Bawah Kiri' },
@@ -1240,7 +1296,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         </div>
       </div>
 
-      {/* ─── 3. BOTTOM PANEL: EKSPOR VIDEO SINEMATIK ─── */}
+      {/* ─── 3. BOTTOM PANEL: EKSPOR VIDEO DETERMINISTIK 60 FPS ─── */}
       <div
         className={`bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4 sm:p-6 space-y-5 ${
           mobileSection === 'export' ? 'block' : 'hidden lg:block'
@@ -1250,19 +1306,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
           <div>
             <h2 className="text-lg sm:text-xl font-black uppercase text-black flex items-center gap-2">
               <Film className="w-5 h-5 text-black fill-cyan-400" />
-              Pengaturan Ekspor Video Sinematik
+              Ekspor Video Deterministik 60 FPS HD
             </h2>
             <p className="text-xs sm:text-sm text-neutral-600 font-semibold">
-              Render video berkualitas tinggi langsung di browser dengan pipeline WebCodecs MP4 & MediaRecorder.
+              Render video bebas patah-patah dengan WebCodecs MP4 dan Virtual Clock Frame Stepping.
             </p>
           </div>
 
           <div className="flex items-center gap-2">
             <span className="px-3 py-1 bg-yellow-300 border border-black font-mono font-bold text-xs shadow-[1.5px_1.5px_0px_#000]">
-              Estimasi: ~{estimatedMB} MB
-            </span>
-            <span className="px-3 py-1 bg-neutral-100 border border-black font-mono font-bold text-xs">
-              {typeof window !== 'undefined' && 'VideoEncoder' in window ? 'MP4 (H.264)' : 'WebM'}
+              {targetDims.width} &times; {targetDims.height} px &bull; ~{estimatedMB} MB
             </span>
           </div>
         </div>
@@ -1312,13 +1365,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               disabled={isRendering}
               className="w-full bg-white border-2 border-black p-2 font-bold shadow-[2px_2px_0px_#000] focus:outline-none min-h-[40px] cursor-pointer"
             >
-              <option value="24">24 FPS (Sinematik Film)</option>
+              <option value="60">60 FPS (Super Mulus)</option>
               <option value="30">30 FPS (Standar Halus)</option>
-              <option value="60">60 FPS (Ultra Mulus)</option>
+              <option value="24">24 FPS (Sinematik Film)</option>
             </select>
           </div>
 
-          {/* Durasi Kustom Penuh */}
+          {/* Durasi Bebas Desimal */}
           <div className="space-y-1.5">
             <label className="font-black uppercase tracking-wider text-neutral-700">Durasi Video (Detik):</label>
             <div className="flex items-center gap-1.5">
@@ -1358,10 +1411,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               disabled={isRendering}
               className="w-full bg-white border-2 border-black p-2 font-bold shadow-[2px_2px_0px_#000] focus:outline-none min-h-[40px] cursor-pointer"
             >
-              <option value="light">Ringan (2.5 Mbps)</option>
-              <option value="standard">Standar (6 Mbps)</option>
-              <option value="high">Tinggi (12 Mbps)</option>
-              <option value="ultra">Ultra (24 Mbps)</option>
+              <option value="light">Ringan (4 Mbps)</option>
+              <option value="standard">Standar (8 Mbps)</option>
+              <option value="high">Tinggi (16 Mbps)</option>
+              <option value="ultra">Ultra (26 Mbps)</option>
             </select>
           </div>
         </div>
@@ -1376,7 +1429,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             className="w-4 h-4 accent-black cursor-pointer"
           />
           <label htmlFor="autoDownloadCheckbox" className="text-xs font-bold text-neutral-800 cursor-pointer select-none">
-            Unduh otomatis berkas video setelah proses render selesai
+            Otomatis unduh berkas MP4 setelah proses render selesai
           </label>
         </div>
 
@@ -1387,7 +1440,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             className="w-full py-4 bg-black text-white hover:bg-neutral-800 border-2 border-black shadow-[4px_4px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-base uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[48px]"
           >
             <Video className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-            Mulai Render Video ({exportRes} &bull; {exportDuration}s &bull; ~{estimatedMB} MB)
+            Mulai Render Video ({targetDims.width}&times;{targetDims.height} &bull; {exportFps} FPS &bull; {exportDuration}s)
           </button>
         )}
 
@@ -1397,14 +1450,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 font-bold text-xs">
               <span className="flex items-center gap-2 text-black">
                 <span className="w-3 h-3 rounded-full bg-yellow-500 animate-ping inline-block" />
-                Sedang me-render frame: {renderProgress.frame} / {renderProgress.totalFrames} ({renderProgress.percent}%)
+                Me-render frame: {renderProgress.frame} / {renderProgress.totalFrames} ({renderProgress.percent}%) &bull; Deterministik 60 FPS
               </span>
               <span className="font-mono text-neutral-600">
-                Sisa waktu: ~{renderProgress.timeRemainingSec} detik lagi
+                Sisa waktu: ~{renderProgress.timeRemainingSec} detik
               </span>
             </div>
 
-            {/* Progress Bar */}
             <div className="w-full h-6 bg-white border-2 border-black relative overflow-hidden">
               <div
                 className="h-full bg-black transition-all duration-150"
@@ -1435,7 +1487,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               </div>
               <div className="flex items-center gap-2 font-mono font-bold text-xs">
                 <span className="px-2 py-0.5 bg-white border border-black">
-                  {renderResult.width}x{renderResult.height}
+                  {renderResult.width} &times; {renderResult.height}
                 </span>
                 <span className="px-2 py-0.5 bg-white border border-black">
                   {renderResult.sizeMB} MB
@@ -1446,7 +1498,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               </div>
             </div>
 
-            {/* Pemutar Video Hasil Render */}
+            {/* Video Player */}
             <div className="max-w-md mx-auto border-2 border-black bg-black overflow-hidden shadow-[3px_3px_0px_#000]">
               <video
                 src={renderResult.url}
@@ -1465,7 +1517,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 className="w-full sm:w-auto px-6 py-3.5 bg-green-400 hover:bg-green-300 text-black border-2 border-black shadow-[3px_3px_0px_#000] font-black text-sm uppercase flex items-center justify-center gap-2 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[44px]"
               >
                 <Download className="w-4 h-4" />
-                Unduh Video Sekarang ({renderResult.format.toUpperCase()})
+                Unduh Video ({renderResult.format.toUpperCase()})
               </button>
 
               <button
