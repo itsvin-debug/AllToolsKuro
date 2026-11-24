@@ -1,6 +1,6 @@
 /**
- * Kuro Studio - Code to Video Studio v3
- * Re-Architecture: True Full-Screen Cinematic + Deterministic 60fps HD Video Renderer.
+ * Kuro Studio - Code to Video Studio v4
+ * Claude-Grade Direct GPU Live Preview + 100% Deterministic 60 FPS WebCodecs HD Video Renderer.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -17,7 +17,6 @@ import {
   Sparkles,
   Cloud,
   Type,
-  Sliders,
   AlertCircle,
   Clapperboard,
   Film,
@@ -27,9 +26,7 @@ import {
   CheckCircle2,
   Tv,
   Maximize,
-  SlidersHorizontal,
-  Flame,
-  Layers
+  SlidersHorizontal
 } from 'lucide-react';
 import {
   CODE_TEMPLATES,
@@ -37,11 +34,29 @@ import {
 } from '../../utils/codeToVideoTemplates';
 import {
   CodeToVideoCompositor,
-  CodeSandboxRunner,
   computeTargetDimensions,
   exportVideo,
+  buildSandboxHtml,
   BITRATE_PRESETS
 } from '../../utils/codeToVideoEngine';
+
+function findPrimaryCanvas(doc) {
+  if (!doc) return null;
+  const canvases = doc.querySelectorAll('canvas');
+  if (!canvases || canvases.length === 0) return null;
+  if (canvases.length === 1) return canvases[0];
+  let largest = null;
+  let maxArea = -1;
+  for (let i = 0; i < canvases.length; i++) {
+    const c = canvases[i];
+    const area = (c.width || c.clientWidth || 0) * (c.height || c.clientHeight || 0);
+    if (area > maxArea) {
+      maxArea = area;
+      largest = c;
+    }
+  }
+  return largest;
+}
 
 export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   // --- TEMPLATE & MODE EDITOR ---
@@ -66,7 +81,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   // --- SETTINGS (SYNCHRONIZED VIA settingsRef) ---
   const [settings, setSettings] = useState(() => {
     return {
-      stage3d: false, // Default: OFF (100% Full Layar Sinematik Murni)
+      stage3d: false, // Default: OFF (100% Full Layar Sinematik Murni Direct GPU)
       vignette: true,
       colorBoost: false,
       ...CODE_TEMPLATES[0].defaults
@@ -105,10 +120,11 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const [renderResult, setRenderResult] = useState(null);
 
   // --- REFS ---
+  const liveIframeRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
   const canvasRef = useRef(null);
   const viewportRef = useRef(null);
   const compositorRef = useRef(null);
-  const sandboxRef = useRef(null);
   const animationFrameId = useRef(null);
   const startTimeRef = useRef(performance.now());
   const abortControllerRef = useRef(null);
@@ -122,38 +138,63 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     } catch {}
   }, [codeAll]);
 
-  // Inisialisasi Engine & Sandbox Runner
+  // Inisialisasi Engine Compositor & Live Preview Iframe
   useEffect(() => {
-    if (!canvasRef.current) return;
-
     const { width, height } = computeTargetDimensions('720p', exportAspect);
     const comp = new CodeToVideoCompositor(canvasRef.current, width, height);
     compositorRef.current = comp;
 
-    const sand = new CodeSandboxRunner(comp);
-    sandboxRef.current = sand;
+    if (overlayCanvasRef.current) {
+      overlayCanvasRef.current.width = width;
+      overlayCanvasRef.current.height = height;
+    }
 
-    const initialCode = editorMode === 'canvas' ? codeCanvas : codeAll;
-    sand.updateCode(initialCode, editorMode === 'canvas' ? 'canvas' : 'html');
+    // Suntikkan kode awal ke Live Iframe
+    if (liveIframeRef.current) {
+      const initialCode = editorMode === 'canvas' ? codeCanvas : codeAll;
+      liveIframeRef.current.srcdoc = buildSandboxHtml(initialCode, 'live', {
+        width,
+        height,
+        editorMode
+      });
+    }
 
     startTimeRef.current = performance.now();
 
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
 
-    // Loop animasi live preview bebas stale-closure
+    // Loop animasi live preview Direct GPU (100% mulus tanpa ImageBitmap transfer per frame di Fullscreen)
     const loop = (now) => {
-      if (isPlaying && compositorRef.current && sandboxRef.current) {
+      if (isPlaying && compositorRef.current) {
         const curSettings = settingsRef.current;
         const spd = curSettings.motionSpeed || 1.0;
         const elapsed = ((now - startTimeRef.current) / 1000) * spd;
 
-        sandboxRef.current.renderStep(elapsed);
-        if (sandboxRef.current.lastError) {
-          setErrorLog(sandboxRef.current.lastError);
-        }
+        if (!curSettings.stage3d) {
+          // --- MODE FULLSCREEN SINEMATIK: Direct GPU native rendering ---
+          // Iframe terlihat di depan. Hanya gambar overlay efek tambahan (jika ada) ke overlayCanvas
+          if (overlayCanvasRef.current) {
+            const oCanvas = overlayCanvasRef.current;
+            const oCtx = oCanvas.getContext('2d');
+            compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, elapsed, curSettings);
+          }
+        } else {
+          // --- MODE BINGKAI TV 3D: Ambil kanvas iframe untuk tekstur Three.js ---
+          try {
+            const doc = liveIframeRef.current?.contentDocument || liveIframeRef.current?.contentWindow?.document;
+            if (doc) {
+              const innerCanvas = findPrimaryCanvas(doc);
+              if (innerCanvas && innerCanvas.width > 0 && innerCanvas.height > 0) {
+                compositorRef.current.codeCtx.clearRect(0, 0, compositorRef.current.width, compositorRef.current.height);
+                compositorRef.current.codeCtx.drawImage(innerCanvas, 0, 0, compositorRef.current.width, compositorRef.current.height);
+                compositorRef.current.codeTexture.needsUpdate = true;
+              }
+            }
+          } catch {}
 
-        compositorRef.current.renderFrame(elapsed, curSettings);
+          compositorRef.current.renderFrame(elapsed, curSettings);
+        }
 
         frameCount++;
         if (now - lastFpsUpdate >= 1000) {
@@ -170,9 +211,19 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
     return () => {
       if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
-      if (sandboxRef.current) sandboxRef.current.dispose();
       if (compositorRef.current) compositorRef.current.dispose();
     };
+  }, []);
+
+  // Tangkap error runtime dari live preview iframe
+  useEffect(() => {
+    const handleMsg = (e) => {
+      if (e.data?.type === 'ctv-error') {
+        setErrorLog(e.data.error);
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    return () => window.removeEventListener('message', handleMsg);
   }, []);
 
   // Update dimensi pratinjau saat rasio aspek berubah
@@ -180,19 +231,18 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (!compositorRef.current) return;
     const { width, height } = computeTargetDimensions('720p', exportAspect);
     compositorRef.current.resize(width, height);
-    sandboxRef.current?.resize(width, height);
+    if (overlayCanvasRef.current) {
+      overlayCanvasRef.current.width = width;
+      overlayCanvasRef.current.height = height;
+    }
   }, [exportAspect]);
 
-  // Terapkan perubahan kode ke Sandbox
+  // Terapkan perubahan kode ke Live Iframe
   const handleApplyCode = useCallback(() => {
-    if (!sandboxRef.current) return;
-
     let targetCode = '';
-    let targetType = 'auto';
 
     if (editorMode === 'canvas') {
       targetCode = codeCanvas;
-      targetType = 'canvas';
     } else {
       if (hybridTab === 'all') {
         targetCode = codeAll;
@@ -200,19 +250,29 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         targetCode = buildCompositeHtml(codeHtml, codeCss, codeJs);
         setCodeAll(targetCode);
       }
-      targetType = 'html';
     }
 
-    sandboxRef.current.updateCode(targetCode, targetType);
-
-    if (sandboxRef.current.lastError) {
-      setErrorLog(sandboxRef.current.lastError);
-      onShowToast?.(sandboxRef.current.lastError, 'error');
-    } else {
-      setErrorLog(null);
-      onShowToast?.('Pratinjau visual berhasil diperbarui.', 'success');
+    // Koreksi otomatis typo CSS seperti style yang diawali tanda minus
+    targetCode = targetCode.replace(/<style[^>]*>\s*-\s*\{/gi, '<style>\n* {');
+    if (editorMode !== 'canvas' && hybridTab === 'all') {
+      setCodeAll(targetCode);
     }
-  }, [editorMode, hybridTab, codeAll, codeHtml, codeCss, codeJs, codeCanvas, onShowToast]);
+
+    setErrorLog(null);
+    const { width, height } = computeTargetDimensions('720p', exportAspect);
+
+    if (liveIframeRef.current) {
+      liveIframeRef.current.srcdoc = buildSandboxHtml(targetCode, 'live', {
+        width,
+        height,
+        editorMode
+      });
+    }
+
+    startTimeRef.current = performance.now();
+    setIsPlaying(true);
+    onShowToast?.('Pratinjau visual berhasil diperbarui.', 'success');
+  }, [editorMode, hybridTab, codeAll, codeHtml, codeCss, codeJs, codeCanvas, exportAspect, onShowToast]);
 
   // Ganti Template Preset
   const handleSelectTemplate = (templateId) => {
@@ -226,10 +286,18 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }));
     setErrorLog(null);
 
+    const { width, height } = computeTargetDimensions('720p', exportAspect);
+
     if (tmpl.category === 'canvas') {
       setEditorMode('canvas');
       setCodeCanvas(tmpl.code);
-      if (sandboxRef.current) sandboxRef.current.updateCode(tmpl.code, 'canvas');
+      if (liveIframeRef.current) {
+        liveIframeRef.current.srcdoc = buildSandboxHtml(tmpl.code, 'live', {
+          width,
+          height,
+          editorMode: 'canvas'
+        });
+      }
     } else {
       setEditorMode('hybrid');
       setHybridTab('all');
@@ -239,9 +307,17 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
       const comp = buildCompositeHtml(tmpl.html, tmpl.css, tmpl.js);
       setCodeAll(comp);
-      if (sandboxRef.current) sandboxRef.current.updateCode(comp, 'html');
+      if (liveIframeRef.current) {
+        liveIframeRef.current.srcdoc = buildSandboxHtml(comp, 'live', {
+          width,
+          height,
+          editorMode: 'hybrid'
+        });
+      }
     }
 
+    startTimeRef.current = performance.now();
+    setIsPlaying(true);
     onShowToast?.(`Template "${tmpl.name}" aktif.`, 'info');
   };
 
@@ -342,6 +418,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       const content = event.target?.result;
       if (typeof content === 'string') {
         const trimmed = content.trim();
+        const { width, height } = computeTargetDimensions('720p', exportAspect);
+
         if (
           trimmed.includes('<!DOCTYPE') ||
           trimmed.includes('<html') ||
@@ -351,12 +429,26 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
           setEditorMode('hybrid');
           setHybridTab('all');
           setCodeAll(content);
-          if (sandboxRef.current) sandboxRef.current.updateCode(content, 'html');
+          if (liveIframeRef.current) {
+            liveIframeRef.current.srcdoc = buildSandboxHtml(content, 'live', {
+              width,
+              height,
+              editorMode: 'hybrid'
+            });
+          }
         } else {
           setEditorMode('canvas');
           setCodeCanvas(content);
-          if (sandboxRef.current) sandboxRef.current.updateCode(content, 'canvas');
+          if (liveIframeRef.current) {
+            liveIframeRef.current.srcdoc = buildSandboxHtml(content, 'live', {
+              width,
+              height,
+              editorMode: 'canvas'
+            });
+          }
         }
+        startTimeRef.current = performance.now();
+        setIsPlaying(true);
         onShowToast?.(`Berkas "${file.name}" berhasil diimpor.`, 'success');
       }
     };
@@ -384,12 +476,29 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Controls Player
-  const handleTogglePlay = () => setIsPlaying((prev) => !prev);
+  // Controls Player (Direct message to Live Iframe tanpa reload)
+  const handleTogglePlay = () => {
+    setIsPlaying((prev) => {
+      const next = !prev;
+      try {
+        liveIframeRef.current?.contentWindow?.postMessage({
+          type: next ? 'ctv-live-resume' : 'ctv-live-pause'
+        }, '*');
+      } catch {}
+      return next;
+    });
+  };
+
   const handleRestart = () => {
     startTimeRef.current = performance.now();
     setIsPlaying(true);
+    try {
+      liveIframeRef.current?.contentWindow?.postMessage({
+        type: 'ctv-live-restart'
+      }, '*');
+    } catch {}
   };
+
   const handleToggleFullscreen = () => {
     if (!viewportRef.current) return;
     if (!document.fullscreenElement) {
@@ -403,7 +512,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
   // --- MULAI RENDER VIDEO DETERMINISTIK 60 FPS ---
   const handleStartRender = async () => {
-    if (!compositorRef.current || !sandboxRef.current) return;
+    if (!compositorRef.current) return;
+
+    // 1. Pause Live Preview sementara agar 100% CPU & GPU fokus penuh pada render
+    setIsPlaying(false);
+    try {
+      liveIframeRef.current?.contentWindow?.postMessage({ type: 'ctv-live-pause' }, '*');
+    } catch {}
 
     setIsRendering(true);
     setRenderResult(null);
@@ -417,12 +532,25 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    let targetCode = '';
+    if (editorMode === 'canvas') {
+      targetCode = codeCanvas;
+    } else {
+      if (hybridTab === 'all') {
+        targetCode = codeAll;
+      } else {
+        targetCode = buildCompositeHtml(codeHtml, codeCss, codeJs);
+      }
+    }
+    targetCode = targetCode.replace(/<style[^>]*>\s*-\s*\{/gi, '<style>\n* {');
+
     const finalDuration = Math.max(1, Math.min(Number(exportDuration) || 10, 60));
 
     try {
       const result = await exportVideo({
         compositor: compositorRef.current,
-        sandbox: sandboxRef.current,
+        code: targetCode,
+        editorMode,
         settings: settingsRef.current,
         resolution: exportRes,
         aspectRatio: exportAspect,
@@ -441,12 +569,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (autoDownload && result.url) {
         const a = document.createElement('a');
         a.href = result.url;
-        a.download = `KuroStudio_Video_${Date.now()}.${result.format}`;
+        a.download = `KuroStudio_${result.width}x${result.height}_${Date.now()}.${result.format}`;
         a.click();
       }
     } catch (err) {
       if (abortController.signal.aborted) {
-        onShowToast?.('Proses render dibatalkan.', 'info');
+        onShowToast?.('Proses render dibatalkan oleh pengguna.', 'info');
       } else {
         onShowToast?.(`Gagal render: ${err.message}`, 'error');
       }
@@ -467,7 +595,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (!renderResult?.url) return;
     const a = document.createElement('a');
     a.href = renderResult.url;
-    a.download = `KuroStudio_Video_${Date.now()}.${renderResult.format}`;
+    a.download = `KuroStudio_${renderResult.width}x${renderResult.height}_${Date.now()}.${renderResult.format}`;
     a.click();
     onShowToast?.('Mengunduh video...', 'success');
   };
@@ -517,14 +645,14 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 Code to Video Studio
               </h1>
               <span className="px-2.5 py-0.5 bg-yellow-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000]">
-                TRUE FULLSCREEN
+                DIRECT GPU PREVIEW
               </span>
               <span className="px-2.5 py-0.5 bg-cyan-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000] hidden sm:inline-block">
-                60 FPS DETERMINISTIC
+                DETERMINISTIC 60 FPS
               </span>
             </div>
             <p className="text-xs sm:text-sm text-neutral-600 font-semibold mt-0.5">
-              Video animasi sinematik full-bleed 100% layar penuh atau panggung TV 3D dengan WebCodecs MP4.
+              Live preview GPU native secepat kilat & render video frame-exact WebCodecs (MP4 & WebM).
             </p>
           </div>
         </div>
@@ -548,8 +676,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         </div>
       </div>
 
-      {/* ─── MOBILE SECTION SWITCHER (md:hidden) ─── */}
-      <div className="flex md:hidden bg-white border-2 border-black shadow-[3px_3px_0px_#000] p-1 gap-1">
+      {/* ─── MOBILE SECTION SWITCHER ─── */}
+      <div className="flex lg:hidden bg-white border-2 border-black shadow-[3px_3px_0px_#000] p-1 gap-1">
         <button
           onClick={() => setMobileSection('preview')}
           className={`flex-1 py-2 text-xs font-black uppercase text-center transition-colors ${
@@ -597,7 +725,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   <button
                     onClick={() => {
                       setEditorMode('hybrid');
-                      if (sandboxRef.current) sandboxRef.current.updateCode(codeAll, 'html');
+                      const { width, height } = computeTargetDimensions('720p', exportAspect);
+                      if (liveIframeRef.current) {
+                        liveIframeRef.current.srcdoc = buildSandboxHtml(codeAll, 'live', { width, height, editorMode: 'hybrid' });
+                      }
                     }}
                     className={`px-2.5 py-1 text-xs font-black cursor-pointer ${
                       editorMode === 'hybrid' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
@@ -608,7 +739,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   <button
                     onClick={() => {
                       setEditorMode('canvas');
-                      if (sandboxRef.current) sandboxRef.current.updateCode(codeCanvas, 'canvas');
+                      const { width, height } = computeTargetDimensions('720p', exportAspect);
+                      if (liveIframeRef.current) {
+                        liveIframeRef.current.srcdoc = buildSandboxHtml(codeCanvas, 'live', { width, height, editorMode: 'canvas' });
+                      }
                     }}
                     className={`px-2.5 py-1 text-xs font-black border-l-2 border-black cursor-pointer ${
                       editorMode === 'canvas' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
@@ -775,23 +909,72 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             </div>
           </div>
 
-          {/* Viewport Box (Canvas Output) */}
+          {/* Viewport Box (Canvas Output & Direct GPU Preview) */}
           <div
             ref={viewportRef}
             className="bg-black border-2 border-black shadow-[4px_4px_0px_#000] p-2 relative flex flex-col items-center justify-center overflow-hidden"
           >
-            <div className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden min-h-[220px]">
-              <canvas
-                ref={canvasRef}
-                className="w-full h-auto object-contain max-h-[420px] rounded-sm"
+            <div
+              className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden min-h-[220px]"
+              style={{
+                aspectRatio: exportAspect.replace(':', '/'),
+                maxHeight: '440px'
+              }}
+            >
+              {/* Direct GPU Live Sandbox Iframe (Render langsung di depan saat mode Full Layar) */}
+              <iframe
+                ref={liveIframeRef}
+                sandbox="allow-scripts allow-same-origin"
+                className="border-0"
+                style={
+                  !settings.stage3d
+                    ? {
+                        position: 'absolute',
+                        inset: 0,
+                        width: '100%',
+                        height: '100%',
+                        zIndex: 1,
+                        pointerEvents: isRendering ? 'none' : 'auto'
+                      }
+                    : {
+                        position: 'fixed',
+                        left: 0,
+                        top: 0,
+                        width: `${targetDims.width}px`,
+                        height: `${targetDims.height}px`,
+                        opacity: 0.001,
+                        pointerEvents: 'none',
+                        zIndex: -10
+                      }
+                }
+                title="Live Animation Stage"
               />
+
+              {/* Transparent Overlay Canvas untuk Efek Tambahan (Awan, Partikel, Vignette, HUD) */}
+              {!settings.stage3d && (
+                <canvas
+                  ref={overlayCanvasRef}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  style={{ zIndex: 2 }}
+                />
+              )}
+
+              {/* Canvas 3D TV Stage (Hanya aktif saat Bingkai TV 3D ON) */}
+              {settings.stage3d && (
+                <canvas
+                  ref={canvasRef}
+                  className="w-full h-auto object-contain max-h-[420px] rounded-sm relative"
+                  style={{ zIndex: 1 }}
+                />
+              )}
+
               {!isPlaying && (
-                <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 text-yellow-300 border border-yellow-400 font-mono text-[10px] font-bold">
+                <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 text-yellow-300 border border-yellow-400 font-mono text-[10px] font-bold z-10">
                   PAUSED
                 </div>
               )}
               {isRendering && (
-                <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600 text-white font-mono text-[10px] font-black animate-pulse">
+                <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600 text-white font-mono text-[10px] font-black animate-pulse z-10">
                   REC ●
                 </div>
               )}
@@ -821,7 +1004,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-mono px-2 py-0.5 bg-neutral-800 border border-neutral-700 text-yellow-300">
-                  {exportAspect} &bull; {settings.stage3d ? '3D TV FRAME' : '100% FULLSCREEN'}
+                  {exportAspect} &bull; {settings.stage3d ? '3D TV FRAME' : 'DIRECT GPU FULLSCREEN'}
                 </span>
                 <button
                   onClick={handleToggleFullscreen}
@@ -834,7 +1017,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             </div>
           </div>
 
-          {/* 3 Tab Pengaturan: SELALU Tersedia & Bebas Dikombinasi */}
+          {/* 3 Tab Pengaturan Visual */}
           <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4">
             
             {/* Header Tab */}
@@ -874,7 +1057,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             {activeTab === 'camera' && (
               <div className="space-y-4 text-xs">
                 
-                {/* Sakelar Toggle Utama: Bingkai TV / Panggung 3D */}
+                {/* Sakelar Toggle: Bingkai TV / Panggung 3D */}
                 <div className="p-3 bg-neutral-50 border-2 border-black flex items-center justify-between">
                   <div>
                     <span className="font-black text-black block text-sm">
@@ -883,7 +1066,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                     <span className="text-[11px] text-neutral-500">
                       {settings.stage3d
                         ? 'Animasi dimuat ke dalam bingkai TV 3D mengambang dengan latar.'
-                        : 'OFF: Animasi tampil 100% Layar Penuh (Full-Bleed, 0px margin, tanpa TV).'}
+                        : 'OFF: Animasi tampil 100% Layar Penuh (Direct GPU Full-Bleed, 0px margin, tanpa TV).'}
                     </span>
                   </div>
                   <input
@@ -899,7 +1082,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   <div className="space-y-3 pt-1">
                     <div className="p-2.5 bg-green-50 border border-green-800 text-green-950 font-bold text-xs flex items-center gap-2">
                       <Maximize className="w-4 h-4 text-green-700" />
-                      Mode Full Layar Sinematik Aktif: Video memenuhi 100% kanvas secara murni.
+                      Mode Full Layar Direct GPU Aktif: Animasi memenuhi 100% kanvas dengan akselerasi penuh.
                     </div>
 
                     <div>
@@ -913,7 +1096,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                         max="3.0"
                         step="0.25"
                         value={settings.motionSpeed}
-                        onChange={(e) => setSettings((s) => ({ ...s, motionSpeed: Number(e.target.value) }))}
+                        onChange={(e) => {
+                          const spd = Number(e.target.value);
+                          setSettings((s) => ({ ...s, motionSpeed: spd }));
+                          try {
+                            liveIframeRef.current?.contentWindow?.postMessage({
+                              type: 'ctv-live-speed',
+                              speedMultiplier: spd
+                            }, '*');
+                          } catch {}
+                        }}
                         className="w-full accent-black cursor-pointer h-2"
                       />
                     </div>
@@ -1050,7 +1242,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                           max="3.0"
                           step="0.25"
                           value={settings.motionSpeed}
-                          onChange={(e) => setSettings((s) => ({ ...s, motionSpeed: Number(e.target.value) }))}
+                          onChange={(e) => {
+                            const spd = Number(e.target.value);
+                            setSettings((s) => ({ ...s, motionSpeed: spd }));
+                            try {
+                              liveIframeRef.current?.contentWindow?.postMessage({
+                                type: 'ctv-live-speed',
+                                speedMultiplier: spd
+                              }, '*');
+                            } catch {}
+                          }}
                           className="w-full accent-black cursor-pointer h-2"
                         />
                       </div>
@@ -1321,7 +1522,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               Ekspor Video Deterministik 60 FPS HD
             </h2>
             <p className="text-xs sm:text-sm text-neutral-600 font-semibold">
-              Render video bebas patah-patah dengan WebCodecs MP4 dan Virtual Clock Frame Stepping.
+              Render video bebas patah-patah dengan WebCodecs MP4/WebM multi-browser dan Virtual Clock Frame Stepping.
             </p>
           </div>
 
@@ -1441,7 +1642,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             className="w-4 h-4 accent-black cursor-pointer"
           />
           <label htmlFor="autoDownloadCheckbox" className="text-xs font-bold text-neutral-800 cursor-pointer select-none">
-            Otomatis unduh berkas MP4 setelah proses render selesai
+            Otomatis unduh berkas video setelah proses render selesai
           </label>
         </div>
 
@@ -1497,7 +1698,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   Video Berhasil Dirender!
                 </span>
               </div>
-              <div className="flex items-center gap-2 font-mono font-bold text-xs">
+              <div className="flex items-center gap-2 font-mono font-bold text-xs flex-wrap">
                 <span className="px-2 py-0.5 bg-white border border-black">
                   {renderResult.width} &times; {renderResult.height}
                 </span>
@@ -1506,6 +1707,9 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 </span>
                 <span className="px-2 py-0.5 bg-yellow-300 border border-black">
                   {renderResult.format.toUpperCase()}
+                </span>
+                <span className="px-2 py-0.5 bg-emerald-200 border border-black text-emerald-950 font-bold">
+                  {renderResult.engineName}
                 </span>
               </div>
             </div>
