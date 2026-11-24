@@ -27,7 +27,8 @@ import {
   Check,
   Paperclip,
   MessageSquare,
-  Edit3
+  Edit3,
+  Users
 } from 'lucide-react';
 import {
   saveMediaItem,
@@ -40,6 +41,7 @@ import {
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
 const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
 const STORAGE_CONFIRMED_LIDS = 'wa_vault_confirmed_lids';
+const STORAGE_MONITOR_MODE = 'wa_vault_monitor_mode';
 
 // Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
 const safeText = (val) => {
@@ -159,6 +161,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     lockedTargetRef.current = lockedTarget;
   }, [lockedTarget]);
 
+  // Mode Pemantauan: 'all' (Mode Bot WA - Pantau Semua Nomor, default) vs 'single' (Kunci 1 Target)
+  const [monitorMode, setMonitorMode] = useState(() => {
+    return localStorage.getItem(STORAGE_MONITOR_MODE) || 'all';
+  });
+  const monitorModeRef = useRef(monitorMode);
+  useEffect(() => {
+    monitorModeRef.current = monitorMode;
+  }, [monitorMode]);
+
   const [inputTarget, setInputTarget] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | qr_ready | connected | reconnecting
@@ -196,6 +207,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('connect_error');
         socketRef.current.off('session-status');
         socketRef.current.off('status');
+        socketRef.current.off('monitor-mode-updated');
         socketRef.current.off('qr-code');
         socketRef.current.off('qr');
         socketRef.current.off('target-synced');
@@ -254,6 +266,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     socket.on('connect', () => {
       setBackendError(null);
       const savedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
+      const savedMode = localStorage.getItem(STORAGE_MONITOR_MODE) || monitorModeRef.current;
       let savedLids = [];
       try {
         savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
@@ -261,7 +274,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       socket.emit('resume-session', {
         sessionId,
         targetNumber: savedTarget ? normalizePhone(savedTarget) : null,
-        confirmedLids: savedLids
+        confirmedLids: savedLids,
+        monitorMode: savedMode
       });
     });
 
@@ -280,8 +294,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       const reason = safeText(payload?.reason);
       const message = safeText(payload?.message);
       const targetNumber = safeText(payload?.targetNumber);
+      const serverMode = safeText(payload?.monitorMode);
 
       setConnectionStatus(status);
+
+      if (serverMode === 'all' || serverMode === 'single') {
+        setMonitorMode(serverMode);
+        localStorage.setItem(STORAGE_MONITOR_MODE, serverMode);
+      }
 
       if (targetNumber && !lockedTargetRef.current) {
         const clean = normalizePhone(targetNumber);
@@ -296,6 +316,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         triggerToast('WhatsApp berhasil terhubung!', 'success');
 
         const currentSavedTarget = localStorage.getItem(STORAGE_LOCKED_TARGET);
+        const currentSavedMode = localStorage.getItem(STORAGE_MONITOR_MODE) || monitorModeRef.current;
         let savedLids = [];
         try {
           savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
@@ -304,7 +325,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           socket.emit('resume-session', {
             sessionId,
             targetNumber: normalizePhone(currentSavedTarget),
-            confirmedLids: savedLids
+            confirmedLids: savedLids,
+            monitorMode: currentSavedMode
           });
         }
       } else if (status === 'qr_ready') {
@@ -317,6 +339,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         if (reason === 'logged_out' || message) {
           triggerToast(message || 'Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
         }
+      }
+    });
+
+    // Event update mode pemantauan dari server
+    socket.on('monitor-mode-updated', (payload) => {
+      const serverMode = safeText(payload?.monitorMode);
+      if (serverMode === 'all' || serverMode === 'single') {
+        setMonitorMode(serverMode);
+        localStorage.setItem(STORAGE_MONITOR_MODE, serverMode);
       }
     });
 
@@ -545,6 +576,26 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
   }
 
+  // Beralih antara Mode Pemantauan: 'all' (Semua Nomor / Bot WA) vs 'single' (Kunci 1 Target)
+  const handleSetMonitorMode = (newMode) => {
+    const cleanMode = newMode === 'single' ? 'single' : 'all';
+    setMonitorMode(cleanMode);
+    localStorage.setItem(STORAGE_MONITOR_MODE, cleanMode);
+    if (socketRef.current && socketRef.current.connected) {
+      socketRef.current.emit('set-monitor-mode', {
+        sessionId,
+        monitorMode: cleanMode,
+        targetNumber: lockedTargetRef.current
+      });
+    }
+    triggerToast(
+      cleanMode === 'all'
+        ? 'Mode Semua Nomor aktif (Mode Bot WA: pantau seluruh chat pribadi)'
+        : 'Mode Kunci 1 Target aktif',
+      'info'
+    );
+  };
+
   // Tombol Mulai & Buat QR Code Baru secara manual
   const handleStartSession = () => {
     if (!socketRef.current || !socketRef.current.connected) {
@@ -555,7 +606,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     if (socketRef.current) {
       socketRef.current.emit('start-session', {
         sessionId,
-        targetNumber: lockedTargetRef.current
+        targetNumber: lockedTargetRef.current,
+        monitorMode: monitorModeRef.current
       });
     }
   };
@@ -589,7 +641,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       socketRef.current.emit('set-target', {
         sessionId,
         targetNumber: normalized,
-        confirmedLids
+        confirmedLids,
+        monitorMode: monitorModeRef.current
       });
     }
 
@@ -608,7 +661,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       socketRef.current.emit('set-target', {
         sessionId,
         targetNumber: null,
-        confirmedLids: []
+        confirmedLids: [],
+        monitorMode: monitorModeRef.current
       });
     }
 
@@ -708,6 +762,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   // Filter Media
   const filteredMedia = mediaList.filter((item) => {
+    if (mediaFilter === 'view_once') return item.isViewOnce === true;
     if (mediaFilter === 'deleted') return item.isDeleted === true;
     if (mediaFilter === 'text') return item.mediaType === 'text';
     if (mediaFilter === 'image') return item.mediaType === 'image';
@@ -892,83 +947,155 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           )}
         </div>
 
-        {/* Panel 2: Kunci 1 Nomor Target Terpantau */}
+        {/* Panel 2: Mode Pemantauan & Target (Mode Bot WA vs Kunci 1 Target) */}
         <div className="bg-white border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b-2 border-black pb-3">
               <div className="flex items-center gap-2">
-                <Lock className="w-5 h-5 text-neutral-900" />
+                {monitorMode === 'all' ? (
+                  <Users className="w-5 h-5 text-neutral-900" />
+                ) : (
+                  <Lock className="w-5 h-5 text-neutral-900" />
+                )}
                 <h2 className="font-black text-sm md:text-base uppercase tracking-tight">
-                  Kunci 1 Nomor Target
+                  Mode Pemantauan Pesan
                 </h2>
               </div>
-              <span className={`px-2 py-0.5 border border-black rounded text-[11px] font-black ${lockedTarget ? 'bg-emerald-300 text-black' : 'bg-neutral-100 text-neutral-600'}`}>
-                {lockedTarget ? '1 TARGET TERKUNCI' : 'BELUM TERKUNCI'}
+              <span className={`px-2 py-0.5 border border-black rounded text-[11px] font-black ${
+                monitorMode === 'all'
+                  ? 'bg-cyan-300 text-black'
+                  : lockedTarget
+                  ? 'bg-emerald-300 text-black'
+                  : 'bg-neutral-100 text-neutral-600'
+              }`}>
+                {monitorMode === 'all'
+                  ? 'MODE BOT WA (SEMUA)'
+                  : lockedTarget
+                  ? '1 TARGET TERKUNCI'
+                  : 'TARGET BELUM TERKUNCI'}
               </span>
             </div>
 
-            <p className="text-xs text-neutral-600">
-              Sistem akan <b>mengunci 1 nomor target saja</b> untuk akurasi maksimal. Seluruh pesan dan media dari nomor ini akan otomatis diamankan di browser Anda.
-            </p>
+            {/* Switcher Mode: Semua Nomor (Mode Bot WA) vs Kunci 1 Target */}
+            <div className="flex rounded-lg border-2 border-black overflow-hidden p-0.5 bg-neutral-100 shadow-[2px_2px_0px_#000]">
+              <button
+                type="button"
+                onClick={() => handleSetMonitorMode('all')}
+                className={`flex-1 py-1.5 px-2 text-xs font-black rounded-md flex items-center justify-center gap-1.5 transition-all ${
+                  monitorMode === 'all'
+                    ? 'bg-black text-white shadow-[1px_1px_0px_#22c55e]'
+                    : 'text-neutral-700 hover:bg-neutral-200'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                Semua Nomor (Mode Bot WA)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetMonitorMode('single')}
+                className={`flex-1 py-1.5 px-2 text-xs font-black rounded-md flex items-center justify-center gap-1.5 transition-all ${
+                  monitorMode === 'single'
+                    ? 'bg-black text-white shadow-[1px_1px_0px_#22c55e]'
+                    : 'text-neutral-700 hover:bg-neutral-200'
+                }`}
+              >
+                <Lock className="w-3.5 h-3.5" />
+                Kunci 1 Target
+              </button>
+            </div>
 
-            {/* Jika Nomor Target Sudah Terkunci */}
-            {lockedTarget ? (
-              <div className="p-4 bg-emerald-50 border-2 border-black rounded-xl shadow-[3px_3px_0px_#000] space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-lg bg-emerald-400 border-2 border-black flex items-center justify-center shadow-[1.5px_1.5px_0px_#000]">
-                      <Lock className="w-5 h-5 text-black" />
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase font-black text-emerald-800 tracking-wider">Target Terkunci</span>
-                      <p className="font-mono font-black text-base text-neutral-900 tracking-tight">
-                        +{safeText(lockedTarget)}
-                      </p>
-                    </div>
+            {/* Konten Mode Sesuai Tab Terpilih */}
+            {monitorMode === 'all' ? (
+              <div className="p-4 bg-cyan-50 border-2 border-black rounded-xl shadow-[3px_3px_0px_#000] space-y-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-lg bg-cyan-400 border-2 border-black flex items-center justify-center shadow-[1.5px_1.5px_0px_#000]">
+                    <Users className="w-5 h-5 text-black" />
                   </div>
-                  <button
-                    onClick={handleUnlockTarget}
-                    className="px-3 py-1.5 bg-white text-rose-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-50 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
-                  >
-                    <Unlock className="w-3.5 h-3.5" />
-                    Ganti Target
-                  </button>
+                  <div>
+                    <span className="text-[10px] uppercase font-black text-cyan-900 tracking-wider">
+                      Mode Bebas Aktif
+                    </span>
+                    <p className="font-black text-sm text-neutral-900">
+                      Pantau Semua Kontak Masuk
+                    </p>
+                  </div>
                 </div>
-                <div className="p-2 bg-white/80 border border-emerald-300 rounded text-[11px] text-emerald-900 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Target aktif terpantau secara real-time. Tersinkronisasi otomatis dengan server.</span>
+                <p className="text-xs text-neutral-700 leading-relaxed">
+                  Sistem bekerja seperti <b>Bot WhatsApp (misal .rvo)</b>: menangkap dan mendekripsi seluruh pesan &amp; media sekali lihat dari nomor mana saja tanpa dibatasi 1 nomor target.
+                </p>
+                <div className="p-2 bg-white/90 border border-cyan-400 rounded text-[11px] text-cyan-950 flex items-center gap-2 font-medium">
+                  <CheckCircle2 className="w-4 h-4 text-cyan-700 shrink-0" />
+                  <span>Media View Once yang masuk langsung didekripsi otomatis saat diterima.</span>
                 </div>
               </div>
             ) : (
-              /* Jika Belum Ada Target Terkunci */
-              <form onSubmit={handleLockTarget} className="space-y-3">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={inputTarget}
-                    onChange={(e) => setInputTarget(e.target.value)}
-                    placeholder="Contoh: 08123456789 atau 628xxx"
-                    className="flex-1 px-3 py-2 bg-neutral-50 border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:bg-white focus:ring-2 focus:ring-black"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    Kunci Target
-                  </button>
-                </div>
-                <div className="p-2.5 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center py-4 text-neutral-500 text-xs">
-                  <Info className="w-5 h-5 mx-auto mb-1 text-neutral-400" />
-                  Masukkan nomor WhatsApp target di atas dan klik <b>Kunci Target</b>.
-                </div>
-              </form>
+              <div className="space-y-3">
+                <p className="text-xs text-neutral-600">
+                  Sistem <b>mengunci 1 nomor target spesifik</b>. Seluruh pesan dan media dari nomor target ini akan dipantau dan diamankan secara eksklusif.
+                </p>
+
+                {lockedTarget ? (
+                  <div className="p-4 bg-emerald-50 border-2 border-black rounded-xl shadow-[3px_3px_0px_#000] space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-lg bg-emerald-400 border-2 border-black flex items-center justify-center shadow-[1.5px_1.5px_0px_#000]">
+                          <Lock className="w-5 h-5 text-black" />
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase font-black text-emerald-800 tracking-wider">Target Terkunci</span>
+                          <p className="font-mono font-black text-base text-neutral-900 tracking-tight">
+                            +{safeText(lockedTarget)}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleUnlockTarget}
+                        className="px-3 py-1.5 bg-white text-rose-700 border-2 border-black rounded-lg text-xs font-bold shadow-[2px_2px_0px_#000] hover:bg-rose-50 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5"
+                      >
+                        <Unlock className="w-3.5 h-3.5" />
+                        Ganti Target
+                      </button>
+                    </div>
+                    <div className="p-2 bg-white/80 border border-emerald-300 rounded text-[11px] text-emerald-900 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Target aktif terpantau secara real-time. Tersinkronisasi otomatis dengan server.</span>
+                    </div>
+                  </div>
+                ) : (
+                  <form onSubmit={handleLockTarget} className="space-y-3">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={inputTarget}
+                        onChange={(e) => setInputTarget(e.target.value)}
+                        placeholder="Contoh: 08123456789 atau 628xxx"
+                        className="flex-1 px-3 py-2 bg-neutral-50 border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:bg-white focus:ring-2 focus:ring-black"
+                      />
+                      <button
+                        type="submit"
+                        className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        Kunci Target
+                      </button>
+                    </div>
+                    <div className="p-2.5 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-center py-4 text-neutral-500 text-xs">
+                      <Info className="w-5 h-5 mx-auto mb-1 text-neutral-400" />
+                      Masukkan nomor WhatsApp target di atas dan klik <b>Kunci Target</b>.
+                    </div>
+                  </form>
+                )}
+              </div>
             )}
           </div>
 
           <div className="p-2.5 bg-blue-50 border border-black rounded-lg flex items-start gap-2 text-[11px] text-blue-900">
             <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
-            <span>Format otomatis: nomor awalan <b>08xx</b> langsung diubah ke <b>628xx</b> (minimal 9 digit).</span>
+            <span>
+              {monitorMode === 'all'
+                ? 'Semua pesan dari seluruh kontak pribadi otomatis tertangkap ke vault galeri.'
+                : 'Format otomatis: nomor awalan 08xx langsung diubah ke 628xx (minimal 9 digit).'}
+            </span>
           </div>
         </div>
 
@@ -999,6 +1126,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 className={`px-2.5 py-1 ${mediaFilter === 'all' ? 'bg-black text-white' : 'bg-white text-black hover:bg-neutral-100'}`}
               >
                 Semua
+              </button>
+              <button
+                onClick={() => setMediaFilter('view_once')}
+                className={`px-2.5 py-1 border-l-2 border-black ${mediaFilter === 'view_once' ? 'bg-amber-400 text-black' : 'bg-white text-black hover:bg-neutral-100'}`}
+              >
+                1x Lihat ({mediaList.filter((m) => m.isViewOnce).length})
               </button>
               <button
                 onClick={() => setMediaFilter('deleted')}
@@ -1064,7 +1197,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             {vaultActivity && safeText(vaultActivity.text)
               ? safeText(vaultActivity.text)
               : connectionStatus === 'connected'
-                ? lockedTarget
+                ? monitorMode === 'all'
+                  ? 'WhatsApp terhubung. Memantau seluruh nomor secara otomatis (Mode Bot WA aktif)...'
+                  : lockedTarget
                   ? `Server aktif memantau pesan masuk dari +${safeText(lockedTarget)} (Anti-Delete aktif)...`
                   : 'WhatsApp terhubung. Silakan kunci 1 nomor target untuk mulai memantau.'
                 : 'Menghubungkan ke backend server WhatsApp...'}
