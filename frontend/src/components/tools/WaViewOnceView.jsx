@@ -209,6 +209,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   // Loading on-demand media per item ID
   const [loadingMediaIds, setLoadingMediaIds] = useState(new Set());
+  const [isSyncingStatuses, setIsSyncingStatuses] = useState(false);
+  const pendingDownloadMediaIdsRef = useRef(new Set());
 
   // Lightbox Story Viewer Fullscreen
   const [storyViewerIndex, setStoryViewerIndex] = useState(null);
@@ -484,9 +486,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     socket.on('vault-activity', (data) => {
       if (data && typeof data === 'object') {
+        const text = safeText(data.text);
+        if (text.toLowerCase().includes('sinkronisasi selesai')) {
+          setIsSyncingStatuses(false);
+        }
         setVaultActivity({
           time: Number(data.time) || Date.now(),
-          text: safeText(data.text)
+          text
         });
       }
     });
@@ -517,6 +523,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           bgColor: safeText(rawPayload?.bgColor),
           fileName: safeText(rawPayload?.fileName),
           fileSize: Number(rawPayload?.fileSize) || 0,
+          durationSec: Number(rawPayload?.durationSec) || 0,
           isVoiceNote: Boolean(rawPayload?.isVoiceNote),
           isViewOnce: Boolean(rawPayload?.isViewOnce),
           isDeleted: Boolean(rawPayload?.isDeleted),
@@ -557,21 +564,34 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         return next;
       });
 
+      const mimeType = safeText(payload?.mimeType);
+      const fileSize = Number(payload?.fileSize) || undefined;
+      const mediaType = safeText(payload?.mediaType);
+
       await updateMediaItem(cleanId, {
         base64Data,
         needsOnDemandLoad: false,
-        mimeType: safeText(payload?.mimeType),
-        fileSize: Number(payload?.fileSize) || undefined
+        mimeType,
+        fileSize
       });
 
       setMediaList((prev) =>
         prev.map((m) =>
           m.id === cleanId
-            ? { ...m, base64Data, needsOnDemandLoad: false }
+            ? { ...m, base64Data, needsOnDemandLoad: false, mimeType: mimeType || m.mimeType, fileSize: fileSize || m.fileSize }
             : m
         )
       );
-      triggerToast('Media status berhasil dimuat dan siap ditonton!', 'success');
+
+      // Jika pengguna sebelumnya menekan tombol Unduh SW saat media belum di-hydrate
+      if (pendingDownloadMediaIdsRef.current.has(cleanId)) {
+        pendingDownloadMediaIdsRef.current.delete(cleanId);
+        const ext = mediaType === 'video' ? 'mp4' : mediaType === 'audio' ? 'mp3' : 'jpg';
+        downloadBase64File(base64Data, `StatusWA_${cleanId}.${ext}`, mimeType);
+        triggerToast('Media status HD berhasil diunduh!', 'success');
+      } else {
+        triggerToast('Media status HD berhasil dimuat dan siap ditonton!', 'success');
+      }
     });
 
     // EVENT ANTI-DELETE: Pesan ditarik oleh pengirim
@@ -743,6 +763,20 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     );
   };
 
+  // Permintaan Sinkronisasi SW Aktif 24 Jam Terakhir dari WhatsApp
+  const handleSyncActiveStatuses = () => {
+    if (!socketRef.current || !socketRef.current.connected || connectionStatus !== 'connected') {
+      triggerToast('WhatsApp belum terhubung. Pastikan sesi sudah aktif.', 'error');
+      return;
+    }
+    setIsSyncingStatuses(true);
+    socketRef.current.emit('sync-active-statuses', { sessionId });
+    triggerToast('Menyinkronkan Status WA aktif (24 jam) dari WhatsApp...', 'info');
+    setTimeout(() => {
+      setIsSyncingStatuses(false);
+    }, 6000);
+  };
+
   // On-Demand Fetch Media Status
   const handleFetchStatusMedia = (id) => {
     if (!id) return;
@@ -750,7 +784,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     if (socketRef.current && socketRef.current.connected) {
       socketRef.current.emit('fetch-status-media', { sessionId, id });
     }
-    triggerToast('Mengunduh media video status dari WhatsApp...', 'info');
+    triggerToast('Mengunduh media status HD dari WhatsApp...', 'info');
 
     // Timeout pengaman 25 detik jika server gagal
     setTimeout(() => {
@@ -846,6 +880,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   // Unduh Item (Foto, Video, Audio, Dokumen)
   const handleDownloadItem = (item) => {
     try {
+      if (item.needsOnDemandLoad && !item.base64Data) {
+        pendingDownloadMediaIdsRef.current.add(item.id);
+        handleFetchStatusMedia(item.id);
+        triggerToast('Mengambil media HD dari WhatsApp untuk diunduh...', 'info');
+        return;
+      }
       const dataToDownload = item.base64Data || item.thumbnailBase64;
       if (!dataToDownload) {
         triggerToast('Item ini belum memuat data media.', 'info');
@@ -973,6 +1013,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
       if (subFilter === 'image') list = list.filter((it) => it.mediaType === 'image');
       if (subFilter === 'video') list = list.filter((it) => it.mediaType === 'video');
+      if (subFilter === 'audio') list = list.filter((it) => it.mediaType === 'audio');
       if (subFilter === 'text') list = list.filter((it) => it.mediaType === 'text');
     }
 
@@ -1660,7 +1701,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
               {activeTab === 'status_saver' && (
                 <>
-                  {['all', 'image', 'video', 'text'].map((f) => (
+                  {['all', 'image', 'video', 'audio', 'text'].map((f) => (
                     <button
                       key={f}
                       type="button"
@@ -1669,7 +1710,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                         subFilter === f ? 'bg-black text-white font-black' : 'bg-white text-neutral-700 hover:bg-neutral-100'
                       }`}
                     >
-                      {f === 'all' ? 'Semua SW' : f === 'image' ? 'Foto' : f === 'video' ? 'Video' : 'Teks'}
+                      {f === 'all'
+                        ? 'Semua SW'
+                        : f === 'image'
+                        ? 'Foto'
+                        : f === 'video'
+                        ? 'Video'
+                        : f === 'audio'
+                        ? 'Audio / VN'
+                        : 'Teks'}
                     </button>
                   ))}
                 </>
@@ -1755,6 +1804,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
         {activeTab === 'status_saver' && (
           <div className="space-y-3">
+            {/* Banner Penjelasan SW Real-time & 24 Jam */}
+            <div className="flex items-start gap-2.5 px-3.5 py-2.5 bg-blue-50 border-2 border-black rounded-lg text-xs shadow-[2px_2px_0px_#000] text-blue-950">
+              <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
+              <span className="font-semibold leading-relaxed">
+                Menampilkan semua SW baru secara real-time &amp; SW 24 jam terakhir saat awal penautan (100% 0 View). Media HD dimuat saat dibuka agar server tetap ringan.
+              </span>
+            </div>
+
             {/* Panel Kesehatan Render & Kontrol Mode Hemat SW */}
             <div className="p-3 bg-cyan-50 border-2 border-black rounded-xl shadow-[2px_2px_0px_#000] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
               <div className="flex flex-wrap items-center gap-2">
@@ -1775,8 +1832,19 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                 </span>
               </div>
 
-              {/* Kontrol Mode Muat SW & Bersihkan >24 Jam */}
+              {/* Kontrol Mode Muat SW & Tombol Sinkronkan SW & Bersihkan >24 Jam */}
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSyncActiveStatuses}
+                  disabled={isSyncingStatuses || connectionStatus !== 'connected'}
+                  className="px-2.5 py-1 bg-cyan-400 hover:bg-cyan-300 text-black border-2 border-black rounded-lg font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Minta WhatsApp sinkronkan ulang Status WA 24 jam terakhir"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingStatuses ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingStatuses ? 'Menyinkronkan...' : 'Sinkronkan SW'}</span>
+                </button>
+
                 <div className="flex border-2 border-black rounded-lg overflow-hidden font-bold text-[11px] bg-white">
                   <button
                     type="button"
@@ -1996,7 +2064,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                         )}
                         <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center bg-black/40 space-y-2">
                           <span className="px-2 py-0.5 bg-black/80 text-white border border-white/60 rounded text-[10px] font-mono">
-                            Video • {item.fileSize ? `${(item.fileSize / (1024 * 1024)).toFixed(1)} MB` : 'Status'}
+                            VIDEO • {item.fileSize ? `${(item.fileSize / (1024 * 1024)).toFixed(1)} MB` : 'Status'}{item.durationSec ? ` • ${Math.floor(item.durationSec / 60)}:${String(item.durationSec % 60).padStart(2, '0')}` : ''}
                           </span>
                           <button
                             type="button"
@@ -2012,7 +2080,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                             ) : (
                               <>
                                 <Play className="w-3.5 h-3.5 fill-black" />
-                                <span>Muat &amp; Putar Video</span>
+                                <span>Putar Video (0 View)</span>
                               </>
                             )}
                           </button>
@@ -2028,22 +2096,91 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                       />
                     )
                   ) : item.mediaType === 'image' ? (
-                    <div className="relative w-full h-full">
-                      <img
-                        src={item.base64Data || item.thumbnailBase64}
-                        alt={safeText(item.caption) || 'Status WA'}
-                        loading="lazy"
-                        className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
-                        onClick={() => setStoryViewerIndex(idx)}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setStoryViewerIndex(idx)}
-                        className="absolute bottom-2 right-2 p-1.5 bg-black/70 hover:bg-black text-white rounded-md border border-white/50 cursor-pointer opacity-80 group-hover:opacity-100 transition-opacity"
-                        title="Buka Story Viewer"
-                      >
-                        <Maximize2 className="w-3.5 h-3.5" />
-                      </button>
+                    item.needsOnDemandLoad && !item.base64Data ? (
+                      /* Preview Thumbnail Foto On-Demand */
+                      <div className="relative w-full h-full flex items-center justify-center bg-neutral-900">
+                        {item.thumbnailBase64 ? (
+                          <img
+                            src={item.thumbnailBase64}
+                            alt="Photo Thumbnail"
+                            className="w-full h-full object-cover opacity-60"
+                          />
+                        ) : (
+                          <ImageIcon className="w-10 h-10 text-neutral-600" />
+                        )}
+                        <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center bg-black/40 space-y-2">
+                          <span className="px-2 py-0.5 bg-black/80 text-white border border-white/60 rounded text-[10px] font-mono">
+                            FOTO • {item.fileSize ? `${(item.fileSize / (1024 * 1024)).toFixed(1)} MB` : 'HD'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleFetchStatusMedia(item.id)}
+                            disabled={loadingMediaIds.has(item.id)}
+                            className="px-3.5 py-1.5 bg-emerald-400 hover:bg-emerald-300 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {loadingMediaIds.has(item.id) ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Memuat Foto...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5 text-black" />
+                                <span>Lihat HD (0 View)</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="relative w-full h-full">
+                        <img
+                          src={item.base64Data || item.thumbnailBase64}
+                          alt={safeText(item.caption) || 'Status WA'}
+                          loading="lazy"
+                          className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform"
+                          onClick={() => setStoryViewerIndex(idx)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setStoryViewerIndex(idx)}
+                          className="absolute bottom-2 right-2 p-1.5 bg-black/70 hover:bg-black text-white rounded-md border border-white/50 cursor-pointer opacity-80 group-hover:opacity-100 transition-opacity"
+                          title="Buka Story Viewer"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )
+                  ) : item.mediaType === 'audio' ? (
+                    /* Audio / Voice Note Status */
+                    <div
+                      style={{ backgroundColor: item.bgColor || '#0f172a' }}
+                      className="w-full h-full p-3 flex flex-col items-center justify-center text-center space-y-2 cursor-pointer"
+                      onClick={() => setStoryViewerIndex(idx)}
+                    >
+                      <div className="w-10 h-10 rounded-full bg-white/20 border border-white/40 flex items-center justify-center shadow-md">
+                        <Radio className="w-5 h-5 text-white animate-pulse" />
+                      </div>
+                      <span className="text-white text-[11px] font-black uppercase tracking-wider">
+                        Voice Note / Audio SW {item.durationSec ? `(${Math.floor(item.durationSec / 60)}:${String(item.durationSec % 60).padStart(2, '0')})` : ''}
+                      </span>
+                      {item.base64Data ? (
+                        <div onClick={(e) => e.stopPropagation()} className="w-full max-w-[220px]">
+                          <audio src={item.base64Data} controls className="w-full h-8" />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleFetchStatusMedia(item.id);
+                          }}
+                          disabled={loadingMediaIds.has(item.id)}
+                          className="px-3 py-1 bg-emerald-400 hover:bg-emerald-300 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] cursor-pointer disabled:opacity-50"
+                        >
+                          {loadingMediaIds.has(item.id) ? 'Memuat Audio...' : 'Muat Audio (0 View)'}
+                        </button>
+                      )}
                     </div>
                   ) : (
                     /* SW Teks dengan Warna Asli */
@@ -2087,7 +2224,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                     <button
                       type="button"
                       onClick={() => handleDownloadItem(item)}
-                      disabled={!item.base64Data && !item.thumbnailBase64}
+                      disabled={!item.base64Data && !item.thumbnailBase64 && !item.needsOnDemandLoad}
                       className="flex-1 py-1.5 px-3 bg-emerald-400 text-black border-2 border-black rounded-lg font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
                     >
                       <Download className="w-3.5 h-3.5" />
@@ -2426,11 +2563,61 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   </div>
                 )
               ) : currentStoryItem.mediaType === 'image' ? (
-                <img
-                  src={currentStoryItem.base64Data || currentStoryItem.thumbnailBase64}
-                  alt={safeText(currentStoryItem.caption) || 'Story'}
-                  className="w-full h-full max-h-[68vh] object-contain"
-                />
+                currentStoryItem.needsOnDemandLoad && !currentStoryItem.base64Data ? (
+                  <div className="p-6 text-center text-white space-y-3">
+                    {currentStoryItem.thumbnailBase64 && (
+                      <img
+                        src={currentStoryItem.thumbnailBase64}
+                        alt="Thumbnail"
+                        className="max-h-[40vh] mx-auto rounded border border-white/20"
+                      />
+                    )}
+                    <p className="text-xs font-bold">Foto Status WhatsApp {currentStoryItem.fileSize ? `(${(currentStoryItem.fileSize / (1024 * 1024)).toFixed(1)} MB)` : ''}</p>
+                    <button
+                      type="button"
+                      onClick={() => handleFetchStatusMedia(currentStoryItem.id)}
+                      disabled={loadingMediaIds.has(currentStoryItem.id)}
+                      className="px-4 py-2 bg-emerald-400 text-black font-black text-xs border-2 border-black rounded-lg shadow-[2px_2px_0px_#fff] cursor-pointer"
+                    >
+                      {loadingMediaIds.has(currentStoryItem.id) ? 'Memuat Foto...' : 'Muat Foto HD (0 View)'}
+                    </button>
+                  </div>
+                ) : (
+                  <img
+                    src={currentStoryItem.base64Data || currentStoryItem.thumbnailBase64}
+                    alt={safeText(currentStoryItem.caption) || 'Story'}
+                    className="w-full h-full max-h-[68vh] object-contain"
+                  />
+                )
+              ) : currentStoryItem.mediaType === 'audio' ? (
+                <div
+                  style={{ backgroundColor: currentStoryItem.bgColor || '#0f172a' }}
+                  className="w-full h-full min-h-[320px] p-8 flex flex-col items-center justify-center text-center space-y-4"
+                >
+                  <div className="w-16 h-16 rounded-full bg-white/20 border-2 border-white/40 flex items-center justify-center shadow-lg">
+                    <Radio className="w-8 h-8 text-white animate-pulse" />
+                  </div>
+                  <p className="font-black text-lg text-white">
+                    Voice Note / Audio Status WhatsApp
+                  </p>
+                  {currentStoryItem.durationSec ? (
+                    <span className="text-xs font-mono text-neutral-300">
+                      Durasi: {Math.floor(currentStoryItem.durationSec / 60)}:{String(currentStoryItem.durationSec % 60).padStart(2, '0')}
+                    </span>
+                  ) : null}
+                  {currentStoryItem.base64Data ? (
+                    <audio src={currentStoryItem.base64Data} controls autoPlay className="w-full max-w-sm h-10" />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleFetchStatusMedia(currentStoryItem.id)}
+                      disabled={loadingMediaIds.has(currentStoryItem.id)}
+                      className="px-4 py-2 bg-emerald-400 text-black font-black text-xs border-2 border-black rounded-lg shadow-[2px_2px_0px_#fff] cursor-pointer"
+                    >
+                      {loadingMediaIds.has(currentStoryItem.id) ? 'Memuat Audio...' : 'Muat Audio (0 View)'}
+                    </button>
+                  )}
+                </div>
               ) : (
                 /* SW Teks Layar Penuh */
                 <div
@@ -2495,7 +2682,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => handleDownloadItem(currentStoryItem)}
-                    disabled={!currentStoryItem.base64Data && !currentStoryItem.thumbnailBase64}
+                    disabled={!currentStoryItem.base64Data && !currentStoryItem.thumbnailBase64 && !currentStoryItem.needsOnDemandLoad}
                     className="px-4 py-1.5 bg-emerald-400 text-black border-2 border-black rounded-lg font-black shadow-[2px_2px_0px_#000] hover:bg-emerald-300 cursor-pointer flex items-center gap-1.5"
                   >
                     <Download className="w-3.5 h-3.5" />

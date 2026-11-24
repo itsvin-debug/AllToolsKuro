@@ -1,8 +1,8 @@
 // Helper IndexedDB lokal untuk menyimpan media & pesan WA Vault (View Once, Ghost Reader, Anti-Delete, Status)
 
 const DB_NAME = 'AllToolsKuro_WaVault';
-const DB_VERSION = 3; // Upgrade ke v3 untuk mendukung category, isDeleted, isEdited, dll.
-const STORE_NAME = 'view_once_media'; // Nama store dipertahankan agar data View Once lama tetap aman
+const DB_VERSION = 3;
+const STORE_NAME = 'view_once_media';
 
 function openWaDB() {
   return new Promise((resolve, reject) => {
@@ -50,7 +50,7 @@ function openWaDB() {
   });
 }
 
-// Simpan atau perbarui item ke penyimpanan lokal IndexedDB
+// Simpan atau perbarui item ke IndexedDB dengan Smart Merge Anti-Timpa
 export async function saveMediaItem(item) {
   if (!item || typeof item !== 'object') return null;
   const db = await openWaDB();
@@ -58,42 +58,66 @@ export async function saveMediaItem(item) {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
+      const itemId = String(item.id || Date.now());
 
-      const sanitizedItem = {
-        ...item,
-        id: String(item.id || Date.now()),
-        category: item.category === 'status' ? 'status' : 'chat',
-        senderNumber: String(item.senderNumber || ''),
-        senderName: String(item.senderName || ''),
-        mediaType: String(item.mediaType || 'text'),
-        mimeType: String(item.mimeType || ''),
-        textContent: String(item.textContent || ''),
-        caption: String(item.caption || ''),
-        bgColor: String(item.bgColor || ''),
-        fileName: String(item.fileName || ''),
-        fileSize: Number(item.fileSize || 0),
-        isVoiceNote: Boolean(item.isVoiceNote),
-        isViewOnce: Boolean(item.isViewOnce),
-        isDeleted: Boolean(item.isDeleted),
-        deletedAt: item.deletedAt ? Number(item.deletedAt) : null,
-        isEdited: Boolean(item.isEdited),
-        editedText: String(item.editedText || ''),
-        editedAt: item.editedAt ? Number(item.editedAt) : null,
-        sentAt: Number(item.sentAt || item.timestamp || Date.now()),
-        base64Data: typeof item.base64Data === 'string' ? item.base64Data : '',
-        thumbnailBase64: typeof item.thumbnailBase64 === 'string' ? item.thumbnailBase64 : '',
-        needsOnDemandLoad: Boolean(item.needsOnDemandLoad)
-      };
+      const getReq = store.get(itemId);
 
-      const request = store.put(sanitizedItem);
+      getReq.onsuccess = () => {
+        const existing = getReq.result || null;
 
-      request.onsuccess = () => resolve(sanitizedItem);
-      request.onerror = (e) => {
-        if (e?.target?.error?.name === 'QuotaExceededError') {
-          console.warn('[IndexedDB] Kuota penyimpanan browser penuh! Hapus status lama untuk mengosongkan ruang.');
+        // Smart Merge: Jangan timpa base64Data HD yang sudah ada jika pointer baru membawa base64 kosong
+        let finalBase64 = typeof item.base64Data === 'string' && item.base64Data.length > 0
+          ? item.base64Data
+          : (existing?.base64Data || '');
+
+        let finalThumbnail = typeof item.thumbnailBase64 === 'string' && item.thumbnailBase64.length > 0
+          ? item.thumbnailBase64
+          : (existing?.thumbnailBase64 || '');
+
+        let needsLoad = Boolean(item.needsOnDemandLoad);
+        if (finalBase64.length > 0) {
+          needsLoad = false; // Sudah ter-hydrate dengan HD
         }
-        reject(request.error || new Error('Gagal menyimpan item ke IndexedDB.'));
+
+        const sanitizedItem = {
+          ...existing,
+          ...item,
+          id: itemId,
+          category: item.category === 'status' ? 'status' : 'chat',
+          senderNumber: String(item.senderNumber || existing?.senderNumber || ''),
+          senderName: String(item.senderName || existing?.senderName || ''),
+          mediaType: String(item.mediaType || existing?.mediaType || 'text'),
+          mimeType: String(item.mimeType || existing?.mimeType || ''),
+          textContent: String(item.textContent || existing?.textContent || ''),
+          caption: String(item.caption || existing?.caption || ''),
+          bgColor: String(item.bgColor || existing?.bgColor || ''),
+          fileName: String(item.fileName || existing?.fileName || ''),
+          fileSize: Number(item.fileSize || existing?.fileSize || 0),
+          durationSec: Number(item.durationSec || existing?.durationSec || 0),
+          isVoiceNote: Boolean(item.isVoiceNote ?? existing?.isVoiceNote),
+          isViewOnce: Boolean(item.isViewOnce ?? existing?.isViewOnce),
+          isDeleted: Boolean(item.isDeleted ?? existing?.isDeleted),
+          deletedAt: item.deletedAt ? Number(item.deletedAt) : (existing?.deletedAt ? Number(existing.deletedAt) : null),
+          isEdited: Boolean(item.isEdited ?? existing?.isEdited),
+          editedText: String(item.editedText || existing?.editedText || ''),
+          editedAt: item.editedAt ? Number(item.editedAt) : (existing?.editedAt ? Number(existing.editedAt) : null),
+          sentAt: Number(item.sentAt || item.timestamp || existing?.sentAt || Date.now()),
+          base64Data: finalBase64,
+          thumbnailBase64: finalThumbnail,
+          needsOnDemandLoad: needsLoad
+        };
+
+        const putReq = store.put(sanitizedItem);
+        putReq.onsuccess = () => resolve(sanitizedItem);
+        putReq.onerror = (e) => {
+          if (e?.target?.error?.name === 'QuotaExceededError') {
+            console.warn('[IndexedDB] Kuota penyimpanan browser penuh! Hapus status lama untuk mengosongkan ruang.');
+          }
+          reject(putReq.error || new Error('Gagal menyimpan item ke IndexedDB.'));
+        };
       };
+
+      getReq.onerror = () => reject(getReq.error || new Error('Gagal membaca item dari IndexedDB.'));
     } catch (err) {
       reject(err);
     }
@@ -116,14 +140,25 @@ export async function updateMediaItem(id, patch = {}) {
           resolve(null);
           return;
         }
+
         const updated = {
           ...existing,
           ...patch,
           id: existing.id
         };
+
+        if (updated.base64Data && updated.base64Data.length > 0) {
+          updated.needsOnDemandLoad = false;
+        }
+
         const putReq = store.put(updated);
         putReq.onsuccess = () => resolve(updated);
-        putReq.onerror = () => reject(putReq.error || new Error('Gagal memperbarui item IndexedDB.'));
+        putReq.onerror = (e) => {
+          if (e?.target?.error?.name === 'QuotaExceededError') {
+            console.warn('[IndexedDB] Kuota penyimpanan browser penuh!');
+          }
+          reject(putReq.error || new Error('Gagal memperbarui item IndexedDB.'));
+        };
       };
 
       getReq.onerror = () => reject(getReq.error || new Error('Gagal membaca item dari IndexedDB.'));
@@ -133,7 +168,7 @@ export async function updateMediaItem(id, patch = {}) {
   });
 }
 
-// Ambil seluruh media tersimpan (diurutkan dari yang terbaru, kompatibel dengan data View Once lama)
+// Ambil seluruh media tersimpan (diurutkan dari yang terbaru)
 export async function getAllMediaItems() {
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
@@ -154,8 +189,11 @@ export async function getAllMediaItems() {
           sentAt: Number(it.sentAt || it.timestamp || Date.now()),
           isDeleted: Boolean(it.isDeleted),
           isEdited: Boolean(it.isEdited),
+          durationSec: Number(it.durationSec || 0),
+          fileSize: Number(it.fileSize || 0),
+          bgColor: String(it.bgColor || ''),
           thumbnailBase64: it.thumbnailBase64 || '',
-          needsOnDemandLoad: Boolean(it.needsOnDemandLoad)
+          needsOnDemandLoad: Boolean(it.needsOnDemandLoad && !it.base64Data)
         }));
 
       normalized.sort((a, b) => {
@@ -214,6 +252,10 @@ export async function clearAllMediaItems() {
   });
 }
 
+// Alias untuk kompatibilitas penamaan ekspor WaViewOnceView
+export const deleteMediaById = deleteMediaItem;
+export const clearAllMedia = clearAllMediaItems;
+
 // Dapatkan statistik kapasitas penyimpanan IndexedDB browser pengguna
 export async function getVaultStorageStats() {
   try {
@@ -248,36 +290,30 @@ export async function pruneExpiredStatuses(maxAgeMs = 24 * 60 * 60 * 1000) {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const req = store.getAll();
+      const request = store.getAll();
 
-      req.onsuccess = () => {
-        const items = req.result || [];
+      request.onsuccess = () => {
+        const items = request.result || [];
         const now = Date.now();
-        let pruned = 0;
+        let deletedCount = 0;
 
-        for (const it of items) {
-          if (it.category === 'status') {
-            const age = now - (Number(it.sentAt) || 0);
+        for (const item of items) {
+          if (item.category === 'status') {
+            const age = now - (Number(item.sentAt) || 0);
             if (age > maxAgeMs) {
-              store.delete(it.id);
-              pruned++;
+              store.delete(item.id);
+              deletedCount++;
             }
           }
         }
 
-        tx.oncomplete = () => resolve(pruned);
+        tx.oncomplete = () => resolve(deletedCount);
+        tx.onerror = () => reject(tx.error || new Error('Gagal memangkas status kedaluwarsa.'));
       };
 
-      req.onerror = () => reject(req.error || new Error('Gagal memangkas status kedaluwarsa.'));
+      request.onerror = () => reject(request.error || new Error('Gagal membaca data IndexedDB.'));
     } catch (err) {
       reject(err);
     }
   });
 }
-
-// Export aliases
-export {
-  getAllMediaItems as getAllMedia,
-  deleteMediaItem as deleteMediaById,
-  clearAllMediaItems as clearAllMedia
-};
