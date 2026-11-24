@@ -159,10 +159,10 @@ const KURO_TOOLS_CATALOG = [
   },
   {
     id: 'waViewOnce',
-    name: 'WA Stealth Vault',
-    tag: '3-in-1 WA Stealth',
-    desc: '3-in-1 Vault: Ghost Reader (baca chat tanpa centang biru & offline), Anti-Delete & Edit (amankan pesan terhapus/diedit), dan Silent Status Saver (intip status kontak 0 views).',
-    howToUse: 'Tautkan WhatsApp dengan Pairing Code atau Scan QR, pilih mode pemantauan (Semua Nomor atau Kunci 1 Target), dan seluruh chat, pesan terhapus, serta status WA tersimpan senyap di browser Anda.'
+    name: 'WA View Once Vault',
+    tag: 'WA Media Vault',
+    desc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor WhatsApp target secara real-time via perangkat tertaut.',
+    howToUse: 'Tautkan perangkat dengan scan QR Code, masukkan nomor WA target yang ingin dipantau, lalu media sekali lihat akan otomatis tersimpan di galeri lokal browser.'
   }
 ];
 

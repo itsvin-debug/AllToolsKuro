@@ -65,7 +65,7 @@ export default function Navbar({
     { id: 'manhwaFinder', label: t.welcome?.tools?.manhwaFinder?.name || 'Rekomendasi Manhwa', icon: BookOpen },
     { id: 'ipChecker', label: t.welcome?.tools?.ipChecker?.name || 'IP & DNS Checker', icon: ShieldCheck },
     { id: 'tiktokStalker', label: t.welcome?.tools?.tiktokStalker?.name || 'Social Media Stalker', icon: Globe2 },
-    { id: 'waViewOnce', label: t.welcome?.tools?.waViewOnce?.name || 'WA Stealth Vault', icon: ShieldCheck }
+    { id: 'waViewOnce', label: t.welcome?.tools?.waViewOnce?.name || 'WA View Once Vault', icon: ShieldCheck }
   ];
 
   const currentToolObj = tools.find(t => t.id === currentScreen);
