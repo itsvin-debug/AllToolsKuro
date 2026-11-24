@@ -221,9 +221,9 @@ export default function WelcomeScreen({ onSelectPlatform, onOpenTool, onShowToas
     {
       id: 'waViewOnce',
       category: 'utility',
-      name: wt.tools.waViewOnce?.name || 'WA View Once Vault',
-      desc: wt.tools.waViewOnce?.desc || 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat tertaut.',
-      tag: wt.tools.waViewOnce?.tag || 'WA MEDIA',
+      name: wt.tools.waViewOnce?.name || 'WA Stealth Vault',
+      desc: wt.tools.waViewOnce?.desc || '3-in-1 Vault: Ghost Reader (baca chat tanpa centang biru & offline), Anti-Delete & Edit (amankan pesan terhapus/diedit), dan Silent Status Saver (intip status kontak 0 views).',
+      tag: wt.tools.waViewOnce?.tag || 'STEALTH VAULT',
       icon: ShieldCheck,
       onClick: () => onOpenTool('waViewOnce')
     }

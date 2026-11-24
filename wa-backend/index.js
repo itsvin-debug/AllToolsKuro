@@ -925,6 +925,21 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
       return;
     }
 
+    // 17 = PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE (Resend media/WebMessageInfo dari HP Utama)
+    if (pType === 17 || pType === 'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE' || protocolMsg.peerDataOperationRequestResponseMessage) {
+      const peerResp = protocolMsg.peerDataOperationRequestResponseMessage;
+      if (peerResp?.peerDataOperationResult) {
+        for (const res of peerResp.peerDataOperationResult) {
+          if (res?.placeholderMessageResendResponse?.webMessageInfo) {
+            const decodedMsg = res.placeholderMessageResendResponse.webMessageInfo;
+            console.log(`[WA-VAULT][PEER-RESEND] WebMessageInfo diterima lewat Peer Data Resend:`, decodedMsg?.key?.id);
+            await processIncomingMessage(decodedMsg, currentSession, sock, sessionId);
+          }
+        }
+      }
+      return;
+    }
+
     // Abaikan protokol non-konten lain
     return;
   }
@@ -1213,13 +1228,23 @@ async function processIncomingMessage(msg, currentSession, sock, sessionId) {
 }
 
 // Inisialisasi & Penghubung Baileys dalam Mode Siluman Penuh (Full Stealth)
-async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, monitorMode = 'all') {
+async function startBaileys(
+  sessionId,
+  targetNumber = null,
+  cleanAuth = false,
+  monitorMode = 'all',
+  pairingPhone = null,
+  authMethod = 'qr'
+) {
   let session = sessions.get(sessionId);
 
   if (session?.isInitializing) {
     console.log(`[Session ${sessionId}] Inisialisasi sedang berjalan, abaikan permintaan socket ganda.`);
     return session;
   }
+
+  const cleanPairingPhone = pairingPhone ? normalizePhone(pairingPhone) : null;
+  const chosenMethod = authMethod === 'pairing' ? 'pairing' : 'qr';
 
   if (!session) {
     session = {
@@ -1242,7 +1267,11 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
       isInitializing: true,
       lastActive: Date.now(),
       qrCode: null,
-      qrDataUrl: null
+      qrDataUrl: null,
+      pairingPhone: cleanPairingPhone,
+      authMethod: chosenMethod,
+      pairingCode: null,
+      pairingCodeRequested: false
     };
     sessions.set(sessionId, session);
   } else {
@@ -1266,6 +1295,12 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
     if (targetNumber) {
       session.targetNumber = normalizePhone(targetNumber);
     }
+    if (cleanPairingPhone) {
+      session.pairingPhone = cleanPairingPhone;
+    }
+    session.authMethod = chosenMethod;
+    session.pairingCode = null;
+    session.pairingCodeRequested = false;
   }
 
   try {
@@ -1306,15 +1341,16 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
     session.authKeys = state.keys;
 
     // PROTOKOL SILUMAN PENUH:
-    // 1. markOnlineOnConnect: false (Jangan pernah tampil online saat tersambung)
-    // 2. shouldIgnoreJid: HANYA abaikan grup (@g.us) & newsletter (@newsletter). JANGAN abaikan status@broadcast!
+    // 1. browser: Browsers.ubuntu('Chrome') kompatibel penuh untuk pairing code & QR
+    // 2. markOnlineOnConnect: false (Jangan pernah tampil online saat tersambung)
+    // 3. shouldIgnoreJid: HANYA abaikan grup (@g.us) & newsletter (@newsletter). JANGAN abaikan status@broadcast!
     const sock = makeWASocket({
       version,
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, baileysLogger)
       },
-      browser: Browsers.macOS('Desktop'),
+      browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
       shouldSyncHistoryMessage: () => false,
       shouldIgnoreJid: (jid) => {
@@ -1341,6 +1377,42 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
     session.sock = sock;
 
     sock.ev.on('creds.update', saveCreds);
+
+    // Permintaan Pairing Code jika metode pairing dipilih dan belum terdaftar
+    const requestPairingIfNeeded = async () => {
+      if (
+        session.authMethod === 'pairing' &&
+        session.pairingPhone &&
+        !session.pairingCodeRequested &&
+        !sock.authState?.creds?.registered
+      ) {
+        session.pairingCodeRequested = true;
+        try {
+          console.log(`[Session ${sessionId}] Mengirim permintaan Pairing Code untuk +${session.pairingPhone}...`);
+          const code = await sock.requestPairingCode(session.pairingPhone);
+          const formatted = code ? (code.match(/.{1,4}/g)?.join('-') || code) : '';
+          console.log(`[Session ${sessionId}] Pairing Code berhasil didapat: ${formatted}`);
+          session.pairingCode = formatted;
+          session.status = 'pairing_ready';
+          io.to(sessionId).emit('pairing-code', { code: formatted, rawCode: code });
+          io.to(sessionId).emit('session-status', {
+            status: 'pairing_ready',
+            pairingCode: formatted,
+            targetNumber: session.targetNumber || '',
+            monitorMode: session.monitorMode || 'all'
+          });
+        } catch (pErr) {
+          session.pairingCodeRequested = false;
+          console.error(`[Session ${sessionId}] Gagal requestPairingCode:`, pErr.message);
+          io.to(sessionId).emit('pairing-error', { message: pErr.message });
+        }
+      }
+    };
+
+    // Jalankan timer pairing code cadangan
+    if (session.authMethod === 'pairing' && session.pairingPhone && !sock.authState?.creds?.registered) {
+      setTimeout(requestPairingIfNeeded, 2500);
+    }
 
     // Pembelajaran Nama Kontak & Mapping LID
     const handleContactsSync = (contactsList) => {
@@ -1371,8 +1443,13 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
 
       if (qr) {
         session.qrCode = qr;
-        session.status = 'qr_ready';
         session.lastActive = Date.now();
+
+        if (session.authMethod === 'pairing' && !session.pairingCodeRequested) {
+          await requestPairingIfNeeded();
+        }
+
+        session.status = session.pairingCode ? 'pairing_ready' : 'qr_ready';
         try {
           const qrDataUrl = await QRCode.toDataURL(qr, { margin: 1, scale: 7 });
           session.qrDataUrl = qrDataUrl;
@@ -1389,6 +1466,8 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
         session.status = 'connected';
         session.qrCode = null;
         session.qrDataUrl = null;
+        session.pairingCode = null;
+        session.pairingCodeRequested = false;
         session.lastActive = Date.now();
 
         // MODE SILUMAN: Set presence ke 'unavailable' (Offline)
@@ -1429,6 +1508,12 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
           });
           io.to(sessionId).emit('status', { status: 'disconnected', reason: 'logged_out' });
         } else {
+          // Status code 515 (restartRequired) adalah bagian dari protokol pairing WhatsApp!
+          // Reconnect sangat cepat (300ms) tanpa membersihkan auth keys.
+          const is515 = statusCode === 515 || statusCode === DisconnectReason.restartRequired;
+          const delay = is515 ? 300 : 1500;
+          console.log(`[Session ${sessionId}] Disconnect close (code ${statusCode}). Reconnecting in ${delay}ms...`);
+
           session.status = 'reconnecting';
           io.to(sessionId).emit('session-status', {
             status: 'reconnecting',
@@ -1439,9 +1524,16 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
 
           setTimeout(() => {
             if (sessions.has(sessionId)) {
-              startBaileys(sessionId, session.targetNumber, false, session.monitorMode || 'all');
+              startBaileys(
+                sessionId,
+                session.targetNumber,
+                false, // JANGAN bersihkan auth!
+                session.monitorMode || 'all',
+                session.pairingPhone,
+                session.authMethod
+              );
             }
-          }, 1500);
+          }, delay);
         }
       }
     });
@@ -1452,6 +1544,14 @@ async function startBaileys(sessionId, targetNumber = null, cleanAuth = false, m
       if (!currentSession) return;
 
       for (const msg of messages) {
+        if (msg.key?.id && msg.message) {
+          currentSession.msgCache.set(msg.key.id, msg.message);
+          if (currentSession.msgCache.size > 200) {
+            const oldest = currentSession.msgCache.keys().next().value;
+            currentSession.msgCache.delete(oldest);
+          }
+        }
+
         const jid = String(msg?.key?.remoteJid || '');
         if (!jid || jid.endsWith('@g.us') || jid.endsWith('@newsletter')) {
           continue;
@@ -1703,15 +1803,18 @@ io.on('connection', (socket) => {
     } catch (_) {}
   });
 
-  // Mulai Sesi WhatsApp Baru (Generate QR Code)
+  // Mulai Sesi WhatsApp Baru (Pairing Code atau QR Code)
   socket.on('start-session', async (payload) => {
     try {
-      const { sessionId, targetNumber, monitorMode } = payload || {};
+      const { sessionId, targetNumber, monitorMode, authMethod, pairingPhone, phoneNumber } = payload || {};
       if (!sessionId || typeof sessionId !== 'string') {
         return socket.emit('session-error', { message: 'ID Sesi tidak valid.' });
       }
 
       socket.join(sessionId);
+
+      const cleanPairingPhone = (pairingPhone || phoneNumber) ? normalizePhone(pairingPhone || phoneNumber) : null;
+      const method = authMethod === 'pairing' ? 'pairing' : 'qr';
 
       let session = sessions.get(sessionId);
 
@@ -1739,7 +1842,19 @@ io.on('connection', (socket) => {
           return;
         }
 
-        if (session.status === 'qr_ready' && session.qrCode) {
+        if (method === 'pairing' && session.pairingCode) {
+          socket.emit('pairing-code', { code: session.pairingCode });
+          socket.emit('session-status', {
+            status: 'pairing_ready',
+            pairingCode: session.pairingCode,
+            phone: '',
+            targetNumber: session.targetNumber || '',
+            monitorMode: session.monitorMode || 'all'
+          });
+          return;
+        }
+
+        if (method === 'qr' && session.status === 'qr_ready' && session.qrCode) {
           socket.emit('session-status', {
             status: session.status,
             phone: '',
@@ -1764,12 +1879,15 @@ io.on('connection', (socket) => {
         sessionId,
         targetNumber ? normalizePhone(targetNumber) : null,
         true,
-        monitorMode || 'all'
+        monitorMode || 'all',
+        cleanPairingPhone,
+        method
       );
       socket.emit('session-status', {
         status: session.status,
         targetNumber: session.targetNumber,
-        monitorMode: session.monitorMode || 'all'
+        monitorMode: session.monitorMode || 'all',
+        pairingCode: session.pairingCode || null
       });
       if (session.targetNumber) {
         socket.emit('target-synced', { targetNumber: session.targetNumber });
@@ -1777,6 +1895,66 @@ io.on('connection', (socket) => {
     } catch (err) {
       console.error('Error start-session:', err.message);
       socket.emit('session-error', { message: 'Gagal menginisialisasi WhatsApp: ' + err.message });
+    }
+  });
+
+  // Permintaan Langsung Pairing Code
+  socket.on('request-pairing-code', async (payload) => {
+    try {
+      const { sessionId, phoneNumber } = payload || {};
+      if (!sessionId) return socket.emit('pairing-error', { message: 'ID Sesi wajib disertakan.' });
+      const cleanPhone = normalizePhone(phoneNumber);
+      if (!cleanPhone || cleanPhone.length < 9) {
+        return socket.emit('pairing-error', { message: 'Nomor WhatsApp tidak valid (minimal 9 digit, contoh: 6281234567890).' });
+      }
+
+      socket.join(sessionId);
+      let session = sessions.get(sessionId);
+
+      if (session?.status === 'connected') {
+        return socket.emit('session-status', {
+          status: 'connected',
+          phone: session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '',
+          targetNumber: session.targetNumber || '',
+          monitorMode: session.monitorMode || 'all'
+        });
+      }
+
+      // Jika socket sudah hidup dan belum teregistrasi, langsung minta pairing code
+      if (session?.sock && !session.sock.authState?.creds?.registered) {
+        session.pairingPhone = cleanPhone;
+        session.authMethod = 'pairing';
+        try {
+          const code = await session.sock.requestPairingCode(cleanPhone);
+          const formatted = code ? (code.match(/.{1,4}/g)?.join('-') || code) : '';
+          session.pairingCode = formatted;
+          session.status = 'pairing_ready';
+          io.to(sessionId).emit('pairing-code', { code: formatted, rawCode: code });
+          io.to(sessionId).emit('session-status', {
+            status: 'pairing_ready',
+            pairingCode: formatted,
+            targetNumber: session.targetNumber || '',
+            monitorMode: session.monitorMode || 'all'
+          });
+          return;
+        } catch (reqErr) {
+          console.warn(`[Session ${sessionId}] requestPairingCode on existing socket failed:`, reqErr.message);
+        }
+      }
+
+      // Buat sesi pairing baru
+      removeSessionDir(sessionId);
+      session = await startBaileys(
+        sessionId,
+        session?.targetNumber || null,
+        true,
+        session?.monitorMode || 'all',
+        cleanPhone,
+        'pairing'
+      );
+    } catch (err) {
+      console.error('Error request-pairing-code:', err.message);
+      socket.emit('pairing-error', { message: 'Gagal membuat Pairing Code: ' + err.message });
     }
   });
 

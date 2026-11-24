@@ -51,7 +51,7 @@ const TOOL_NAMES = {
   manhwaFinder: 'Rekomendasi Manhwa',
   ipChecker: 'IP & DNS Checker',
   tiktokStalker: 'Social Media Stalker',
-  waViewOnce: 'WA View Once Vault'
+  waViewOnce: 'WA Stealth Vault'
 };
 
 export default function App() {
