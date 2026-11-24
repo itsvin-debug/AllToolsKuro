@@ -1,7 +1,8 @@
 /**
- * Kuro Studio - Code to Video Engine
- * Mesin Compositor 3D Three.js, Sandbox Runner, Atmospheric FX (Awan & Partikel),
- * dan Video Exporter (WebCodecs MP4 via mp4-muxer & MediaRecorder WebM).
+ * Kuro Studio - Code to Video Engine v2
+ * Mesin Compositor 3D Three.js, Clean / 3D Stage Mode, Sandbox Runner Anti-Error,
+ * Atmospheric FX (Awan Volumetrik & 4 Gaya Partikel),
+ * serta Pipeline Ekspor Video Anti-Crash (WebCodecs MP4 via mp4-muxer + MediaRecorder WebM).
  */
 
 import * as THREE from 'three';
@@ -48,7 +49,7 @@ export function computeTargetDimensions(resolution = '1080p', aspectRatio = '16:
       w = Math.round((h * 16) / 9);
   }
 
-  // Pastikan angka selalu genap (kelipatan 2)
+  // Wajib genap kelipatan 2 untuk H.264 encoder
   w = (w >> 1) << 1;
   h = (h >> 1) << 1;
 
@@ -62,52 +63,115 @@ export const BITRATE_PRESETS = {
   ultra: 24_000_000
 };
 
-/**
- * Membuat tekstur lingkaran glow lembut untuk partikel udara
- */
-function createParticleTexture() {
+// --- TEKSTUR PARTIKEL 3D KHUSUS 4 GAYA BERBEDA ---
+
+function createBokehTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 64;
   canvas.height = 64;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-
   const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
   grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
-  grad.addColorStop(0.3, 'rgba(255, 255, 255, 0.8)');
-  grad.addColorStop(0.7, 'rgba(255, 255, 255, 0.2)');
+  grad.addColorStop(0.4, 'rgba(255, 255, 255, 0.7)');
+  grad.addColorStop(0.8, 'rgba(255, 255, 255, 0.2)');
   grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-
   ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(canvas);
+}
+
+function createStarTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 64, 64);
+
+  // Silang cahaya tajam bintang
+  ctx.fillStyle = 'rgba(255, 255, 255, 1)';
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = 8;
   ctx.beginPath();
-  ctx.arc(32, 32, 32, 0, Math.PI * 2);
+  ctx.arc(32, 32, 6, 0, Math.PI * 2);
   ctx.fill();
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-  return texture;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(32, 4);
+  ctx.lineTo(32, 60);
+  ctx.moveTo(4, 32);
+  ctx.lineTo(60, 32);
+  ctx.stroke();
+
+  return new THREE.CanvasTexture(canvas);
+}
+
+function createSnowTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 28);
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+  grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(32, 32, 28, 0, Math.PI * 2);
+  ctx.fill();
+  return new THREE.CanvasTexture(canvas);
+}
+
+function createSparkTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 64, 64);
+
+  // Ekor percikan neon dinamis
+  const grad = ctx.createLinearGradient(32, 0, 32, 64);
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+  grad.addColorStop(0.3, 'rgba(255, 255, 255, 0.9)');
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.ellipse(32, 32, 8, 30, 0, 0, Math.PI * 2);
+  ctx.fill();
+  return new THREE.CanvasTexture(canvas);
 }
 
 /**
- * Membuat tekstur awan lembut prosedural
+ * Membuat tekstur awan volumetrik multi-puff lembut
  */
 function createCloudTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
+  ctx.clearRect(0, 0, 256, 256);
 
-  const grad = ctx.createRadialGradient(128, 128, 10, 128, 128, 120);
-  grad.addColorStop(0, 'rgba(255, 255, 255, 0.9)');
-  grad.addColorStop(0.4, 'rgba(255, 255, 255, 0.5)');
-  grad.addColorStop(0.8, 'rgba(255, 255, 255, 0.15)');
-  grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  // Gabungan beberapa kepulan radial awan lembut
+  const puffs = [
+    { x: 128, y: 128, r: 100 },
+    { x: 90, y: 130, r: 75 },
+    { x: 165, y: 130, r: 80 },
+    { x: 110, y: 95, r: 70 },
+    { x: 145, y: 95, r: 72 }
+  ];
 
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.arc(128, 128, 120, 0, Math.PI * 2);
-  ctx.fill();
+  puffs.forEach((p) => {
+    const grad = ctx.createRadialGradient(p.x, p.y, 10, p.x, p.y, p.r);
+    grad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+    grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.45)');
+    grad.addColorStop(0.8, 'rgba(255, 255, 255, 0.15)');
+    grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
@@ -115,7 +179,7 @@ function createCloudTexture() {
 }
 
 /**
- * Master Compositor 3D Three.js
+ * Master Compositor 3D Three.js & 2D Clean Engine
  */
 export class CodeToVideoCompositor {
   constructor(containerCanvas, width = 1280, height = 720) {
@@ -123,25 +187,25 @@ export class CodeToVideoCompositor {
     this.width = width;
     this.height = height;
 
-    // Canvas konten kode (2D buffer yang dirender oleh sandbox pengguna)
+    // Canvas konten kode pengguna (buffer 1280x720)
     this.codeCanvas = document.createElement('canvas');
     this.codeCanvas.width = 1280;
     this.codeCanvas.height = 720;
     this.codeCtx = this.codeCanvas.getContext('2d');
 
-    // Canvas overlay 2D untuk tipografi & HUD
+    // Canvas overlay 2D untuk Tipografi HUD
     this.hudCanvas = document.createElement('canvas');
     this.hudCanvas.width = width;
     this.hudCanvas.height = height;
     this.hudCtx = this.hudCanvas.getContext('2d');
 
-    // Canvas master akhir untuk export video
+    // Master Output Canvas (piksel asli untuk render video & live canvas)
     this.masterCanvas = document.createElement('canvas');
     this.masterCanvas.width = width;
     this.masterCanvas.height = height;
     this.masterCtx = this.masterCanvas.getContext('2d');
 
-    // Inisialisasi Three.js WebGL Renderer
+    // WebGL Three.js Renderer
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.containerCanvas,
       antialias: true,
@@ -156,17 +220,22 @@ export class CodeToVideoCompositor {
     this.camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     this.camera.position.set(0, 0, 4.4);
 
-    // Tekstur dasar
-    this.particleTexture = createParticleTexture();
+    // Kumpulan Tekstur Partikel
+    this.particleTextures = {
+      dust: createBokehTexture(),
+      stars: createStarTexture(),
+      snow: createSnowTexture(),
+      sparks: createSparkTexture()
+    };
     this.cloudTexture = createCloudTexture();
 
-    // Background plane di belakang scene
+    // Layer 1: Background Quad
     this.initBackgroundLayer();
 
-    // 3D Code Plane
+    // Layer 2: 3D Code Plane
     this.initCodePlane();
 
-    // Atmospheric Effects: Awan & Partikel
+    // Layer 3: Atmospheric Effects (Awan & Partikel)
     this.initAtmosphericEffects();
   }
 
@@ -223,13 +292,13 @@ export class CodeToVideoCompositor {
     this.codeTexture.minFilter = THREE.LinearFilter;
     this.codeTexture.magFilter = THREE.LinearFilter;
 
-    // Bingkai belakang warna hitam neobrutalist
+    // Bingkai Neobrutalist Hitam Tegas
     const frameGeo = new THREE.PlaneGeometry(3.3, 1.9);
     const frameMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
     this.frameMesh = new THREE.Mesh(frameGeo, frameMat);
     this.frameMesh.position.z = -0.01;
 
-    // Layar kode
+    // Layar Kode
     const planeGeo = new THREE.PlaneGeometry(3.2, 1.8);
     const planeMat = new THREE.MeshBasicMaterial({
       map: this.codeTexture,
@@ -237,7 +306,6 @@ export class CodeToVideoCompositor {
     });
     this.codeMesh = new THREE.Mesh(planeGeo, planeMat);
 
-    // Group untuk memudahkan rotasi gabungan
     this.codeGroup = new THREE.Group();
     this.codeGroup.add(this.frameMesh);
     this.codeGroup.add(this.codeMesh);
@@ -245,15 +313,15 @@ export class CodeToVideoCompositor {
   }
 
   initAtmosphericEffects() {
-    // 1. Lapisan Awan Prosedural 3D
+    // 1. Awan 3D
     this.cloudGroup = new THREE.Group();
     this.cloudPlanes = [];
 
     const cloudPuffs = [
-      { x: -1.8, y: 0.9, z: -1.2, scale: 2.2, speed: 0.08 },
-      { x: 1.6, y: -0.7, z: -0.8, scale: 2.5, speed: 0.06 },
-      { x: -0.8, y: -1.1, z: 0.4, scale: 2.0, speed: 0.1 },
-      { x: 1.2, y: 1.0, z: 0.8, scale: 2.4, speed: 0.07 }
+      { x: -1.9, y: 0.9, z: -1.4, scale: 2.6, speed: 0.08 },
+      { x: 1.8, y: -0.7, z: -0.9, scale: 2.8, speed: 0.06 },
+      { x: -0.9, y: -1.1, z: 0.4, scale: 2.2, speed: 0.1 },
+      { x: 1.3, y: 1.1, z: 0.7, scale: 2.5, speed: 0.07 }
     ];
 
     const cloudGeo = new THREE.PlaneGeometry(2, 2);
@@ -272,7 +340,6 @@ export class CodeToVideoCompositor {
       this.cloudPlanes.push(mesh);
       this.cloudGroup.add(mesh);
     });
-
     this.scene.add(this.cloudGroup);
 
     // 2. Partikel Udara 3D
@@ -297,10 +364,10 @@ export class CodeToVideoCompositor {
     this.particleGeo.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3));
 
     this.particleMat = new THREE.PointsMaterial({
-      size: 0.12,
-      map: this.particleTexture,
+      size: 0.14,
+      map: this.particleTextures.sparks,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.85,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       color: 0x00f0ff
@@ -311,7 +378,7 @@ export class CodeToVideoCompositor {
   }
 
   /**
-   * Update transformasi 3D, partikel, awan, dan kamera berdasarkan parameter
+   * Update transformasi 3D, partikel, awan, dan kamera
    */
   updateScene(t, settings) {
     const {
@@ -330,13 +397,19 @@ export class CodeToVideoCompositor {
       particleColor = '#00f0ff'
     } = settings;
 
-    // Rotasi dasar kartu kode (konversi derajat ke radian)
+    // Ganti tekstur partikel sesuai gaya pilihan
+    if (this.particleTextures[particleStyle] && this.particleMat.map !== this.particleTextures[particleStyle]) {
+      this.particleMat.map = this.particleTextures[particleStyle];
+      this.particleMat.needsUpdate = true;
+    }
+
+    // Rotasi dasar kartu kode
     let rx = (rotateX * Math.PI) / 180;
     let ry = (rotateY * Math.PI) / 180;
     let rz = (rotateZ * Math.PI) / 180;
     let py = 0;
 
-    // Auto-orbit / pernapasan melayang di ruang 3D
+    // Auto-Orbit: hanya aktif jika autoOrbit === true
     if (autoOrbit) {
       const spd = motionSpeed || 1.0;
       rx += Math.sin(t * 0.9 * spd) * 0.05;
@@ -349,7 +422,7 @@ export class CodeToVideoCompositor {
     this.codeGroup.rotation.z = rz;
     this.codeGroup.position.y = py;
 
-    // Posisi kamera (Zoom)
+    // Zoom Kamera
     const safeZoom = Math.max(0.4, Math.min(zoom || 1.0, 2.5));
     this.camera.position.z = 4.4 / safeZoom;
 
@@ -358,19 +431,18 @@ export class CodeToVideoCompositor {
     if (this.cloudGroup.visible) {
       const cColor = new THREE.Color(cloudColor || '#211042');
       this.cloudPlanes.forEach((plane) => {
-        plane.material.opacity = cloudDensity * 0.6;
+        plane.material.opacity = cloudDensity * 0.7;
         plane.material.color = cColor;
 
         const u = plane.userData;
-        // Hanyut perlahan secara horizontal
         const drift = (t * u.speed * (motionSpeed || 1.0)) % 8;
         plane.position.x = u.initialX + drift;
-        if (plane.position.x > 4) plane.position.x -= 8;
+        if (plane.position.x > 4.2) plane.position.x -= 8.4;
         plane.position.y = u.initialY + Math.sin(t * 0.5 + u.z) * 0.12;
       });
     }
 
-    // 2. Update Partikel Udara 3D
+    // 2. Update Partikel 3D
     this.particlePoints.visible = Boolean(particles && particleCount > 0);
     if (this.particlePoints.visible) {
       this.particleMat.color = new THREE.Color(particleColor || '#00f0ff');
@@ -385,28 +457,26 @@ export class CodeToVideoCompositor {
         let pz = positions[i * 3 + 2];
 
         if (particleStyle === 'snow') {
-          // Salju turun ke bawah
+          // Salju turun ke bawah dengan goyangan horizontal
           py -= (0.4 + vel.seed * 0.05) * spd * 0.02;
-          px += Math.sin(t * 1.5 + vel.seed) * 0.008 * spd;
+          px += Math.sin(t * 1.6 + vel.seed) * 0.008 * spd;
           if (py < -3.2) py = 3.2;
         } else if (particleStyle === 'sparks') {
-          // Percikan api naik ke atas
-          py += (0.6 + vel.seed * 0.08) * spd * 0.02;
-          px += Math.sin(t * 2.5 + vel.seed) * 0.01 * spd;
+          // Percikan neon melesat ke atas
+          py += (0.8 + vel.seed * 0.1) * spd * 0.025;
+          px += Math.sin(t * 2.8 + vel.seed) * 0.012 * spd;
           if (py > 3.2) py = -3.2;
         } else if (particleStyle === 'stars') {
-          // Bintang berkelap-kelip halus di tempat
-          const twinkle = Math.sin(t * 4 + vel.seed);
-          px += Math.sin(t * 0.4 + vel.seed) * 0.003;
-          py += Math.cos(t * 0.3 + vel.seed) * 0.003;
+          // Bintang berkelap-kelip tajam
+          px += Math.sin(t * 0.3 + vel.seed) * 0.002;
+          py += Math.cos(t * 0.3 + vel.seed) * 0.002;
         } else {
-          // Dust bokeh gerak brownian lembut
+          // Bokeh dust gerakan brownian lembut
           px += Math.sin(t * 0.6 + vel.seed) * 0.005 * spd;
           py += Math.cos(t * 0.5 + vel.seed) * 0.005 * spd;
           pz += Math.sin(t * 0.4 + vel.seed) * 0.004 * spd;
         }
 
-        // Batasi ruang agar tidak keluar pandangan kamera
         if (px > 4.2) px = -4.2;
         if (px < -4.2) px = 4.2;
         if (py > 3.2) py = -3.2;
@@ -439,7 +509,6 @@ export class CodeToVideoCompositor {
     const ctx = this.hudCtx;
     ctx.save();
 
-    // Hitung posisi berdasarkan pilihan alignment
     let x = 40;
     let y = this.height - 100;
     let align = 'left';
@@ -457,7 +526,6 @@ export class CodeToVideoCompositor {
       y = this.height - 100;
       align = 'center';
     } else {
-      // bottom-left default
       x = 44;
       y = this.height - 100;
       align = 'left';
@@ -465,12 +533,9 @@ export class CodeToVideoCompositor {
 
     ctx.textAlign = align;
 
-    // Gambar pill container neobrutalist
-    ctx.save();
     const titleText = (hudTitle || '').toUpperCase();
     const subText = (hudSubtitle || '').toUpperCase();
 
-    // Ukuran font adaptif terhadap resolusi layar
     const scaleFactor = Math.max(1, this.height / 720);
     const titleSize = Math.round(20 * scaleFactor);
     const subSize = Math.round(11 * scaleFactor);
@@ -489,65 +554,81 @@ export class CodeToVideoCompositor {
       boxX = x - boxWidth / 2;
     }
 
-    // Shadow neobrutalist hitam pekat
+    // Shadow neobrutalist hitam
     ctx.fillStyle = '#000000';
     ctx.fillRect(boxX + 4 * scaleFactor, y + 4 * scaleFactor, boxWidth, boxHeight);
 
-    // Box latar belakang putih dengan border hitam tegas
+    // Box putih
     ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
     ctx.fillRect(boxX, y, boxWidth, boxHeight);
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2.5 * scaleFactor;
     ctx.strokeRect(boxX, y, boxWidth, boxHeight);
 
-    // Aksen dot indicator merah menyala (REC status)
+    // Red REC dot
     ctx.fillStyle = '#ff0055';
     ctx.beginPath();
     ctx.arc(boxX + 16 * scaleFactor, y + 22 * scaleFactor, 5 * scaleFactor, 0, Math.PI * 2);
     ctx.fill();
 
-    // Render Judul
+    // Judul
     ctx.fillStyle = '#000000';
     ctx.font = `900 ${titleSize}px monospace`;
     ctx.textAlign = 'left';
     ctx.fillText(titleText, boxX + 28 * scaleFactor, y + 28 * scaleFactor);
 
-    // Render Subtitle
+    // Subjudul
     ctx.fillStyle = '#444444';
     ctx.font = `700 ${subSize}px monospace`;
     ctx.fillText(subText, boxX + 28 * scaleFactor, y + 48 * scaleFactor);
 
     ctx.restore();
-    ctx.restore();
-  }
-
-  /**
-   * Menggabungkan WebGL Canvas dan 2D HUD ke Master Canvas untuk export
-   */
-  compositeMasterFrame() {
-    this.masterCtx.clearRect(0, 0, this.width, this.height);
-    // 1. Gambar Three.js WebGL Canvas
-    this.masterCtx.drawImage(this.containerCanvas, 0, 0, this.width, this.height);
-    // 2. Gambar HUD Overlay
-    this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
   }
 
   /**
    * Render satu frame lengkap pada waktu `t`
+   * Mendukung MODE POLOS (CLEAN / DIRECT) & MODE STUDIO 3D (SINEMATIK)
    */
   renderFrame(t, settings) {
-    this.updateBackground(settings);
-    this.updateScene(t, settings);
-    this.codeTexture.needsUpdate = true;
+    const isCleanMode = settings?.stageMode === 'clean';
 
-    // Render WebGL 3D
-    this.renderer.render(this.scene, this.camera);
+    if (isCleanMode) {
+      // --- MODE POLOS (CLEAN / DIRECT) ---
+      // Render kode pengguna 100% full-bleed tanpa elemen 3D/awan/partikel
+      this.masterCtx.clearRect(0, 0, this.width, this.height);
+      this.masterCtx.drawImage(this.codeCanvas, 0, 0, this.width, this.height);
 
-    // Render HUD
-    this.renderHud(settings);
+      // Render HUD opsional jika diaktifkan pengguna
+      if (settings.hudEnabled) {
+        this.renderHud(settings);
+        this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
+      }
 
-    // Composite ke Master Canvas
-    this.compositeMasterFrame();
+      // Salin ke container canvas agar live preview di layar ikut tampil full-bleed
+      const cCtx = this.containerCanvas.getContext('2d');
+      if (cCtx) {
+        cCtx.clearRect(0, 0, this.width, this.height);
+        cCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
+      }
+    } else {
+      // --- MODE STUDIO 3D (SINEMATIK) ---
+      this.updateBackground(settings);
+      this.updateScene(t, settings);
+      this.codeTexture.needsUpdate = true;
+
+      // Render 3D Three.js
+      this.renderer.render(this.scene, this.camera);
+
+      // Render HUD Tipografi
+      this.renderHud(settings);
+
+      // Gabungkan ke Master Output Canvas
+      this.masterCtx.clearRect(0, 0, this.width, this.height);
+      this.masterCtx.drawImage(this.containerCanvas, 0, 0, this.width, this.height);
+      if (settings.hudEnabled) {
+        this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
+      }
+    }
   }
 
   dispose() {
@@ -560,7 +641,7 @@ export class CodeToVideoCompositor {
 }
 
 /**
- * Runner Sandbox untuk Kode Animasi Pengguna
+ * Runner Sandbox untuk Kode Animasi Pengguna (Anti 'time is not defined')
  */
 export class CodeSandboxRunner {
   constructor(compositor) {
@@ -568,8 +649,9 @@ export class CodeSandboxRunner {
     this.lastError = null;
     this.compiledCanvasFn = null;
     this.isHtmlMode = false;
+    this.lastT = 0;
 
-    // Siapkan Iframe tersembunyi untuk mode HTML
+    // Siapkan Iframe sandbox tersembunyi
     this.iframe = document.createElement('iframe');
     this.iframe.style.position = 'fixed';
     this.iframe.style.top = '-9999px';
@@ -585,22 +667,42 @@ export class CodeSandboxRunner {
     this.lastError = null;
     this.code = code;
 
-    // Deteksi otomatis apakah kode merupakan HTML atau Canvas Script murni
     const trimmed = (code || '').trim();
-    const isHtml = type === 'html' || trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.includes('<style>') || trimmed.includes('<body>');
+    const isHtml =
+      type === 'html' ||
+      trimmed.startsWith('<!DOCTYPE') ||
+      trimmed.startsWith('<html') ||
+      trimmed.includes('<style>') ||
+      trimmed.includes('<body>') ||
+      trimmed.includes('<div') ||
+      trimmed.includes('<canvas');
+
     this.isHtmlMode = isHtml;
 
     if (!isHtml) {
       try {
-        // Kompilasi JavaScript Canvas Script
-        // Argumen: canvas, ctx, width, height, t, window
-        this.compiledCanvasFn = new Function('canvas', 'ctx', 'width', 'height', 't', 'window', code);
+        // Kompilasi JavaScript Canvas Script dengan variabel alias global
+        // Memastikan 'time', 't', 'dt', 'frame', 'ctx', 'canvas', 'width', 'height' SELALU tersedia di scope!
+        this.compiledCanvasFn = new Function(
+          'canvas',
+          'ctx',
+          'width',
+          'height',
+          'time',
+          'dt',
+          'frame',
+          't',
+          'window',
+          `
+          var c = canvas;
+          ${code}
+          `
+        );
       } catch (err) {
         this.lastError = `Syntax Error: ${err.message}`;
         this.compiledCanvasFn = null;
       }
     } else {
-      // Injeksi ke Iframe sandbox
       this.iframe.srcdoc = code;
     }
   }
@@ -608,26 +710,48 @@ export class CodeSandboxRunner {
   renderStep(t) {
     if (this.lastError) return;
 
+    const dt = Math.max(0.001, t - this.lastT);
+    this.lastT = t;
+    const frame = Math.round(t * 60);
+
     if (!this.isHtmlMode && this.compiledCanvasFn) {
       try {
         const c = this.compositor.codeCanvas;
         const ctx = this.compositor.codeCtx;
-        this.compiledCanvasFn(c, ctx, c.width, c.height, t, window);
+
+        // Pasang variabel global alias di window agar tidak pernah 'time is not defined'
+        if (typeof window !== 'undefined') {
+          window.time = t;
+          window.t = t;
+          window.dt = dt;
+          window.frame = frame;
+          window.ctx = ctx;
+          window.canvas = c;
+          window.width = c.width;
+          window.height = c.height;
+        }
+
+        this.compiledCanvasFn(c, ctx, c.width, c.height, t, dt, frame, t, window);
       } catch (err) {
         this.lastError = `Runtime Error: ${err.message}`;
       }
     } else if (this.isHtmlMode) {
-      // Untuk mode HTML, kita coba sinkronkan canvas dari dalam iframe jika ada
       try {
         const iframeDoc = this.iframe.contentDocument || this.iframe.contentWindow?.document;
         if (iframeDoc) {
           const innerCanvas = iframeDoc.querySelector('canvas');
           if (innerCanvas && innerCanvas.width > 0 && innerCanvas.height > 0) {
-            this.compositor.codeCtx.drawImage(innerCanvas, 0, 0, this.compositor.codeCanvas.width, this.compositor.codeCanvas.height);
+            this.compositor.codeCtx.drawImage(
+              innerCanvas,
+              0,
+              0,
+              this.compositor.codeCanvas.width,
+              this.compositor.codeCanvas.height
+            );
           }
         }
       } catch {
-        // Abaikan jika frame belum siap
+        // Abaikan frame transien
       }
     }
   }
@@ -641,8 +765,7 @@ export class CodeSandboxRunner {
 
 /**
  * Pipeline Ekspor Video Kualitas Tinggi
- * Menggunakan WebCodecs + mp4-muxer untuk menghasilkan MP4 langsung di browser,
- * dengan fallback otomatis ke MediaRecorder (WebM) jika WebCodecs tidak tersedia.
+ * Zero-Crash di Chrome, Edge, Firefox & Mobile (Sanitasi decoderConfig mp4-muxer + Fallback MediaRecorder)
  */
 export async function exportVideo({
   compositor,
@@ -660,156 +783,184 @@ export async function exportVideo({
   const totalFrames = Math.max(1, Math.round(duration * fps));
   const bitrate = BITRATE_PRESETS[bitratePreset] || BITRATE_PRESETS.standard;
 
-  // Sesuaikan resolusi master compositor dengan target export
+  // Sesuaikan resolusi master compositor dengan target export eksak
   compositor.resize(width, height);
 
-  // Periksa dukungan WebCodecs VideoEncoder
   const supportsWebCodecs = typeof window !== 'undefined' && 'VideoEncoder' in window && 'VideoFrame' in window;
 
-  let codec = 'avc1.4d002a'; // H.264 Main Profile Level 4.2
-  let isCodecSupported = false;
+  // Urutan seleksi codec H.264 otomatis
+  const candidateCodecs = [
+    'avc1.640033', // High Profile Level 5.1 (hingga 1440p 60fps)
+    'avc1.640032',
+    'avc1.64002a',
+    'avc1.4d002a', // Main Profile Level 4.2
+    'avc1.42001f'  // Baseline
+  ];
+
+  let selectedCodec = null;
 
   if (supportsWebCodecs) {
-    try {
-      const configCheck = await VideoEncoder.isConfigSupported({
-        codec: 'avc1.4d002a',
-        width,
-        height,
-        bitrate,
-        framerate: fps
-      });
-      if (configCheck.supported) {
-        codec = 'avc1.4d002a';
-        isCodecSupported = true;
-      } else {
-        const baselineCheck = await VideoEncoder.isConfigSupported({
-          codec: 'avc1.42001f',
+    for (const cand of candidateCodecs) {
+      try {
+        const res = await VideoEncoder.isConfigSupported({
+          codec: cand,
           width,
           height,
           bitrate,
           framerate: fps
         });
-        if (baselineCheck.supported) {
-          codec = 'avc1.42001f';
-          isCodecSupported = true;
+        if (res && res.supported) {
+          selectedCodec = cand;
+          break;
         }
+      } catch {
+        // Lanjut ke kandidat berikutnya
       }
-    } catch {
-      isCodecSupported = false;
     }
   }
 
   // --- JALUR UTAMA: WEBCODECS + MP4-MUXER ---
-  if (supportsWebCodecs && isCodecSupported) {
-    const muxer = new Muxer({
-      target: new ArrayBufferTarget(),
-      video: {
-        codec: 'avc',
-        width,
-        height
-      },
-      fastStart: 'in-memory'
-    });
-
-    let encoderError = null;
-    const videoEncoder = new VideoEncoder({
-      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-      error: (e) => {
-        encoderError = e;
-      }
-    });
-
-    videoEncoder.configure({
-      codec,
-      width,
-      height,
-      bitrate,
-      framerate: fps
-    });
-
-    const startTime = performance.now();
-
-    for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
-      if (signal?.aborted) {
-        videoEncoder.close();
-        throw new Error('Proses render dibatalkan oleh pengguna.');
-      }
-
-      if (encoderError) {
-        throw encoderError;
-      }
-
-      const t = frameIndex / fps;
-
-      // 1. Jalankan animasi kode pada detik t
-      sandbox.renderStep(t);
-
-      // 2. Render frame pada Three.js Compositor & HUD
-      compositor.renderFrame(t, settings);
-
-      // 3. Masukkan frame ke VideoEncoder
-      const timestampMicros = Math.round((frameIndex / fps) * 1_000_000);
-      const isKeyFrame = frameIndex % (fps * 2) === 0;
-
-      const videoFrame = new VideoFrame(compositor.masterCanvas, {
-        timestamp: timestampMicros
+  if (supportsWebCodecs && selectedCodec) {
+    try {
+      const muxer = new Muxer({
+        target: new ArrayBufferTarget(),
+        video: {
+          codec: 'avc',
+          width,
+          height
+        },
+        fastStart: 'in-memory'
       });
 
-      videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
-      videoFrame.close();
+      let encoderError = null;
 
-      // Beri jeda kecil agar UI browser tetap responsif
-      if (frameIndex % 5 === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      // Sanitasi Metadata decoderConfig untuk mencegah error e.info.decoderConfig is null
+      const videoEncoder = new VideoEncoder({
+        output: (chunk, meta) => {
+          const safeMeta = {};
+          if (meta && typeof meta === 'object' && meta.decoderConfig && typeof meta.decoderConfig === 'object') {
+            const dc = { ...meta.decoderConfig };
+            if (!dc.colorSpace) {
+              dc.colorSpace = {
+                primaries: 'bt709',
+                transfer: 'bt709',
+                matrix: 'bt709',
+                fullRange: false
+              };
+            }
+            safeMeta.decoderConfig = dc;
+          }
+          muxer.addVideoChunk(chunk, Object.keys(safeMeta).length ? safeMeta : undefined);
+        },
+        error: (e) => {
+          encoderError = e;
+        }
+      });
 
-      // Laporkan progress
-      if (onProgress) {
-        const elapsed = (performance.now() - startTime) / 1000;
-        const framesDone = frameIndex + 1;
-        const framesLeft = totalFrames - framesDone;
-        const timeRemainingSec = Math.max(0, Math.round((elapsed / framesDone) * framesLeft));
-        const percent = Math.min(100, Math.round((framesDone / totalFrames) * 100));
+      videoEncoder.configure({
+        codec: selectedCodec,
+        width,
+        height,
+        bitrate,
+        framerate: fps
+      });
 
-        onProgress({
-          frame: framesDone,
-          totalFrames,
-          percent,
-          timeRemainingSec
+      const startTime = performance.now();
+
+      for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+        if (signal?.aborted) {
+          videoEncoder.close();
+          throw new Error('Proses render dibatalkan oleh pengguna.');
+        }
+
+        if (encoderError) {
+          throw encoderError;
+        }
+
+        const t = frameIndex / fps;
+
+        // 1. Jalankan animasi sandbox
+        sandbox.renderStep(t);
+
+        // 2. Render frame pada Three.js / Clean Compositor
+        compositor.renderFrame(t, settings);
+
+        // 3. Masukkan frame ke VideoEncoder dengan timestamp presisi mikrodetik
+        const timestampMicros = Math.round((frameIndex * 1_000_000) / fps);
+        const isKeyFrame = frameIndex % (fps * 2) === 0;
+
+        const videoFrame = new VideoFrame(compositor.masterCanvas, {
+          timestamp: timestampMicros
         });
+
+        videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
+        videoFrame.close();
+
+        // Jeda kecil agar UI tetap interaktif
+        if (frameIndex % 6 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
+        if (onProgress) {
+          const elapsed = (performance.now() - startTime) / 1000;
+          const framesDone = frameIndex + 1;
+          const framesLeft = totalFrames - framesDone;
+          const timeRemainingSec = Math.max(0, Math.round((elapsed / framesDone) * framesLeft));
+          const percent = Math.min(100, Math.round((framesDone / totalFrames) * 100));
+
+          onProgress({
+            frame: framesDone,
+            totalFrames,
+            percent,
+            timeRemainingSec
+          });
+        }
       }
+
+      await videoEncoder.flush();
+      muxer.finalize();
+
+      const buffer = muxer.target.buffer;
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+      const url = URL.createObjectURL(blob);
+      const sizeMB = (blob.size / (1024 * 1024)).toFixed(2);
+
+      return {
+        blob,
+        url,
+        format: 'mp4',
+        mimeType: 'video/mp4',
+        sizeMB,
+        width,
+        height,
+        duration
+      };
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      // Jika terjadi exception WebCodecs, otomatis alihkan ke MediaRecorder
+      console.warn('WebCodecs gagal, beralih ke MediaRecorder fallback:', err);
     }
-
-    await videoEncoder.flush();
-    muxer.finalize();
-
-    const buffer = muxer.target.buffer;
-    const blob = new Blob([buffer], { type: 'video/mp4' });
-    const url = URL.createObjectURL(blob);
-    const sizeMB = (blob.size / (1024 * 1024)).toFixed(2);
-
-    return {
-      blob,
-      url,
-      format: 'mp4',
-      mimeType: 'video/mp4',
-      sizeMB,
-      width,
-      height,
-      duration
-    };
   }
 
-  // --- JALUR CADANGAN: MEDIARECORDER (WEBM) ---
+  // --- JALUR CADANGAN OTOMATIS: MEDIARECORDER (MP4 / WEBM) ---
   return new Promise((resolve, reject) => {
     try {
       const stream = compositor.masterCanvas.captureStream(fps);
-      let mimeType = 'video/webm;codecs=vp9';
+
+      let mimeType = 'video/mp4';
+      let format = 'mp4';
+
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'video/webm;codecs=vp9';
+        format = 'webm';
+      }
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = 'video/webm;codecs=vp8';
+        format = 'webm';
       }
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = 'video/webm';
+        format = 'webm';
       }
 
       const recorder = new MediaRecorder(stream, {
@@ -829,7 +980,7 @@ export async function exportVideo({
         resolve({
           blob,
           url,
-          format: 'webm',
+          format,
           mimeType,
           sizeMB,
           width,
