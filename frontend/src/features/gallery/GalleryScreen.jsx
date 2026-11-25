@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { getGalleryItems, removeGalleryItem } from '../../shared/utils/storageService';
 import { translations } from '../../shared/utils/translations';
+import { downloadBlob, downloadBase64, downloadFromUrl } from '../../shared/utils/fileDownload';
 
 export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowToast }) {
   const isEn = lang === 'en';
@@ -89,7 +90,7 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
     }
   };
 
-  // Unduh ulang berkas dari galeri tanpa membuka tab/halaman putih
+  // Unduh ulang berkas dari galeri secara aman di semua perangkat (Desktop, Mobile, WebView)
   const handleDownload = async (item, specificSlide = null) => {
     try {
       // 1. Jika mengunduh 1 slide spesifik dari album slide
@@ -100,16 +101,9 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
         const filename = specificSlide.filename || `slide_${Date.now()}.${ext}`;
         const proxyUrl = specificSlide.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(rawUrl)}&filename=${encodeURIComponent(filename)}`;
 
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = proxyUrl;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
+        const dlRes = await downloadFromUrl(proxyUrl, filename);
         if (onShowToast) {
-          onShowToast(`${t.gallery.downloadSuccess} (${filename})`);
+          onShowToast(`${t.gallery.downloadSuccess} (${dlRes.filename})`);
         }
         return;
       }
@@ -139,7 +133,7 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
             const res = await fetch(proxy);
             if (res.ok) {
               const blob = await res.blob();
-              folder.file(sName, blob);
+              if (blob.size > 0) folder.file(sName, blob);
             }
           } catch {}
         }
@@ -153,67 +147,47 @@ export default function GalleryScreen({ onBack, onOpenTool, lang = 'id', onShowT
             const aRes = await fetch(aProxy);
             if (aRes.ok) {
               const aBlob = await aRes.blob();
-              folder.file(aName, aBlob);
+              if (aBlob.size > 0) folder.file(aName, aBlob);
             }
           } catch {}
         }
 
         setBatchProgressText(isEn ? 'Compressing ZIP archive...' : 'Mengompres arsip ZIP...');
         const zipBlob = await zip.generateAsync({ type: 'blob' });
-        const zipUrl = window.URL.createObjectURL(zipBlob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = zipUrl;
-        a.download = item.filename || `kuro_slides_${Date.now()}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => window.URL.revokeObjectURL(zipUrl), 3000);
+        const zipName = item.filename || `kuro_slides_${Date.now()}.zip`;
+        const dlRes = downloadBlob(zipBlob, zipName);
 
         setIsDownloadingBatch(false);
         setBatchProgressText('');
         if (onShowToast) {
-          onShowToast(`${t.gallery.downloadSuccess} (${item.filename || 'slides.zip'})`);
+          onShowToast(`${t.gallery.downloadSuccess} (${dlRes.filename})`);
         }
         return;
       }
 
       // 3. Format berkas standar (single video, foto tunggal, audio, dokumen)
       const rawUrl = item.downloadData || item.previewUrl || '';
-      const filename = item.filename || `kuro_${item.title.toLowerCase().replace(/\s+/g, '_')}.${(item.extension || 'mp4').toLowerCase()}`;
+      if (!rawUrl) {
+        throw new Error(isEn ? 'File source is no longer available in this session.' : 'Sumber berkas sudah kedaluwarsa atau tidak tersedia lagi.');
+      }
+      const ext = (item.extension || 'mp4').toLowerCase();
+      const filename = item.filename || `kuro_${(item.title || 'file').toLowerCase().replace(/\s+/g, '_')}.${ext}`;
 
-      if (rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) {
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = rawUrl;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+      let dlRes;
+      if (rawUrl.startsWith('data:')) {
+        dlRes = await downloadBase64(rawUrl, filename);
       } else if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
         const proxyUrl = `/api/proxy-download?url=${encodeURIComponent(rawUrl)}&filename=${encodeURIComponent(filename)}`;
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = proxyUrl;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      } else if (rawUrl) {
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = rawUrl;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        dlRes = await downloadFromUrl(proxyUrl, filename);
+      } else {
+        dlRes = await downloadFromUrl(rawUrl, filename);
       }
 
       if (onShowToast) {
-        onShowToast(`${t.gallery.downloadSuccess} (${filename})`);
+        onShowToast(`${t.gallery.downloadSuccess} (${dlRes?.filename || filename})`);
       }
-    } catch {
-      if (onShowToast) onShowToast(isEn ? 'Failed to download file.' : 'Gagal memulai unduhan.');
+    } catch (err) {
+      if (onShowToast) onShowToast(err?.message || (isEn ? 'Failed to download file.' : 'Gagal memulai unduhan.'));
     } finally {
       setIsDownloadingBatch(false);
       setBatchProgressText('');

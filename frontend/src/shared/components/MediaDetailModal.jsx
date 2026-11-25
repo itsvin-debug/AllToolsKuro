@@ -11,6 +11,7 @@ import {
   Layers,
   Sparkles
 } from 'lucide-react';
+import { copyTextToClipboard } from '../utils/clipboard';
 
 // Cache memori untuk terjemahan sinopsis agar pergantian bahasa seketika
 const translationCache = new Map();
@@ -103,12 +104,12 @@ export default function MediaDetailModal({
   const yearLabel = item.year || item.seasonYear || (lang === 'en' ? 'Popular' : 'Populer');
 
   const handleCopyTitle = async () => {
-    try {
-      await navigator.clipboard.writeText(titlePrimary);
+    const res = await copyTextToClipboard(titlePrimary);
+    if (res.success) {
       setCopied(true);
       if (onShowToast) onShowToast(lang === 'en' ? 'Title copied to clipboard!' : 'Judul berhasil disalin!');
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } else {
       if (onShowToast) onShowToast(lang === 'en' ? 'Failed to copy title' : 'Gagal menyalin judul');
     }
   };

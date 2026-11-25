@@ -25,6 +25,7 @@ import {
   Repeat
 } from 'lucide-react';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob, downloadFromUrl } from '../../shared/utils/fileDownload';
 
 // Format detik ke timestamp presisi (HH:MM:SS.ms)
 function formatTimePrecision(seconds) {
@@ -41,7 +42,7 @@ function formatTimePrecision(seconds) {
   return `${pad(mins)}:${pad(secs)}.${pad(ms)}`;
 }
 
-export default function VideoTrimmerScreen({ onBack }) {
+export default function VideoTrimmerScreen({ onBack, onShowToast }) {
   const [videoFile, setVideoFile] = useState(null);
   const [videoSrc, setVideoSrc] = useState(null);
   const [fileName, setFileName] = useState('');
@@ -326,6 +327,7 @@ export default function VideoTrimmerScreen({ onBack }) {
             const dur = (end - start).toFixed(2);
             cleanup();
             resolve({
+              blob,
               url,
               fileName: finalName,
               originalName: fileName,
@@ -435,28 +437,33 @@ export default function VideoTrimmerScreen({ onBack }) {
     }
   };
 
-  // Unduh Video Hasil Potongan
-  const handleDownloadResult = () => {
+  // Unduh Video Hasil Potongan via Blob/URL utility
+  const handleDownloadResult = async () => {
     if (!trimmedResult) return;
     const outFilename = trimmedResult.fileName || `trimmed_${fileName}`;
-    const a = document.createElement('a');
-    a.href = trimmedResult.url;
-    a.download = outFilename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    try {
+      if (trimmedResult.blob instanceof Blob && trimmedResult.blob.size > 0) {
+        downloadBlob(trimmedResult.blob, outFilename);
+      } else if (trimmedResult.url) {
+        await downloadFromUrl(trimmedResult.url, outFilename);
+      } else {
+        throw new Error('Berkas video hasil potongan tidak tersedia.');
+      }
 
-    // Simpan otomatis ke galeri perangkat
-    addGalleryItem({
-      title: outFilename.replace(/\.[^/.]+$/, ''),
-      type: 'video',
-      category: 'Video Trimmer',
-      extension: 'MP4',
-      size: trimmedResult.sizeFormatted || '1.5 MB',
-      previewUrl: trimmedResult.url,
-      downloadData: trimmedResult.url,
-      filename: outFilename
-    });
+      addGalleryItem({
+        title: outFilename.replace(/\.[^/.]+$/, ''),
+        type: 'video',
+        category: 'Video Trimmer',
+        extension: outFilename.split('.').pop()?.toUpperCase() || 'MP4',
+        size: trimmedResult.sizeFormatted || 'HD Video',
+        previewUrl: null,
+        downloadData: null,
+        filename: outFilename
+      });
+      onShowToast?.(`Video terpotong diunduh: ${outFilename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh video hasil potongan.', 'error');
+    }
   };
 
   const totalTrimmedDuration = Math.max(0, endTime - startTime);
@@ -497,24 +504,24 @@ export default function VideoTrimmerScreen({ onBack }) {
             const file = e.dataTransfer.files?.[0];
             if (file) handleFileUpload(file);
           }}
-          className={`w-full flex flex-col items-center justify-center p-8 sm:p-12 rounded-3xl border-2 border-dashed transition-all text-center ${
+          className={`w-full flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl border-2 border-dashed border-black transition-all text-center ${
             isDragging
-              ? 'border-indigo-400 bg-indigo-950/60 scale-[0.99]'
-              : 'border-white/15 bg-[#0e121d]/80 backdrop-blur-xl hover:border-indigo-500/50'
+              ? 'bg-neutral-200 scale-[0.99] shadow-[2px_2px_0px_#000000]'
+              : 'bg-white hover:bg-neutral-50 shadow-[4px_4px_0px_#000000]'
           }`}
         >
-          <div className="w-16 h-16 rounded-2xl bg-indigo-600/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mb-4 shadow-lg shadow-indigo-600/10">
+          <div className="w-16 h-16 rounded-2xl bg-neutral-100 border-2 border-black flex items-center justify-center text-black mb-4 shadow-[2px_2px_0px_#000000]">
             <Scissors className="w-8 h-8" />
           </div>
 
-          <h3 className="text-lg font-bold text-white mb-1">
+          <h3 className="text-lg font-black text-black mb-1">
             Unggah Video yang Ingin Dipotong
           </h3>
-          <p className="text-xs text-slate-400 max-w-md mb-6 leading-relaxed">
+          <p className="text-xs text-neutral-600 max-w-md mb-6 leading-relaxed">
             Tarik & lepaskan file video ke sini, atau klik tombol di bawah untuk memilih file (Mendukung format MP4, WEBM, dan MOV).
           </p>
 
-          <label className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs sm:text-sm flex items-center gap-2 shadow-lg shadow-indigo-600/30 cursor-pointer active:scale-95 transition-all">
+          <label className="min-h-[44px] px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 text-white font-bold text-xs sm:text-sm flex items-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] cursor-pointer active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all">
             <Upload className="w-4 h-4" />
             <span>Pilih File Video</span>
             <input 
@@ -525,12 +532,12 @@ export default function VideoTrimmerScreen({ onBack }) {
             />
           </label>
 
-          <div className="flex items-center gap-3 mt-8 text-[11px] font-mono text-slate-500">
-            <span>✓ Lossless Encoding</span>
+          <div className="flex flex-wrap items-center justify-center gap-3 mt-8 text-[11px] font-mono text-neutral-600 font-bold">
+            <span>Lossless Encoding</span>
             <span>•</span>
-            <span>✓ Stream Copy Fast Cut</span>
+            <span>Stream Copy Fast Cut</span>
             <span>•</span>
-            <span>✓ Frame Preview</span>
+            <span>Frame Preview</span>
           </div>
         </div>
       )}
@@ -540,17 +547,17 @@ export default function VideoTrimmerScreen({ onBack }) {
         <div className="w-full flex flex-col gap-6">
           
           {/* Bar Info Video */}
-          <div className="w-full flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-[#0f1320] border border-white/10 text-xs">
+          <div className="w-full flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-white border-2 border-black shadow-[3px_3px_0px_#000000] text-xs">
             <div className="flex items-center gap-2.5 truncate max-w-sm">
-              <FileVideo className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className="font-bold text-white truncate">{fileName}</span>
+              <FileVideo className="w-4 h-4 text-black shrink-0" />
+              <span className="font-black text-black truncate">{fileName}</span>
             </div>
 
             <div className="flex items-center gap-2 font-mono text-[11px]">
-              <span className="px-2 py-0.5 rounded-md bg-white/5 text-slate-400">
+              <span className="px-2 py-0.5 rounded border border-black bg-neutral-100 text-black font-bold">
                 Durasi Asli: {formatTimePrecision(duration)}
               </span>
-              <label className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 cursor-pointer transition-colors">
+              <label className="px-2.5 py-1 rounded border-2 border-black bg-white hover:bg-neutral-100 text-black font-bold cursor-pointer transition-colors">
                 Ganti Video
                 <input 
                   type="file" 
@@ -888,20 +895,20 @@ export default function VideoTrimmerScreen({ onBack }) {
 
           {/* ─── 5. HASIL POTONGAN & TOMBOL UNDUH (JIKA SUDAH SELESAI) ─── */}
           {trimmedResult && (
-            <div className="w-full p-6 rounded-3xl bg-emerald-950/20 border border-emerald-500/30 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl animate-fadeIn">
+            <div className="w-full p-5 sm:p-6 rounded-2xl bg-emerald-50 border-2 border-black shadow-[4px_4px_0px_#000000] flex flex-col md:flex-row items-center justify-between gap-4 animate-fadeIn">
               
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
-                  <Check className="w-6 h-6" />
+                <div className="w-12 h-12 rounded-xl bg-emerald-400 border-2 border-black flex items-center justify-center text-black shrink-0 shadow-[2px_2px_0px_#000000]">
+                  <Check className="w-6 h-6 stroke-[3]" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-base text-white">Video Berhasil Dipotong!</h4>
-                  <p className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-1.5">
-                    <span>Durasi: <strong className="font-mono text-emerald-400">{trimmedResult.duration}s</strong></span>
+                  <h4 className="font-black text-base text-black">Video Berhasil Dipotong!</h4>
+                  <p className="text-xs text-neutral-700 mt-0.5 flex flex-wrap items-center gap-1.5 font-medium">
+                    <span>Durasi: <strong className="font-mono text-black">{trimmedResult.duration}s</strong></span>
                     <span>•</span>
-                    <span>Ukuran: <strong className="font-mono text-white">{trimmedResult.sizeFormatted}</strong></span>
+                    <span>Ukuran: <strong className="font-mono text-black">{trimmedResult.sizeFormatted}</strong></span>
                     {trimmedResult.engine && (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono text-[10px]">
+                      <span className="px-2 py-0.5 rounded border border-black bg-white text-black font-mono font-bold text-[10px]">
                         {trimmedResult.engine}
                       </span>
                     )}
@@ -911,10 +918,11 @@ export default function VideoTrimmerScreen({ onBack }) {
 
               <div className="flex items-center gap-3 w-full md:w-auto">
                 <button
+                  type="button"
                   onClick={handleDownloadResult}
-                  className="w-full md:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer active:scale-95 transition-all"
+                  className="w-full md:w-auto min-h-[44px] px-6 py-3 rounded-xl bg-black hover:bg-neutral-800 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 border-2 border-black shadow-[3px_3px_0px_#000000] cursor-pointer active:translate-x-[1px] active:translate-y-[1px] transition-all"
                 >
-                  <Download className="w-4 h-4" />
+                  <Download className="w-4 h-4 stroke-[2.5]" />
                   <span>Simpan & Unduh Video</span>
                 </button>
               </div>

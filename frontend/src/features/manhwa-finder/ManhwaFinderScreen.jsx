@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import MediaDetailModal from '../../shared/components/MediaDetailModal';
 import { translations } from '../../shared/utils/translations';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { searchManhwaRealtime, CURATED_MANHWA_DATA } from './manhwaService';
 import { 
   BookOpen, 
@@ -140,13 +141,13 @@ export default function ManhwaFinderScreen({ onBack, onShowToast, lang = 'id' })
 
   const handleCopyTitle = async (manhwa) => {
     const titleText = manhwa.title?.english || manhwa.title?.romaji || 'Manhwa Title';
-    try {
-      await navigator.clipboard.writeText(titleText);
+    const res = await copyTextToClipboard(titleText);
+    if (res.success) {
       setCopiedId(manhwa.id);
       if (onShowToast) onShowToast(mt.copiedTitle || 'Judul manhwa disalin ke papan klip!');
       setTimeout(() => setCopiedId(null), 2500);
-    } catch {
-      if (onShowToast) onShowToast('Gagal menyalin judul.');
+    } else if (onShowToast) {
+      onShowToast('Gagal menyalin judul.');
     }
   };
 

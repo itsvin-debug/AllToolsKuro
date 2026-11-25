@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
-import { 
-  Film, 
-  ArrowLeft, 
+import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob } from '../../shared/utils/fileDownload';
+import {
+  Film,
+  ArrowLeft,
+  Scissors, 
   Upload, 
   Play, 
   Pause, 
@@ -22,7 +25,7 @@ import {
   Gauge
 } from 'lucide-react';
 
-export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
+export default function VideoStudioScreen({ onBack, onOpenTrimmer, onShowToast }) {
   const [videoSrc, setVideoSrc] = useState(null);
   const [fileName, setFileName] = useState('video.mp4');
   const [isPlaying, setIsPlaying] = useState(false);
@@ -41,21 +44,37 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
   // Status Ekspor Video
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
-  const [exportedUrl, setExportedUrl] = useState(null);
+  const [exportedBlob, setExportedBlob] = useState(null);
+  const [exportedFormat, setExportedFormat] = useState('webm');
   const [isDragging, setIsDragging] = useState(false);
 
   const videoRef = useRef(null);
-  const exportCanvasRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const audioSourceRef = useRef(null);
+  const audioDestRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (videoSrc) {
+        try { URL.revokeObjectURL(videoSrc); } catch {}
+      }
+    };
+  }, [videoSrc]);
 
   // Upload video
   const handleVideoFile = (file) => {
     if (!file) return;
+    if (videoSrc) {
+      try { URL.revokeObjectURL(videoSrc); } catch {}
+    }
+    audioSourceRef.current = null;
+    audioDestRef.current = null;
 
     setFileName(file.name);
     const url = URL.createObjectURL(file);
     setVideoSrc(url);
     setIsPlaying(false);
-    setExportedUrl(null);
+    setExportedBlob(null);
   };
 
   const handleVideoUpload = (e) => {
@@ -121,59 +140,73 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
   const handleExportVideo = async () => {
     const video = videoRef.current;
     if (!video) return;
+    if (typeof MediaRecorder === 'undefined') {
+      onShowToast?.('Peramban tidak mendukung perekaman video MediaRecorder.', 'error');
+      return;
+    }
 
     setIsExporting(true);
     setExportProgress(0);
-    setExportedUrl(null);
+    setExportedBlob(null);
 
-    // Siapkan canvas render
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
 
-    const stream = canvas.captureStream(30); // 30 FPS HD
+    const stream = canvas.captureStream(30);
 
-    // Tangkap audio jika video memiliki audio track
-    let combinedStream = stream;
+    // Pakai ulang AudioContext & MediaElementAudioSourceNode agar render ulang kedua tidak error
     try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioCtx.createMediaElementSource(video);
-      const destination = audioCtx.createMediaStreamDestination();
-      source.connect(destination);
-      source.connect(audioCtx.destination);
-      destination.stream.getAudioTracks().forEach(track => stream.addTrack(track));
-      combinedStream = stream;
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtxRef.current.state === 'suspended') {
+        await audioCtxRef.current.resume();
+      }
+      if (!audioSourceRef.current) {
+        audioSourceRef.current = audioCtxRef.current.createMediaElementSource(video);
+        audioDestRef.current = audioCtxRef.current.createMediaStreamDestination();
+        audioSourceRef.current.connect(audioDestRef.current);
+        audioSourceRef.current.connect(audioCtxRef.current.destination);
+      }
+      audioDestRef.current?.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
     } catch {
-      // Audio capture fallback
+      // Video tetap dirender walau tanpa audio stream
     }
 
-    let mimeType = 'video/webm;codecs=vp9';
+    let mimeType = 'video/mp4';
+    let outFormat = 'mp4';
     if (!MediaRecorder.isTypeSupported(mimeType)) {
-      mimeType = 'video/webm';
+      mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+        ? 'video/webm;codecs=vp8'
+        : 'video/webm';
+      outFormat = 'webm';
     }
 
-    const recorder = new MediaRecorder(combinedStream, { mimeType });
+    const recorder = new MediaRecorder(stream, { mimeType });
     const chunks = [];
 
     recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
+      if (e.data && e.data.size > 0) chunks.push(e.data);
     };
 
     recorder.onstop = () => {
-      const blob = new Blob(chunks, { type: 'video/mp4' });
-      const downloadUrl = URL.createObjectURL(blob);
-      setExportedUrl(downloadUrl);
+      const blob = new Blob(chunks, { type: mimeType });
+      setExportedFormat(outFormat);
+      setExportedBlob(blob);
       setIsExporting(false);
       setExportProgress(100);
+      onShowToast?.(`Render selesai (${(blob.size / (1024 * 1024)).toFixed(2)} MB). Klik Simpan Berkas Video.`, 'success');
     };
 
-    // Mulai render dari awal video
     video.currentTime = 0;
     video.playbackRate = playbackSpeed;
     video.muted = isMuted;
 
-    recorder.start();
+    recorder.start(100);
     await video.play();
     setIsPlaying(true);
 
@@ -200,6 +233,28 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
     requestAnimationFrame(drawFrame);
   };
 
+  const handleDownloadExportedVideo = () => {
+    if (!exportedBlob) return;
+    const baseName = fileName.replace(/\.[^/.]+$/, '');
+    const outFilename = `kuro_enhanced_${baseName}.${exportedFormat}`;
+    try {
+      const dlRes = downloadBlob(exportedBlob, outFilename);
+      addGalleryItem({
+        title: `Video Studio: ${baseName}`,
+        type: 'video',
+        category: 'Video Studio',
+        extension: exportedFormat.toUpperCase(),
+        size: `${Math.max(0.1, (exportedBlob.size / (1024 * 1024))).toFixed(2)} MB`,
+        previewUrl: null,
+        downloadData: null,
+        filename: dlRes.filename
+      });
+      onShowToast?.(`Video disimpan: ${dlRes.filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh video.', 'error');
+    }
+  };
+
   const cssFilter = `blur(${blur}px) contrast(${contrast}%) brightness(${brightness}%) saturate(${saturation}%) sepia(${sepia}%)`;
 
   return (
@@ -213,7 +268,8 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
             onClick={onOpenTrimmer}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white hover:bg-neutral-100 border-2 border-black text-black font-bold text-xs shadow-[2px_2px_0px_#000000] transition-all cursor-pointer min-h-[44px]"
           >
-            <span>✂️ Buka Video Trimmer</span>
+            <Scissors className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span>Buka Video Trimmer</span>
           </button>
         )}
       </div>
@@ -521,15 +577,15 @@ export default function VideoStudioScreen({ onBack, onOpenTrimmer }) {
               )}
 
               {/* Tombol Unduh Hasil Render */}
-              {exportedUrl && (
-                <a
-                  href={exportedUrl}
-                  download={`kuro_enhanced_${fileName.replace(/\.[^/.]+$/, '')}.mp4`}
+              {exportedBlob && (
+                <button
+                  type="button"
+                  onClick={handleDownloadExportedVideo}
                   className="w-full min-h-[44px] py-3 rounded-lg border-2 border-black bg-white hover:bg-neutral-100 text-black font-extrabold text-xs sm:text-sm shadow-[2px_2px_0px_#000000] flex items-center justify-center gap-2 cursor-pointer transition-all animate-fadeIn"
                 >
                   <Download className="w-4 h-4 stroke-[2.5]" />
-                  <span>Simpan Berkas Video</span>
-                </a>
+                  <span>Simpan Berkas Video (.{exportedFormat.toUpperCase()})</span>
+                </button>
               )}
             </div>
 

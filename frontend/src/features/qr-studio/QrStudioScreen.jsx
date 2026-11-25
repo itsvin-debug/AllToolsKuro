@@ -3,6 +3,8 @@ import QRCode from 'qrcode';
 import jsQR from 'jsqr';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob, downloadBase64 } from '../../shared/utils/fileDownload';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { 
   QrCode, 
   ArrowLeft, 
@@ -33,7 +35,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 
-export default function QrStudioScreen({ onBack, initialUrl = '' }) {
+export default function QrStudioScreen({ onBack, initialUrl = '', onShowToast }) {
   // Konten data QR
   const [text, setText] = useState(initialUrl || '');
 
@@ -265,39 +267,47 @@ export default function QrStudioScreen({ onBack, initialUrl = '' }) {
   };
 
   // Salin Link QR
-  const handleCopyLink = () => {
-    if (navigator.clipboard && text) {
-      navigator.clipboard.writeText(text);
+  const handleCopyLink = async () => {
+    if (!text) return;
+    const res = await copyTextToClipboard(text);
+    if (res.success) {
       setCopied(true);
+      onShowToast?.('Teks / tautan QR disalin ke clipboard!', 'success');
       setTimeout(() => setCopied(false), 2000);
+    } else {
+      onShowToast?.(res.message || 'Gagal menyalin tautan QR.', 'error');
     }
   };
 
   // Unduh Canvas sebagai PNG Beresolusi Tinggi & Simpan ke Galeri Perangkat
-  const handleDownload = () => {
+  const handleDownload = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const dataUrl = canvas.toDataURL('image/png', 1.0);
     const filename = `kuro_custom_qr_${Date.now()}.png`;
 
-    const link = document.createElement('a');
-    link.download = filename;
-    link.href = dataUrl;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1.0));
+      if (blob && blob.size > 0) {
+        downloadBlob(blob, filename);
+      } else {
+        await downloadBase64(dataUrl, filename, 'image/png');
+      }
 
-    // Otomatis simpan ke galeri perangkat
-    addGalleryItem({
-      title: `QR Code: ${text.trim().slice(0, 26) || 'Kuro Custom QR'}`,
-      type: 'image',
-      category: 'QR Studio',
-      extension: 'PNG',
-      size: '220 KB',
-      previewUrl: dataUrl,
-      downloadData: dataUrl,
-      filename
-    });
+      addGalleryItem({
+        title: `QR Code: ${text.trim().slice(0, 26) || 'Kuro Custom QR'}`,
+        type: 'image',
+        category: 'QR Studio',
+        extension: 'PNG',
+        size: `${Math.max(1, Math.round(dataUrl.length * 0.75 / 1024))} KB`,
+        previewUrl: dataUrl,
+        downloadData: dataUrl,
+        filename
+      });
+      onShowToast?.(`QR Code berhasil diunduh: ${filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh QR Code.', 'error');
+    }
   };
 
   // =========================================================================

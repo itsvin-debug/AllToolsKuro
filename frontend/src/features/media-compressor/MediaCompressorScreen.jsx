@@ -5,6 +5,7 @@ import BeforeAfterSlider from './BeforeAfterSlider';
 import { enhanceImageToSuperHd } from './imageEnhancer';
 import { compressPdfDocument, PDF_PRESETS } from './pdfCompressor';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob, downloadBase64, downloadFromUrl } from '../../shared/utils/fileDownload';
 import { 
   Sparkles, 
   Upload, 
@@ -26,7 +27,7 @@ import {
   Layers
 } from 'lucide-react';
 
-export default function MediaCompressorScreen({ onBack }) {
+export default function MediaCompressorScreen({ onBack, onShowToast }) {
   const [activeTab, setActiveTab] = useState('image'); // 'image' | 'video' | 'pdf'
 
   // State Foto Super HD
@@ -174,17 +175,18 @@ export default function MediaCompressorScreen({ onBack }) {
     }
   };
 
-  const downloadEnhancedImage = () => {
+  const downloadEnhancedImage = async () => {
     if (!imgEnhancedDataUrl) return;
-    const link = document.createElement('a');
     let ext = 'jpg';
     if (targetFormat === 'image/webp') ext = 'webp';
     else if (targetFormat === 'image/png') ext = 'png';
-    link.download = `kuro_super_hd_${imgEnhancedDimensions.w}x${imgEnhancedDimensions.h}_${Date.now()}.${ext}`;
-    link.href = imgEnhancedDataUrl;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const filename = `kuro_super_hd_${imgEnhancedDimensions.w}x${imgEnhancedDimensions.h}_${Date.now()}.${ext}`;
+    try {
+      await downloadBase64(imgEnhancedDataUrl, filename, targetFormat);
+      onShowToast?.(`Foto Super HD diunduh: ${filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh foto.', 'error');
+    }
   };
 
   // Logika Video Status WA
@@ -361,8 +363,17 @@ export default function MediaCompressorScreen({ onBack }) {
 
       setPdfResult(compressionResult);
 
-      // Simpan riwayat ke Galeri Karya
+      // Simpan riwayat ke Galeri Karya (simpan Data URL jika <= 2 MB agar tetap bisa diunduh setelah reload)
       try {
+        let galleryPdfData = null;
+        if (compressionResult.blob && compressionResult.blob.size <= 2 * 1024 * 1024) {
+          galleryPdfData = await new Promise((resolve) => {
+            const r = new FileReader();
+            r.onload = () => resolve(typeof r.result === 'string' ? r.result : null);
+            r.onerror = () => resolve(null);
+            r.readAsDataURL(compressionResult.blob);
+          });
+        }
         addGalleryItem({
           title: `Kompres PDF: ${pdfFile.name.replace(/\.[^/.]+$/, '')}`,
           type: 'document',
@@ -370,8 +381,8 @@ export default function MediaCompressorScreen({ onBack }) {
           extension: 'PDF',
           size: `${formatBytes(compressionResult.compressedSizeBytes)} (${compressionResult.savingsPercent} Hemat)`,
           thumbnail: '',
-          previewUrl: compressionResult.dataUrl,
-          downloadData: compressionResult.dataUrl,
+          previewUrl: galleryPdfData || compressionResult.dataUrl,
+          downloadData: galleryPdfData,
           filename: `kuro_${pdfFile.name.replace(/\.pdf$/i, '')}_terkompres.pdf`
         });
       } catch (errGal) {
@@ -388,15 +399,33 @@ export default function MediaCompressorScreen({ onBack }) {
     }
   };
 
-  const downloadCompressedPdf = () => {
-    if (!pdfResult?.dataUrl) return;
-    const link = document.createElement('a');
+  const downloadCompressedPdf = async () => {
+    if (!pdfResult) return;
     const safeBaseName = pdfFile ? pdfFile.name.replace(/\.pdf$/i, '') : 'dokumen';
-    link.download = `kuro_${safeBaseName}_terkompres.pdf`;
-    link.href = pdfResult.dataUrl;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const filename = `kuro_${safeBaseName}_terkompres.pdf`;
+    try {
+      if (pdfResult.blob instanceof Blob && pdfResult.blob.size > 0) {
+        downloadBlob(pdfResult.blob, filename);
+      } else if (pdfResult.dataUrl) {
+        await downloadFromUrl(pdfResult.dataUrl, filename);
+      } else {
+        throw new Error('Berkas PDF hasil kompresi tidak tersedia.');
+      }
+      onShowToast?.(`PDF terkompresi diunduh: ${filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh PDF.', 'error');
+    }
+  };
+
+  const downloadCompressedVideo = async () => {
+    if (!videoResult?.url) return;
+    const filename = videoResult.fileName || `kuro_video_hd_${Date.now()}.mp4`;
+    try {
+      await downloadFromUrl(videoResult.url, filename);
+      onShowToast?.(`Video diunduh: ${filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh video.', 'error');
+    }
   };
 
   return (
@@ -840,14 +869,14 @@ export default function MediaCompressorScreen({ onBack }) {
                     Bandingkan kualitas sebelum mengunduh atau membagikan ke WhatsApp.
                   </p>
                 </div>
-                <a
-                  href={videoResult.url}
-                  download={videoResult.fileName || 'kuro_video_hd.mp4'}
+                <button
+                  type="button"
+                  onClick={downloadCompressedVideo}
                   className="px-4 py-2.5 rounded-lg bg-black hover:bg-neutral-800 text-white font-black text-xs font-mono flex items-center justify-center gap-1.5 border-2 border-black shadow-[2px_2px_0px_#000000] cursor-pointer min-h-[44px]"
                 >
                   <Download className="w-3.5 h-3.5 stroke-[2.5]" />
                   <span>Unduh Video ({videoResult.sizeFormatted || 'HD'})</span>
-                </a>
+                </button>
               </div>
 
               {/* Metrik Perbandingan Ukuran Video */}

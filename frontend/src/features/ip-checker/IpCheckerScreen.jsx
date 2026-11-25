@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { 
   Globe, 
   Wifi, 
@@ -83,22 +84,22 @@ export default function IpCheckerScreen({ onBack, onShowToast, lang = 'id' }) {
   // Salin hanya alamat IP utama
   const handleCopyIp = async () => {
     if (!data?.ip) return;
-    try {
-      await navigator.clipboard.writeText(data.ip);
+    const res = await copyTextToClipboard(data.ip);
+    if (res.success) {
       setCopiedIp(true);
       onShowToast?.(isEn ? 'IP Address copied to clipboard!' : 'Alamat IP berhasil disalin ke papan klip!');
       setTimeout(() => setCopiedIp(false), 2000);
-    } catch {}
+    }
   };
 
   // Salin IP DNS publik
   const handleCopyDns = async (dnsIp) => {
-    try {
-      await navigator.clipboard.writeText(dnsIp);
+    const res = await copyTextToClipboard(dnsIp);
+    if (res.success) {
       setCopiedDns(dnsIp);
       onShowToast?.(isEn ? `DNS ${dnsIp} copied!` : `IP DNS ${dnsIp} berhasil disalin!`);
       setTimeout(() => setCopiedDns(null), 2000);
-    } catch {}
+    }
   };
 
   // Salin seluruh laporan telemetri jaringan
@@ -122,12 +123,12 @@ export default function IpCheckerScreen({ onBack, onShowToast, lang = 'id' }) {
       `=====================================`
     ].join('\n');
 
-    try {
-      await navigator.clipboard.writeText(report);
+    const res = await copyTextToClipboard(report);
+    if (res.success) {
       setCopiedAll(true);
       onShowToast?.(isEn ? 'Full network report copied to clipboard!' : 'Seluruh detail telemetri berhasil disalin!');
       setTimeout(() => setCopiedAll(false), 2500);
-    } catch {}
+    }
   };
 
   return (

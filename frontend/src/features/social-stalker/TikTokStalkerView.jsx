@@ -25,6 +25,8 @@ import {
   Download
 } from 'lucide-react';
 import { translations } from '../../shared/utils/translations';
+import { readClipboardText, copyTextToClipboard } from '../../shared/utils/clipboard';
+import { downloadFromUrl } from '../../shared/utils/fileDownload';
 
 function extractCleanHandle(raw) {
   if (!raw || typeof raw !== 'string') return '';
@@ -489,26 +491,26 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
   };
 
   const handlePaste = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setInputVal(text.trim());
-        onShowToast?.(isEn ? 'Link pasted!' : 'Tautan berhasil ditempel!', 'info');
-      }
-    } catch {
-      onShowToast?.(isEn ? 'Failed to read clipboard.' : 'Gagal membaca papan klip.', 'warning');
+    const res = await readClipboardText();
+    if (res.success && res.text) {
+      setInputVal(res.text);
+      onShowToast?.(isEn ? 'Link pasted!' : 'Tautan berhasil ditempel!', 'info');
+    } else {
+      onShowToast?.(res.message || (isEn ? 'Failed to read clipboard.' : 'Gagal membaca papan klip.'), 'warning');
     }
   };
 
-  const handleCopyProfileUrl = () => {
+  const handleCopyProfileUrl = async () => {
     if (!profileData?.profileUrl) return;
-    navigator.clipboard.writeText(profileData.profileUrl);
-    setCopiedLink(true);
-    onShowToast?.(t.copiedSuccess, 'success');
-    setTimeout(() => setCopiedLink(false), 2000);
+    const res = await copyTextToClipboard(profileData.profileUrl);
+    if (res.success) {
+      setCopiedLink(true);
+      onShowToast?.(t.copiedSuccess, 'success');
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
   };
 
-  const handleCopyAllIntel = () => {
+  const handleCopyAllIntel = async () => {
     if (!profileData) return;
     const stats = profileData.stats || {};
     const text = [
@@ -524,10 +526,29 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
       `Tautan: ${profileData.profileUrl}`
     ].join('\n');
 
-    navigator.clipboard.writeText(text);
-    setCopiedIntel(true);
-    onShowToast?.(isEn ? 'Full report copied to clipboard!' : 'Laporan lengkap disalin ke papan klip!', 'success');
-    setTimeout(() => setCopiedIntel(false), 2000);
+    const res = await copyTextToClipboard(text);
+    if (res.success) {
+      setCopiedIntel(true);
+      onShowToast?.(isEn ? 'Full report copied to clipboard!' : 'Laporan lengkap disalin ke papan klip!', 'success');
+      setTimeout(() => setCopiedIntel(false), 2000);
+    }
+  };
+
+  const handleDownloadAvatar = async () => {
+    if (!profileData?.avatar) return;
+    const filename = `tiktok_${profileData.username || 'user'}_avatar.jpg`;
+    const targetUrl = profileData.avatar.startsWith('http')
+      ? `/api/proxy-download?url=${encodeURIComponent(profileData.avatar)}&filename=${encodeURIComponent(filename)}`
+      : profileData.avatar;
+    try {
+      await downloadFromUrl(targetUrl, filename);
+      onShowToast?.(isEn ? `Avatar downloaded: ${filename}` : `Foto profil diunduh: ${filename}`, 'success');
+    } catch {
+      const wsrvUrl = profileData.avatar.startsWith('http')
+        ? `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&output=jpg`
+        : profileData.avatar;
+      downloadFromUrl(wsrvUrl, filename).catch(() => {});
+    }
   };
 
   const scanStatusMessages = [
@@ -926,16 +947,14 @@ export default function TikTokStalkerView({ onBack, onChangePlatform, onShowToas
                 </button>
 
                 {profileData.avatar && (
-                  <a
-                    href={profileData.avatar.startsWith('http') ? `https://wsrv.nl/?url=${encodeURIComponent(profileData.avatar)}&output=jpg` : profileData.avatar}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    download={`tiktok_${profileData.username}_avatar.jpg`}
-                    className="flex-1 sm:flex-none px-4 py-2.5 bg-white hover:bg-neutral-50 text-black font-black text-xs md:text-sm border-2 border-black rounded-xl shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  <button
+                    type="button"
+                    onClick={handleDownloadAvatar}
+                    className="flex-1 sm:flex-none min-h-[44px] px-4 py-2.5 bg-white hover:bg-neutral-50 text-black font-black text-xs md:text-sm border-2 border-black rounded-xl shadow-[2px_2px_0px_#000000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Download className="w-4 h-4" />
                     <span>{isEn ? 'Download HD Avatar' : 'Unduh Foto Profil HD'}</span>
-                  </a>
+                  </button>
                 )}
 
                 <button

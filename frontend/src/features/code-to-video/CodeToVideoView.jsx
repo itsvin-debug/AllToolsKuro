@@ -62,6 +62,8 @@ import {
   parseKuroStudioProjectJson
 } from './projectExporter';
 import StudioCustomPanel from './StudioCustomPanel';
+import { downloadBlob, downloadText, downloadFromUrl } from '../../shared/utils/fileDownload';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 
 function formatSecondsToMmSs(sec = 0) {
   const safe = Math.max(0, Math.round(Number(sec) || 0));
@@ -562,13 +564,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
   // Salin Kode
   const handleCopyCode = async () => {
-    try {
-      await navigator.clipboard.writeText(getActiveSourceCode());
+    const res = await copyTextToClipboard(getActiveSourceCode());
+    if (res.success) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       onShowToast?.('Kode berhasil disalin.', 'success');
-    } catch {
-      onShowToast?.('Gagal menyalin kode.', 'error');
+    } else {
+      onShowToast?.(res.message || 'Gagal menyalin kode.', 'error');
     }
   };
 
@@ -605,14 +607,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         : category === 'glsl-shader'
         ? 'glsl'
         : 'html';
-    const blob = new Blob([activeCode], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `kuro_studio_${selectedTemplateId}.${ext}`;
-    a.click();
-    URL.revokeObjectURL(url);
-    onShowToast?.(`Berkas kuro_studio_${selectedTemplateId}.${ext} diunduh.`, 'success');
+    try {
+      const dl = downloadText(activeCode, `kuro_studio_${selectedTemplateId}.${ext}`, 'text/plain;charset=utf-8');
+      onShowToast?.(`Berkas ${dl.filename} diunduh.`, 'success');
+    } catch (err) {
+      onShowToast?.(err.message || 'Gagal mengunduh kode.', 'error');
+    }
   };
 
   // Impor File Kode atau Cadangan Proyek Studio (.kurovid.json)
@@ -793,11 +793,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       setRenderResult(result);
       onShowToast?.(`Video ${result.format.toUpperCase()} berhasil dirender (${result.sizeMB} MB)!`, 'success');
 
-      if (autoDownload && result.url) {
-        const a = document.createElement('a');
-        a.href = result.url;
-        a.download = `KuroStudio_${result.width}x${result.height}_${Date.now()}.${result.format}`;
-        a.click();
+      if (autoDownload) {
+        const videoFileName = `KuroStudio_${result.width}x${result.height}_${Date.now()}.${result.format}`;
+        if (result.blob instanceof Blob && result.blob.size > 0) {
+          downloadBlob(result.blob, videoFileName);
+        } else if (result.url) {
+          downloadFromUrl(result.url, videoFileName).catch(() => {});
+        }
       }
     } catch (err) {
       if (abortController.signal.aborted) {
@@ -817,22 +819,25 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (abortControllerRef.current) abortControllerRef.current.abort();
   };
 
-  const handleDownloadVideo = () => {
-    if (!renderResult?.url) return;
-    const a = document.createElement('a');
-    a.href = renderResult.url;
-    a.download = `KuroStudio_${renderResult.width}x${renderResult.height}_${Date.now()}.${renderResult.format}`;
-    a.click();
-    onShowToast?.('Mengunduh video...', 'success');
+  const handleDownloadVideo = async () => {
+    if (!renderResult) return;
+    const videoFileName = `KuroStudio_${renderResult.width}x${renderResult.height}_${Date.now()}.${renderResult.format}`;
+    try {
+      if (renderResult.blob instanceof Blob && renderResult.blob.size > 0) {
+        downloadBlob(renderResult.blob, videoFileName);
+      } else if (renderResult.url) {
+        await downloadFromUrl(renderResult.url, videoFileName);
+      } else {
+        throw new Error('Berkas hasil render tidak tersedia.');
+      }
+      onShowToast?.('Mengunduh video...', 'success');
+    } catch (err) {
+      onShowToast?.(err.message || 'Gagal mengunduh video.', 'error');
+    }
   };
 
   const triggerBlobDownload = (blob, filename) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1200);
+    downloadBlob(blob, filename);
   };
 
   const activeSceneTitle = useMemo(() => {

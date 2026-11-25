@@ -17,8 +17,9 @@ import {
   Check
 } from 'lucide-react';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob, downloadBase64 } from '../../shared/utils/fileDownload';
 
-export default function PhotoStudioScreen({ onBack }) {
+export default function PhotoStudioScreen({ onBack, onShowToast }) {
   const [imageSrc, setImageSrc] = useState(null);
   const [fileName, setFileName] = useState('photo.png');
   
@@ -199,14 +200,13 @@ export default function PhotoStudioScreen({ onBack }) {
 
   }, [imageSrc, blur, sharpen, brightness, contrast, saturation, warmth, grayscale, sepia, vignette, invert, isComparing]);
 
-  // Ekspor & Download Foto HD
-  const handleDownload = () => {
+  // Ekspor & Download Foto HD via Blob agar file besar tidak gagal di Chrome/Android
+  const handleDownload = async () => {
     if (!canvasRef.current) return;
 
     const sourceCanvas = canvasRef.current;
     let exportCanvas = sourceCanvas;
 
-    // Jika user memilih Super Resolution Upscale (2x atau 4x)
     if (upscaleFactor > 1) {
       const scaledCanvas = document.createElement('canvas');
       scaledCanvas.width = sourceCanvas.width * upscaleFactor;
@@ -219,27 +219,34 @@ export default function PhotoStudioScreen({ onBack }) {
     }
 
     const dataUrl = exportCanvas.toDataURL('image/png', 1.0);
-    const link = document.createElement('a');
     const safeName = fileName.replace(/\.[^/.]+$/, '');
     const outFilename = `${safeName}_HD_${upscaleFactor}x.png`;
-    link.download = outFilename;
-    link.href = dataUrl;
-    link.click();
 
-    // Simpan otomatis ke galeri perangkat
-    addGalleryItem({
-      title: `${safeName} HD (${upscaleFactor}x)`,
-      type: 'image',
-      category: 'Photo Studio',
-      extension: 'PNG',
-      size: `${Math.max(1, Math.round(dataUrl.length * 0.75 / 1024))} KB`,
-      previewUrl: dataUrl,
-      downloadData: dataUrl,
-      filename: outFilename
-    });
+    try {
+      const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, 'image/png', 1.0));
+      if (blob && blob.size > 0) {
+        downloadBlob(blob, outFilename);
+      } else {
+        await downloadBase64(dataUrl, outFilename, 'image/png');
+      }
 
-    setDownloadSuccess(true);
-    setTimeout(() => setDownloadSuccess(false), 2500);
+      addGalleryItem({
+        title: `${safeName} HD (${upscaleFactor}x)`,
+        type: 'image',
+        category: 'Photo Studio',
+        extension: 'PNG',
+        size: `${Math.max(1, Math.round(dataUrl.length * 0.75 / 1024))} KB`,
+        previewUrl: dataUrl,
+        downloadData: dataUrl,
+        filename: outFilename
+      });
+
+      setDownloadSuccess(true);
+      setTimeout(() => setDownloadSuccess(false), 2500);
+      onShowToast?.(`Foto HD diunduh: ${outFilename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh foto HD.', 'error');
+    }
   };
 
   return (

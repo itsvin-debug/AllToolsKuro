@@ -3,7 +3,8 @@ import axios from 'axios';
 import jsPDF from 'jspdf';
 import PptxGenJS from 'pptxgenjs';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
-import { readClipboardText } from '../../shared/utils/clipboard';
+import { readClipboardText, copyTextToClipboard } from '../../shared/utils/clipboard';
+import { downloadBlob } from '../../shared/utils/fileDownload';
 import { 
   FileText, 
   Presentation, 
@@ -89,7 +90,7 @@ const DOCUMENT_THEMES = {
   }
 };
 
-export default function LinkToDocScreen({ onBack }) {
+export default function LinkToDocScreen({ onBack, onShowToast }) {
   const [url, setUrl] = useState('');
   const [docData, setDocData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -157,12 +158,14 @@ export default function LinkToDocScreen({ onBack }) {
   const handleCopyFullText = async () => {
     if (!docData) return;
     const textToCopy = docData.fullContent || docData.pages?.map(p => `## ${p.title}\n\n${p.text}`).join('\n\n---\n\n') || '';
-    try {
-      await navigator.clipboard.writeText(textToCopy);
+    const res = await copyTextToClipboard(textToCopy);
+    if (res.success) {
       setCopied(true);
+      onShowToast?.('Seluruh teks dokumen disalin ke clipboard!', 'success');
       setTimeout(() => setCopied(false), 2500);
-    } catch {
-      setErrorMessage('Gagal menyalin ke clipboard.');
+    } else {
+      setErrorMessage(res.message || 'Gagal menyalin ke clipboard.');
+      onShowToast?.('Gagal menyalin ke clipboard.', 'error');
     }
   };
 
@@ -323,7 +326,8 @@ export default function LinkToDocScreen({ onBack }) {
         }
 
         const safeName = title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-        doc.save(`${safeName}.pdf`);
+        const dlRes = downloadBlob(doc.output('blob'), `${safeName}.pdf`);
+        onShowToast?.(`PDF berhasil diunduh: ${dlRes.filename}`, 'success');
         return;
       }
 
@@ -614,7 +618,8 @@ export default function LinkToDocScreen({ onBack }) {
       }
 
       const safeName = title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-      doc.save(`${safeName}.pdf`);
+      const dlRes = downloadBlob(doc.output('blob'), `${safeName}.pdf`);
+      onShowToast?.(`PDF berhasil diunduh: ${dlRes.filename}`, 'success');
     } catch (err) {
       console.error('PDF Generation Error:', err);
       setErrorMessage('Gagal membuat PDF: ' + err.message);
@@ -679,7 +684,9 @@ export default function LinkToDocScreen({ onBack }) {
         }
 
         const safeName = title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-        await pptx.writeFile({ fileName: `${safeName}.pptx` });
+        const pptBlob = await pptx.write({ outputType: 'blob' });
+        const dlRes = downloadBlob(pptBlob, `${safeName}.pptx`);
+        onShowToast?.(`Presentasi PPTX diunduh: ${dlRes.filename}`, 'success');
         return;
       }
 
@@ -793,7 +800,9 @@ export default function LinkToDocScreen({ onBack }) {
       });
 
       const safeName = title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-      await pptx.writeFile({ fileName: `${safeName}.pptx` });
+      const pptBlob = await pptx.write({ outputType: 'blob' });
+      const dlRes = downloadBlob(pptBlob, `${safeName}.pptx`);
+      onShowToast?.(`Presentasi PPTX diunduh: ${dlRes.filename}`, 'success');
     } catch (err) {
       console.error('PPTX Generation Error:', err);
       setErrorMessage('Gagal membuat PPTX: ' + err.message);

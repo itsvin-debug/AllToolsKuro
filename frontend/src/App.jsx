@@ -215,6 +215,7 @@ export default function App() {
           {currentScreen === 'pngToPdf' && (
             <PngToPdfScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -222,6 +223,7 @@ export default function App() {
           {currentScreen === 'linkToDoc' && (
             <LinkToDocScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -233,6 +235,7 @@ export default function App() {
                 setQrInitialUrl(url);
                 handleNavigate('qrStudio');
               }}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -240,6 +243,7 @@ export default function App() {
           {currentScreen === 'compressor' && (
             <MediaCompressorScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -248,6 +252,7 @@ export default function App() {
             <QrStudioScreen
               initialUrl={qrInitialUrl}
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -255,6 +260,7 @@ export default function App() {
           {currentScreen === 'audioMerger' && (
             <AudioMergerScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -262,6 +268,7 @@ export default function App() {
           {currentScreen === 'photoStudio' && (
             <PhotoStudioScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -270,6 +277,7 @@ export default function App() {
             <VideoStudioScreen
               onBack={() => handleNavigate('welcome')}
               onOpenTrimmer={() => handleNavigate('videoTrimmer')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -277,6 +285,7 @@ export default function App() {
           {currentScreen === 'videoTrimmer' && (
             <VideoTrimmerScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}
@@ -284,6 +293,7 @@ export default function App() {
           {currentScreen === 'bgRemover' && (
             <BgRemoverScreen
               onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
               lang={settings.language || 'id'}
             />
           )}

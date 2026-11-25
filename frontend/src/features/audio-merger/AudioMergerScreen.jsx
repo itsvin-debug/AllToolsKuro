@@ -26,8 +26,104 @@ import {
 } from 'lucide-react';
 import { addGalleryItem } from '../../shared/utils/storageService';
 import { translations } from '../../shared/utils/translations';
+import { downloadBlob, downloadFromUrl } from '../../shared/utils/fileDownload';
 
-export default function AudioMergerScreen({ onBack, lang = 'id' }) {
+function encodeWavFromAudioBuffers(segments, sampleRate = 44100) {
+  const channels = 2;
+  const totalSamples = segments.reduce((sum, s) => sum + s.length, 0);
+  const dataByteLen = totalSamples * channels * 2;
+  const buffer = new ArrayBuffer(44 + dataByteLen);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataByteLen, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * channels * 2, true);
+  view.setUint16(32, channels * 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataByteLen, true);
+
+  let writeOffset = 44;
+  for (const seg of segments) {
+    const ch0 = seg.ch0;
+    const ch1 = seg.ch1 || seg.ch0;
+    for (let i = 0; i < seg.length; i++) {
+      const sL = Math.max(-1, Math.min(1, ch0[i] * seg.volume));
+      const sR = Math.max(-1, Math.min(1, ch1[i] * seg.volume));
+      view.setInt16(writeOffset, sL < 0 ? sL * 0x8000 : sL * 0x7fff, true);
+      view.setInt16(writeOffset + 2, sR < 0 ? sR * 0x8000 : sR * 0x7fff, true);
+      writeOffset += 4;
+    }
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+async function mergeAudioTracksClientSide(tracks) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) {
+    throw new Error('Peramban tidak mendukung WebAudio API.');
+  }
+
+  const audioCtx = new AudioCtx();
+  const targetRate = audioCtx.sampleRate || 44100;
+  const segments = [];
+
+  try {
+    for (const track of tracks) {
+      const res = await fetch(track.dataUrl);
+      const arrBuf = await res.arrayBuffer();
+      const decoded = await audioCtx.decodeAudioData(arrBuf);
+      const startSec = Math.max(0, Number(track.startMin) * 60 + Number(track.startSec));
+      const endSecRaw = Number(track.endMin) * 60 + Number(track.endSec);
+      const endSec = Math.min(decoded.duration, Math.max(startSec + 0.1, endSecRaw || decoded.duration));
+
+      const startIdx = Math.floor(startSec * decoded.sampleRate);
+      const endIdx = Math.min(decoded.length, Math.floor(endSec * decoded.sampleRate));
+      const len = Math.max(0, endIdx - startIdx);
+      if (len === 0) continue;
+
+      const ch0 = decoded.getChannelData(0).subarray(startIdx, endIdx);
+      const ch1 = decoded.numberOfChannels > 1 ? decoded.getChannelData(1).subarray(startIdx, endIdx) : ch0;
+
+      segments.push({
+        ch0,
+        ch1,
+        length: len,
+        volume: Number.isFinite(track.volume) ? track.volume : 1.0
+      });
+    }
+
+    if (segments.length === 0) {
+      throw new Error('Durasi potongan audio tidak valid untuk digabungkan.');
+    }
+
+    const wavBlob = encodeWavFromAudioBuffers(segments, targetRate);
+    const url = URL.createObjectURL(wavBlob);
+    const sizeMB = (wavBlob.size / (1024 * 1024)).toFixed(2);
+    return {
+      blob: wavBlob,
+      url,
+      fileName: `kuro_merged_audio_${Date.now()}.wav`,
+      sizeFormatted: wavBlob.size > 1024 * 1024 ? `${sizeMB} MB` : `${Math.max(1, Math.round(wavBlob.size / 1024))} KB`,
+      isVideo: false
+    };
+  } finally {
+    try { await audioCtx.close(); } catch {}
+  }
+}
+
+export default function AudioMergerScreen({ onBack, onShowToast, lang = 'id' }) {
   const isEn = lang === 'en';
   const t = translations[lang] || translations.id;
   const am = t.audioMerger || translations.id.audioMerger;
@@ -199,7 +295,7 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
     }
   };
 
-  // Eksekusi penggabungan via FFmpeg
+  // Eksekusi penggabungan via FFmpeg Backend dengan fallback WebAudio WAV Client-Side
   const handleMerge = async () => {
     if (tracks.length === 0) {
       setErrorMessage(isEn ? 'Please add at least 1 audio or video track.' : 'Harap tambahkan minimal 1 track audio atau video.');
@@ -209,6 +305,8 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
     setMerging(true);
     setErrorMessage('');
     setMergeResult(null);
+
+    let resultData = null;
 
     try {
       const payloadTracks = tracks.map((t) => {
@@ -224,43 +322,67 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
         };
       });
 
-      const res = await axios.post('/api/merge-audio', {
-        tracks: payloadTracks
-      }, {
-        timeout: 120000
-      });
+      try {
+        const res = await axios.post('/api/merge-audio', {
+          tracks: payloadTracks
+        }, {
+          timeout: 60000
+        });
 
-      if (res.data && res.data.success) {
-        const resultData = res.data.data;
+        if (res.data && res.data.success && res.data.data) {
+          resultData = res.data.data;
+        }
+      } catch {
+        // Backend Express FFmpeg tidak aktif (mode serverless Vercel / offline) -> pakai WebAudio browser fallback
+        resultData = await mergeAudioTracksClientSide(tracks);
+      }
+
+      if (resultData) {
         setMergeResult(resultData);
 
-        // Simpan otomatis ke galeri perangkat
         addGalleryItem({
-          title: resultData.isVideo 
-            ? `Merged Video Studio (${tracks.length} Tracks)` 
+          title: resultData.isVideo
+            ? `Merged Video Studio (${tracks.length} Tracks)`
             : `Merged Audio Master (${tracks.length} Tracks)`,
           type: resultData.isVideo ? 'video' : 'audio',
           category: 'Audio & Video Merger',
-          extension: resultData.isVideo ? 'MP4' : 'MP3',
+          extension: resultData.isVideo ? 'MP4' : (resultData.fileName?.endsWith('.wav') ? 'WAV' : 'MP3'),
           size: resultData.sizeFormatted || '2 MB',
-          previewUrl: resultData.url,
-          downloadData: resultData.url,
-          filename: resultData.fileName || (resultData.isVideo ? 'kuro_merged_video.mp4' : 'kuro_merged_audio.mp3')
+          previewUrl: resultData.blob ? null : resultData.url,
+          downloadData: resultData.blob ? null : resultData.url,
+          filename: resultData.fileName || (resultData.isVideo ? 'kuro_merged_video.mp4' : 'kuro_merged_audio.wav')
         });
 
-        // Scroll halus ke area hasil output
+        onShowToast?.(isEn ? 'Audio tracks merged successfully!' : 'Penggabungan track berhasil!', 'success');
+
         setTimeout(() => {
           const el = document.getElementById('merge-output-preview');
           if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }, 150);
-
       } else {
-        setErrorMessage(res.data?.message || (isEn ? 'Failed to merge tracks.' : 'Gagal menggabungkan media.'));
+        setErrorMessage(isEn ? 'Failed to merge tracks.' : 'Gagal menggabungkan media.');
       }
     } catch (err) {
       setErrorMessage(err.response?.data?.message || err.message || (isEn ? 'An error occurred during media merge.' : 'Terjadi kesalahan saat memproses penggabungan.'));
     } finally {
       setMerging(false);
+    }
+  };
+
+  const handleDownloadMerged = async () => {
+    if (!mergeResult) return;
+    const filename = mergeResult.fileName || (mergeResult.isVideo ? 'kuro_merged_video.mp4' : 'kuro_merged_audio.wav');
+    try {
+      if (mergeResult.blob instanceof Blob && mergeResult.blob.size > 0) {
+        downloadBlob(mergeResult.blob, filename);
+      } else if (mergeResult.url) {
+        await downloadFromUrl(mergeResult.url, filename);
+      } else {
+        throw new Error(isEn ? 'Merged output file is unavailable.' : 'Berkas hasil penggabungan tidak tersedia.');
+      }
+      onShowToast?.(`${isEn ? 'Downloaded' : 'Diunduh'}: ${filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || (isEn ? 'Download failed.' : 'Gagal mengunduh berkas.'), 'error');
     }
   };
 
@@ -619,16 +741,16 @@ export default function AudioMergerScreen({ onBack, lang = 'id' }) {
                 </div>
               </div>
 
-              <a
-                href={mergeResult.url}
-                download={mergeResult.fileName}
-                className="px-5 py-2.5 rounded-lg border-2 border-black bg-black text-white hover:bg-neutral-800 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer shrink-0"
+              <button
+                type="button"
+                onClick={handleDownloadMerged}
+                className="min-h-[44px] px-5 py-2.5 rounded-lg border-2 border-black bg-black text-white hover:bg-neutral-800 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none transition-all cursor-pointer shrink-0"
               >
                 <Download className="w-4 h-4 stroke-[2.5]" />
                 <span>
                   {mergeResult.isVideo ? am.downloadVideoBtn : am.downloadAudioBtn} ({mergeResult.sizeFormatted})
                 </span>
-              </a>
+              </button>
             </div>
 
             {/* Area Pratinjau Interaktif Sesuai Format Hasil (Video / Audio) */}

@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { addGalleryItem } from '../../shared/utils/storageService';
-import { readClipboardText } from '../../shared/utils/clipboard';
+import { readClipboardText, copyTextToClipboard } from '../../shared/utils/clipboard';
+import { downloadFromUrl } from '../../shared/utils/fileDownload';
 import { 
   Flame, 
   Search, 
@@ -201,12 +202,29 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
     }
   };
 
-  const handleCopy = (text, id) => {
+  const handleCopy = async (text, id) => {
     if (!text) return;
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    if (onShowToast) onShowToast('Tautan berhasil disalin ke papan klip!');
-    setTimeout(() => setCopiedId(null), 2000);
+    const res = await copyTextToClipboard(text);
+    if (res.success) {
+      setCopiedId(id);
+      if (onShowToast) onShowToast('Tautan berhasil disalin ke papan klip!');
+      setTimeout(() => setCopiedId(null), 2000);
+    } else if (onShowToast) {
+      onShowToast(res.message || 'Gagal menyalin tautan.');
+    }
+  };
+
+  const handleDownloadPresetAsset = async (assetUrl, filename) => {
+    if (!assetUrl) return;
+    try {
+      const proxyUrl = assetUrl.startsWith('http')
+        ? `/api/proxy-download?url=${encodeURIComponent(assetUrl)}&filename=${encodeURIComponent(filename)}`
+        : assetUrl;
+      await downloadFromUrl(proxyUrl, filename);
+      onShowToast?.(`Mengunduh ${filename}...`, 'success');
+    } catch {
+      window.open(assetUrl, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const togglePlayAudio = (audioUrl) => {
@@ -566,15 +584,14 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
                 </div>
 
                 <div className="pt-2 border-t border-neutral-200 flex flex-col gap-2">
-                  <a
-                    href={gdrive.download_url || gdrive.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
+                  <button
+                    type="button"
+                    onClick={() => handleDownloadPresetAsset(gdrive.download_url || gdrive.url, `jj_preset_${Date.now()}.xml`)}
+                    className="w-full min-h-[44px] py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
                   >
                     <Download className="w-4 h-4 text-emerald-400" />
                     <span>Unduh XML Langsung</span>
-                  </a>
+                  </button>
 
                   <div className="flex items-center gap-2">
                     <a
@@ -633,16 +650,14 @@ export default function JjFinderScreen({ onBack, onShowToast }) {
                         <span>{isPlayingAudio ? 'Jeda Suara' : 'Pratinjau'}</span>
                       </button>
 
-                      <a
-                        href={audio.audio_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        download="sound_jj_kuro.mp3"
-                        className="flex-1 py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadPresetAsset(audio.audio_url, `sound_jj_kuro_${Date.now()}.mp3`)}
+                        className="flex-1 min-h-[44px] py-2.5 px-4 rounded-xl border-2 border-black bg-black text-white hover:bg-neutral-800 text-xs font-mono font-black flex items-center justify-center gap-2 shadow-[2px_2px_0px_#000000] cursor-pointer"
                       >
                         <Download className="w-4 h-4 text-emerald-400" />
                         <span>Unduh MP3</span>
-                      </a>
+                      </button>
                     </div>
                   ) : (
                     <button

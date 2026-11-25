@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import QRCode from 'qrcode';
+import { downloadBase64 } from '../../shared/utils/fileDownload';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import {
   ArrowLeft,
   ShieldCheck,
@@ -130,28 +132,9 @@ function formatWaDate(timestamp) {
 
 // Helper download file Blob untuk mobile & desktop
 function downloadBase64File(base64Data, filename = 'download', mimeType = '') {
-  try {
-    if (!base64Data) return;
-    const parts = base64Data.split(';base64,');
-    const contentType = mimeType || (parts[0] ? parts[0].replace('data:', '') : 'application/octet-stream');
-    const raw = window.atob(parts[1] || parts[0]);
-    const rawLength = raw.length;
-    const uInt8Array = new Uint8Array(rawLength);
-    for (let i = 0; i < rawLength; ++i) {
-      uInt8Array[i] = raw.charCodeAt(i);
-    }
-    const blob = new Blob([uInt8Array], { type: contentType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  } catch (err) {
+  downloadBase64(base64Data, filename, mimeType || 'application/octet-stream').catch((err) => {
     console.error('Download error:', err);
-  }
+  });
 }
 
 export default function WaViewOnceView({ onBack, onShowToast }) {
@@ -850,14 +833,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   };
 
-  const handleCopyPairingCode = () => {
+  const handleCopyPairingCode = async () => {
     if (!pairingCode) return;
-    try {
-      navigator.clipboard.writeText(pairingCode);
+    const res = await copyTextToClipboard(pairingCode);
+    if (res.success) {
       setCopiedCode(true);
       triggerToast('Kode pairing berhasil disalin!', 'success');
       setTimeout(() => setCopiedCode(false), 2500);
-    } catch (_) {
+    } else {
       triggerToast('Gagal menyalin kode.', 'error');
     }
   };
@@ -1063,14 +1046,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   };
 
   // Salin Teks ke Clipboard
-  const handleCopyText = (text, id) => {
+  const handleCopyText = async (text, id) => {
     if (!text) return;
-    try {
-      navigator.clipboard.writeText(text);
+    const res = await copyTextToClipboard(text);
+    if (res.success) {
       setCopiedItemId(id);
       triggerToast('Teks berhasil disalin!', 'success');
       setTimeout(() => setCopiedItemId(null), 2000);
-    } catch (_) {
+    } else {
       triggerToast('Gagal menyalin teks.', 'error');
     }
   };

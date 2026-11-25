@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import MediaDetailModal from '../../shared/components/MediaDetailModal';
 import { translations } from '../../shared/utils/translations';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { searchAnimeRealtime, CURATED_ANIME_DATA } from './animeService';
 import { 
   Tv, 
@@ -143,13 +144,13 @@ export default function AnimeFinderScreen({ onBack, onShowToast, lang = 'id' }) 
 
   const handleCopyTitle = async (anime) => {
     const titleText = anime.title?.english || anime.title?.romaji || 'Anime Title';
-    try {
-      await navigator.clipboard.writeText(titleText);
+    const res = await copyTextToClipboard(titleText);
+    if (res.success) {
       setCopiedId(anime.id);
       if (onShowToast) onShowToast(at.copiedTitle || 'Judul anime disalin ke papan klip!');
       setTimeout(() => setCopiedId(null), 2500);
-    } catch {
-      if (onShowToast) onShowToast('Gagal menyalin judul.');
+    } else if (onShowToast) {
+      onShowToast('Gagal menyalin judul.');
     }
   };
 

@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { jsPDF } from 'jspdf';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob } from '../../shared/utils/fileDownload';
 import { 
   Images, 
   Upload, 
@@ -45,7 +46,7 @@ import {
 } from 'lucide-react';
 import { translations } from '../../shared/utils/translations';
 
-export default function PngToPdfScreen({ onBack, lang = 'id' }) {
+export default function PngToPdfScreen({ onBack, onShowToast, lang = 'id' }) {
   const isEn = lang === 'en';
   const t = translations[lang] || translations.id;
   const pt = t.pngToPdf || translations.id.pngToPdf;
@@ -432,30 +433,31 @@ export default function PngToPdfScreen({ onBack, lang = 'id' }) {
 
       const finalFileName = `${(customName || docTitle).trim().replace(/\s+/g, '_')}.pdf`;
       const pdfBlob = doc.output('blob');
-      const blobUrl = URL.createObjectURL(pdfBlob);
+      const dlRes = downloadBlob(pdfBlob, finalFileName);
 
-      // Trigger download otomatis
-      const link = document.createElement('a');
-      link.href = blobUrl;
-      link.download = finalFileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      // Simpan Data URI aman jika <= 2 MB agar unduh ulang di Galeri tetap valid setelah halaman dimuat ulang
+      let galleryDataUri = null;
+      if (pdfBlob.size <= 2 * 1024 * 1024) {
+        try {
+          galleryDataUri = doc.output('datauristring');
+        } catch {}
+      }
 
-      // Simpan ke galeri lokal perangkat
       addGalleryItem({
         title: customName || docTitle,
         type: 'document',
         category: 'PNG to PDF',
         extension: 'PDF',
-        size: `${Math.round(pdfBlob.size / 1024)} KB`,
+        size: `${Math.max(1, Math.round(pdfBlob.size / 1024))} KB`,
         previewUrl: images[0]?.previewUrl || null,
-        downloadData: blobUrl,
-        filename: finalFileName
+        downloadData: galleryDataUri,
+        filename: dlRes.filename
       });
 
       setShowNameModal(false);
-      setDownloadSuccessToast(isEn ? `PDF exported successfully: ${finalFileName}` : `PDF berhasil diekspor: ${finalFileName}`);
+      const okMsg = isEn ? `PDF exported successfully: ${dlRes.filename}` : `PDF berhasil diekspor: ${dlRes.filename}`;
+      setDownloadSuccessToast(okMsg);
+      onShowToast?.(okMsg, 'success');
       setTimeout(() => setDownloadSuccessToast(''), 4000);
 
     } catch (err) {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { 
   Link2, 
   Upload, 
@@ -22,7 +23,7 @@ import {
   Download
 } from 'lucide-react';
 
-export default function ImageToLinkScreen({ onBack, onOpenQrStudio }) {
+export default function ImageToLinkScreen({ onBack, onOpenQrStudio, onShowToast }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [fileType, setFileType] = useState('image'); // 'image' | 'video' | 'pdf'
   const [previewUrl, setPreviewUrl] = useState('');
@@ -55,10 +56,12 @@ export default function ImageToLinkScreen({ onBack, onOpenQrStudio }) {
   const clearHistory = () => {
     setUploadHistory([]);
     try {
+      localStorage.removeItem('kuro_file_links_history');
       localStorage.removeItem('kaze_file_links_history');
     } catch {
       // ignore
     }
+    onShowToast?.('Riwayat tautan berhasil dibersihkan.', 'info');
   };
 
   // Deteksi tipe file
@@ -132,17 +135,27 @@ export default function ImageToLinkScreen({ onBack, onOpenQrStudio }) {
         setErrorMessage(res.data?.message || 'Gagal mengubah file menjadi tautan.');
       }
     } catch (err) {
-      setErrorMessage(err.response?.data?.message || err.message || 'Terjadi kesalahan saat mengunggah file.');
+      const status = err.response?.status;
+      if (status === 404 || status === 502) {
+        setErrorMessage('Layanan hosting file lokal (/api/upload-file) memerlukan server Express Node.js aktif dan tidak tersedia pada mode serverless statis.');
+      } else {
+        setErrorMessage(err.response?.data?.message || err.message || 'Terjadi kesalahan saat mengunggah file.');
+      }
     } finally {
       setUploading(false);
     }
   };
 
   // Copy helper
-  const handleCopy = (text, fieldName) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(fieldName);
-    setTimeout(() => setCopiedField(null), 2500);
+  const handleCopy = async (text, fieldName) => {
+    const res = await copyTextToClipboard(text);
+    if (res.success) {
+      setCopiedField(fieldName);
+      onShowToast?.('Tautan berhasil disalin ke papan klip!', 'success');
+      setTimeout(() => setCopiedField(null), 2500);
+    } else {
+      onShowToast?.(res.message || 'Gagal menyalin tautan.', 'error');
+    }
   };
 
   return (

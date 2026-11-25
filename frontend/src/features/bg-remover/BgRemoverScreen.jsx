@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob, downloadBase64 } from '../../shared/utils/fileDownload';
 import { 
   Scissors, 
   ArrowLeft, 
@@ -19,7 +20,7 @@ import {
   Undo2
 } from 'lucide-react';
 
-export default function BgRemoverScreen({ onBack }) {
+export default function BgRemoverScreen({ onBack, onShowToast }) {
   const [imageSrc, setImageSrc] = useState(null);
   const [fileName, setFileName] = useState('photo.png');
   const [isDragging, setIsDragging] = useState(false);
@@ -433,32 +434,39 @@ export default function BgRemoverScreen({ onBack }) {
     setIsPickingColor(false);
   };
 
-  // Unduh Hasil PNG HD & Simpan ke Galeri
-  const handleDownload = () => {
-    if (!canvasRef.current) return;
-    const dataUrl = canvasRef.current.toDataURL('image/png', 1.0);
+  // Unduh Hasil PNG HD & Simpan ke Galeri via Blob agar aman di Mobile & WebView
+  const handleDownload = async () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     const safeName = fileName.replace(/\.[^/.]+$/, '');
     const filename = `${safeName}_clean_bg.png`;
+    const dataUrl = canvas.toDataURL('image/png', 1.0);
 
-    const link = document.createElement('a');
-    link.download = filename;
-    link.href = dataUrl;
-    link.click();
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1.0));
+      if (blob && blob.size > 0) {
+        downloadBlob(blob, filename);
+      } else {
+        await downloadBase64(dataUrl, filename, 'image/png');
+      }
 
-    // Otomatis simpan ke galeri perangkat
-    addGalleryItem({
-      title: `${safeName} (Clean BG)`,
-      type: 'image',
-      category: 'Hapus Background',
-      extension: 'PNG',
-      size: 'HD PNG',
-      previewUrl: dataUrl,
-      downloadData: dataUrl,
-      filename
-    });
+      addGalleryItem({
+        title: `${safeName} (Clean BG)`,
+        type: 'image',
+        category: 'Hapus Background',
+        extension: 'PNG',
+        size: 'HD PNG',
+        previewUrl: dataUrl,
+        downloadData: dataUrl,
+        filename
+      });
 
-    setDownloadSuccess(true);
-    setTimeout(() => setDownloadSuccess(false), 2500);
+      setDownloadSuccess(true);
+      setTimeout(() => setDownloadSuccess(false), 2500);
+      onShowToast?.(`Foto berhasil diunduh: ${filename}`, 'success');
+    } catch (err) {
+      onShowToast?.(err?.message || 'Gagal mengunduh gambar.', 'error');
+    }
   };
 
   return (

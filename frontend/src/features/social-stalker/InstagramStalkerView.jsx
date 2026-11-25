@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
+import { readClipboardText, copyTextToClipboard } from '../../shared/utils/clipboard';
 import { InstagramLogo } from './BrandLogos';
 import { 
   Search, 
@@ -483,26 +484,26 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
   };
 
   const handlePaste = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setInputVal(text.trim());
-        onShowToast?.(isEn ? 'Link pasted!' : 'Tautan berhasil ditempel!', 'info');
-      }
-    } catch {
-      onShowToast?.(isEn ? 'Failed to read clipboard.' : 'Gagal membaca papan klip.', 'warning');
+    const res = await readClipboardText();
+    if (res.success && res.text) {
+      setInputVal(res.text);
+      onShowToast?.(isEn ? 'Link pasted!' : 'Tautan berhasil ditempel!', 'info');
+    } else {
+      onShowToast?.(res.message || (isEn ? 'Failed to read clipboard.' : 'Gagal membaca papan klip.'), 'warning');
     }
   };
 
-  const handleCopyProfileUrl = () => {
+  const handleCopyProfileUrl = async () => {
     if (!profileData?.profileUrl) return;
-    navigator.clipboard.writeText(profileData.profileUrl);
-    setCopiedLink(true);
-    onShowToast?.(isEn ? 'Profile link copied!' : 'Tautan profil berhasil disalin!', 'success');
-    setTimeout(() => setCopiedLink(false), 2000);
+    const res = await copyTextToClipboard(profileData.profileUrl);
+    if (res.success) {
+      setCopiedLink(true);
+      onShowToast?.(isEn ? 'Profile link copied!' : 'Tautan profil berhasil disalin!', 'success');
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
   };
 
-  const handleCopyAllIntel = () => {
+  const handleCopyAllIntel = async () => {
     if (!profileData) return;
     const stats = profileData.stats || {};
     const followers = stats.followers ?? profileData.followers ?? 0;
@@ -521,10 +522,12 @@ export default function InstagramStalkerView({ onBack, onChangePlatform, onShowT
       `Tautan: ${profileData.profileUrl}`
     ].join('\n');
 
-    navigator.clipboard.writeText(text);
-    setCopiedIntel(true);
-    onShowToast?.(isEn ? 'Full report copied to clipboard!' : 'Laporan lengkap disalin ke papan klip!', 'success');
-    setTimeout(() => setCopiedIntel(false), 2000);
+    const res = await copyTextToClipboard(text);
+    if (res.success) {
+      setCopiedIntel(true);
+      onShowToast?.(isEn ? 'Full report copied to clipboard!' : 'Laporan lengkap disalin ke papan klip!', 'success');
+      setTimeout(() => setCopiedIntel(false), 2000);
+    }
   };
 
   const scanStatusMessages = isEn ? [

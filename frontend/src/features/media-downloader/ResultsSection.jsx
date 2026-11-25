@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { addGalleryItem } from '../../shared/utils/storageService';
+import { downloadBlob, downloadFromUrl } from '../../shared/utils/fileDownload';
 import {
   Download,
   ChevronLeft,
@@ -444,25 +445,12 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     });
   };
 
-  // Pemicu unduhan langsung menggunakan atribut download HTML5 native browser
+  // Pemicu unduhan langsung menggunakan shared downloadFromUrl / downloadBlob agar aman lintas browser & WebView
   const triggerNativeDownload = (url, filename) => {
-    try {
-      const tempLink = document.createElement('a');
-      tempLink.style.display = 'none';
-      tempLink.href = url;
-      tempLink.download = filename;
-      tempLink.setAttribute('download', filename);
-      document.body.appendChild(tempLink);
-      tempLink.click();
-      setTimeout(() => {
-        if (document.body.contains(tempLink)) {
-          document.body.removeChild(tempLink);
-        }
-      }, 1000);
-    } catch (err) {
-      console.warn('Gagal memicu unduhan anchor, mengalihkan ke window:', err);
-      window.location.href = url;
-    }
+    downloadFromUrl(url, filename).catch((err) => {
+      console.warn('Gagal memicu unduhan media:', err);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    });
   };
 
   const downloadPhotoSlide = async (slideItem, index) => {
@@ -478,11 +466,9 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       setDownloadProgress(prev => ({ ...prev, [slideId]: 45 }));
       const customBlob = await processImageResolution(slideItem.url, selectedPhotoRes);
 
-      if (customBlob) {
+      if (customBlob && customBlob.size > 0) {
         setDownloadProgress(prev => ({ ...prev, [slideId]: 90 }));
-        const blobUrl = window.URL.createObjectURL(customBlob);
-        triggerNativeDownload(blobUrl, filename);
-        setTimeout(() => window.URL.revokeObjectURL(blobUrl), 3000);
+        downloadBlob(customBlob, filename);
 
         recordMediaInGallery(
           { ...slideItem, quality: selectedPhotoRes === '2160p' ? '4K Ultra HD' : selectedPhotoRes === '1080p' ? '1080p (Status WA Anti-Burik)' : '720p HD' },
@@ -612,10 +598,8 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         if (!isVid && selectedPhotoRes !== '2160p') {
           try {
             const procBlob = await processImageResolution(item.url, selectedPhotoRes);
-            if (procBlob) {
-              const blobUrl = window.URL.createObjectURL(procBlob);
-              triggerNativeDownload(blobUrl, filename);
-              setTimeout(() => window.URL.revokeObjectURL(blobUrl), 3000);
+            if (procBlob && procBlob.size > 0) {
+              downloadBlob(procBlob, filename);
               recordMediaInGallery(item, filename, `slide_${i + 1}`);
               await new Promise(r => setTimeout(r, 450));
               continue;

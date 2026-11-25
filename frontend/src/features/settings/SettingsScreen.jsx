@@ -22,6 +22,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { translations } from '../../shared/utils/translations';
+import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { getDeviceId, resetDeviceSettings, clearGallery } from '../../shared/utils/storageService';
 import ConfirmModal from '../../shared/components/ConfirmModal';
 
@@ -124,13 +125,15 @@ export default function SettingsScreen({
     }
   };
 
-  const handleCopyDeviceId = () => {
-    navigator.clipboard?.writeText(deviceId);
-    setCopiedDeviceId(true);
-    if (onShowToast) {
-      onShowToast(isEn ? 'Device ID copied to clipboard' : 'Device ID berhasil disalin ke clipboard');
+  const handleCopyDeviceId = async () => {
+    const res = await copyTextToClipboard(deviceId);
+    if (res.success) {
+      setCopiedDeviceId(true);
+      if (onShowToast) {
+        onShowToast(isEn ? 'Device ID copied to clipboard' : 'Device ID berhasil disalin ke clipboard');
+      }
+      setTimeout(() => setCopiedDeviceId(false), 2000);
     }
-    setTimeout(() => setCopiedDeviceId(false), 2000);
   };
 
   const handleClearGallery = () => {

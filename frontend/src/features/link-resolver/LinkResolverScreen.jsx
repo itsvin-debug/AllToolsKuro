@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { logHistoryItem } from '../../shared/utils/storageService';
-import { readClipboardText } from '../../shared/utils/clipboard';
+import { readClipboardText, copyTextToClipboard } from '../../shared/utils/clipboard';
 
 // Definisi 5 tahapan alur kerja bypass safelink (sesuai indikator step-by-step)
 const RESOLVER_STEPS = [
@@ -315,29 +315,35 @@ export default function LinkResolverScreen({ onBack, onShowToast }) {
     }
   };
 
-  const handleCopySingleDestination = () => {
+  const handleCopySingleDestination = async () => {
     if (!resolveResult?.resolved_url) return;
-    navigator.clipboard.writeText(resolveResult.resolved_url);
-    setIsCopied(true);
-    onShowToast?.('Link berhasil disalin ke papan klip!');
-    setTimeout(() => setIsCopied(false), 2200);
+    const res = await copyTextToClipboard(resolveResult.resolved_url);
+    if (res.success) {
+      setIsCopied(true);
+      onShowToast?.('Link berhasil disalin ke papan klip!');
+      setTimeout(() => setIsCopied(false), 2200);
+    }
   };
 
-  const handleCopySingleLink = (url, idx) => {
+  const handleCopySingleLink = async (url, idx) => {
     if (!url) return;
-    navigator.clipboard.writeText(url);
-    setCopiedItemIndex(idx);
-    onShowToast?.('Tautan disalin!');
-    setTimeout(() => setCopiedItemIndex(null), 1800);
+    const res = await copyTextToClipboard(url);
+    if (res.success) {
+      setCopiedItemIndex(idx);
+      onShowToast?.('Tautan disalin!');
+      setTimeout(() => setCopiedItemIndex(null), 1800);
+    }
   };
 
-  const handleCopyAllLinks = () => {
+  const handleCopyAllLinks = async () => {
     if (!resolveResult?.items?.length) return;
     const all = resolveResult.items.map(it => `${it.title ? it.title + ' - ' : ''}${it.url}`).join('\n');
-    navigator.clipboard.writeText(all);
-    setIsAllCopied(true);
-    onShowToast?.(`Berhasil menyalin ${resolveResult.items.length} tautan ke papan klip!`);
-    setTimeout(() => setIsAllCopied(false), 2200);
+    const res = await copyTextToClipboard(all);
+    if (res.success) {
+      setIsAllCopied(true);
+      onShowToast?.(`Berhasil menyalin ${resolveResult.items.length} tautan ke papan klip!`);
+      setTimeout(() => setIsAllCopied(false), 2200);
+    }
   };
 
   const filteredAggregatorItems = useMemo(() => {
