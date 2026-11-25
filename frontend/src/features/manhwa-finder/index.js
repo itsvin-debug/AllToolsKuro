@@ -1,1 +1,2 @@
-export { default as ManhwaFinderScreen } from './components/ManhwaFinderScreen';
+export { default } from './ManhwaFinderScreen';
+export { default as ManhwaFinderScreen } from './ManhwaFinderScreen';

@@ -1,2 +1,3 @@
-export { default as ConverterScreen } from './components/ConverterScreen';
-export { default as ResultsSection } from './components/ResultsSection';
+export { default } from './ConverterScreen';
+export { default as ConverterScreen } from './ConverterScreen';
+export { default as ResultsSection } from './ResultsSection';

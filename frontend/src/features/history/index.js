@@ -1,1 +1,2 @@
-export { default as HistoryScreen } from './components/HistoryScreen';
+export { default } from './HistoryScreen';
+export { default as HistoryScreen } from './HistoryScreen';

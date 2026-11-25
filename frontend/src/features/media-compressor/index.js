@@ -1,2 +1,3 @@
-export { default as MediaCompressorScreen } from './components/MediaCompressorScreen';
-export { default as BeforeAfterSlider } from './components/BeforeAfterSlider';
+export { default } from './MediaCompressorScreen';
+export { default as MediaCompressorScreen } from './MediaCompressorScreen';
+export { default as BeforeAfterSlider } from './BeforeAfterSlider';

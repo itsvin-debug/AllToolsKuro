@@ -1,3 +1,4 @@
-export { default as WelcomeScreen } from './components/WelcomeScreen';
-export { default as KuroIdentityCard, detectUserDevice } from './components/KuroIdentityCard';
-export { default as KazeIdentityCard } from './components/KazeIdentityCard';
+export { default } from './WelcomeScreen';
+export { default as WelcomeScreen } from './WelcomeScreen';
+export { default as KuroIdentityCard, detectUserDevice } from './KuroIdentityCard';
+export { default as KazeIdentityCard } from './KazeIdentityCard';

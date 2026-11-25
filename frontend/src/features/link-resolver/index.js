@@ -1,1 +1,2 @@
-export { default as LinkResolverScreen } from './components/LinkResolverScreen';
+export { default } from './LinkResolverScreen';
+export { default as LinkResolverScreen } from './LinkResolverScreen';

@@ -1,1 +1,2 @@
-export { default as ImageToLinkScreen } from './components/ImageToLinkScreen';
+export { default } from './ImageToLinkScreen';
+export { default as ImageToLinkScreen } from './ImageToLinkScreen';

@@ -1,1 +1,2 @@
-export { default as AudioMergerScreen } from './components/AudioMergerScreen';
+export { default } from './AudioMergerScreen';
+export { default as AudioMergerScreen } from './AudioMergerScreen';

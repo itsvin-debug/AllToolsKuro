@@ -4,6 +4,7 @@ import {
   ChevronDown,
   Search,
   Check,
+  Download,
   Home,
   Images,
   History,
@@ -12,7 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { translations } from '../utils/translations';
-import { useAppUpdate } from '../hooks/useAppUpdate';
+import { useAppUpdate } from '../utils/useAppUpdate';
 import { getLocalizedTools } from '../config/toolsRegistry';
 import UpdateModal from './UpdateModal';
 

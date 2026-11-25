@@ -1,5 +1,5 @@
-const { isValidSessionId, getDeviceRoomSize, emitToDevice } = require('../utils/deviceAuth');
-const { normalizePhone } = require('../utils/mediaHelpers');
+const { isValidSessionId, normalizePhone } = require('../utils/common');
+const { getDeviceRoomSize, emitToDevice } = require('./deviceAuthService');
 
 async function resolveJidToPhone(jid, session, msg = null) {
   if (!jid || typeof jid !== 'string') return null;
@@ -226,22 +226,22 @@ function buildContactsSyncPayload(session) {
   return map;
 }
 
-function scheduleContactsSync(sessionId, session) {
-  if (!session || !isValidSessionId(sessionId)) return;
+function scheduleContactsSync(io, sessionId, session) {
+  if (!io || !session || !isValidSessionId(sessionId)) return;
   if (session.contactsSyncTimer) clearTimeout(session.contactsSyncTimer);
   session.contactsSyncTimer = setTimeout(() => {
     try {
-      if (getDeviceRoomSize(sessionId) > 0) {
+      if (getDeviceRoomSize(io, sessionId) > 0) {
         const contacts = buildContactsSyncPayload(session);
         if (Object.keys(contacts).length > 0) {
-          emitToDevice(sessionId, 'contacts-map-sync', { contacts });
+          emitToDevice(io, sessionId, 'contacts-map-sync', { contacts });
         }
       }
     } catch (_) {}
   }, 2000);
 }
 
-function upsertSavedContact(session, c) {
+function upsertSavedContact(io, session, c) {
   if (!session || !c || typeof c !== 'object') return false;
   if (!session.savedContacts) session.savedContacts = new Map();
   if (!session.lidMap) session.lidMap = new Map();
@@ -321,8 +321,8 @@ function upsertSavedContact(session, c) {
     }
   }
 
-  if (savedChanged && session.sessionId) {
-    scheduleContactsSync(session.sessionId, session);
+  if (savedChanged && session.sessionId && io) {
+    scheduleContactsSync(io, session.sessionId, session);
   }
   return savedChanged;
 }
@@ -374,7 +374,7 @@ function resolveDisplayName(session, { senderJid = '', phone = '', lid = '', pus
   return 'Kontak';
 }
 
-function resolveSenderInfo(msg, session) {
+function resolveSenderInfo(io, msg, session) {
   const remoteJid = String(msg.key?.remoteJid || '');
   const isStatus = remoteJid === 'status@broadcast';
   const rawSenderJid = isStatus
@@ -413,7 +413,7 @@ function resolveSenderInfo(msg, session) {
   });
 
   if (pushName && (phone || rawSenderJid || lidCandidate)) {
-    upsertSavedContact(session, {
+    upsertSavedContact(io, session, {
       id: rawSenderJid,
       lid: lidCandidate,
       phoneNumber: phone,

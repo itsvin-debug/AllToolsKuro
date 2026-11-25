@@ -1,1 +1,2 @@
-export { default as IpCheckerScreen } from './components/IpCheckerScreen';
+export { default } from './IpCheckerScreen';
+export { default as IpCheckerScreen } from './IpCheckerScreen';

@@ -1,1 +1,2 @@
-export { default as BgRemoverScreen } from './components/BgRemoverScreen';
+export { default } from './BgRemoverScreen';
+export { default as BgRemoverScreen } from './BgRemoverScreen';

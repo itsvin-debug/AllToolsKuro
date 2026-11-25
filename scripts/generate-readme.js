@@ -15,7 +15,7 @@ const __dirname = path.dirname(__filename);
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const README_PATH = path.join(ROOT_DIR, 'README.md');
-const CATALOG_PATH = path.join(ROOT_DIR, 'frontend', 'src', 'features', 'kurobot', 'utils', 'kurobotCatalog.js');
+const CATALOG_PATH = path.join(ROOT_DIR, 'frontend', 'src', 'features', 'kurobot', 'kurobotCatalog.js');
 
 // Filter direktori yang diabaikan pada tree scanner
 const IGNORED_DIRS = new Set([

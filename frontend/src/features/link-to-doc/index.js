@@ -1,1 +1,2 @@
-export { default as LinkToDocScreen } from './components/LinkToDocScreen';
+export { default } from './LinkToDocScreen';
+export { default as LinkToDocScreen } from './LinkToDocScreen';

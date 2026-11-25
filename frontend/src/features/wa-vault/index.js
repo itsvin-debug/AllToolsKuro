@@ -1,1 +1,2 @@
-export { default as WaViewOnceView } from './components/WaViewOnceView';
+export { default } from './WaViewOnceView';
+export { default as WaViewOnceView } from './WaViewOnceView';

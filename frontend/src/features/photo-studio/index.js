@@ -1,1 +1,2 @@
-export { default as PhotoStudioScreen } from './components/PhotoStudioScreen';
+export { default } from './PhotoStudioScreen';
+export { default as PhotoStudioScreen } from './PhotoStudioScreen';

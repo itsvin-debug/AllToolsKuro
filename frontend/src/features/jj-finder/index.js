@@ -1,1 +1,2 @@
-export { default as JjFinderScreen } from './components/JjFinderScreen';
+export { default } from './JjFinderScreen';
+export { default as JjFinderScreen } from './JjFinderScreen';

@@ -1,15 +1,10 @@
 const baileysModule = require('@whiskeysockets/baileys');
 const { downloadContentFromMessage, downloadMediaMessage } = baileysModule;
 
-const { pinoSilent } = require('../config/waConfig');
-const { getDeviceRoomSize, emitToDevice } = require('../utils/deviceAuth');
-const {
-  globalMediaDownloadQueue,
-  normalizePhone,
-  argbToHex,
-  withTimeout,
-  toCleanBuffer
-} = require('../utils/mediaHelpers');
+const { pinoSilent } = require('../config/constants');
+const { normalizePhone, argbToHex, withTimeout, toCleanBuffer } = require('../utils/common');
+const { globalMediaDownloadQueue } = require('../state/sessionStore');
+const { getDeviceRoomSize, emitToDevice } = require('./deviceAuthService');
 const {
   resolveJidToPhone,
   learnLidPair,
@@ -71,14 +66,14 @@ function buildVaultPayload({
   };
 }
 
-function emitVaultItem(sessionId, session, payload) {
-  emitToDevice(sessionId, 'vault-item', payload);
+function emitVaultItem(io, sessionId, session, payload) {
+  emitToDevice(io, sessionId, 'vault-item', payload);
 
   if (payload.isViewOnce) {
-    emitToDevice(sessionId, 'view-once-media', payload);
+    emitToDevice(io, sessionId, 'view-once-media', payload);
   }
 
-  if (getDeviceRoomSize(sessionId) === 0) {
+  if (getDeviceRoomSize(io, sessionId) === 0) {
     if (!session.pendingMedia) session.pendingMedia = [];
     session.pendingMedia.push(payload);
     if (session.pendingMedia.length > 25) {
@@ -311,7 +306,7 @@ function unwrapStatusContent(rawMsg, depth = 0) {
   return null;
 }
 
-async function processIncomingStatusMessage(msg, session, sourceTag = 'upsert') {
+async function processIncomingStatusMessage(io, msg, session, sourceTag = 'upsert') {
   if (!msg || !msg.key) return;
   const msgId = String(msg.key.id || '');
   if (!msgId) return;
@@ -334,8 +329,8 @@ async function processIncomingStatusMessage(msg, session, sourceTag = 'upsert') 
         ptr.isDeleted = true;
         ptr.deletedAt = deletedAt;
       }
-      emitToDevice(session.sessionId, 'vault-item-revoked', { id: targetKeyId, deletedAt });
-      emitToDevice(session.sessionId, 'vault-activity', {
+      emitToDevice(io, session.sessionId, 'vault-item-revoked', { id: targetKeyId, deletedAt });
+      emitToDevice(io, session.sessionId, 'vault-activity', {
         time: deletedAt,
         text: 'Status WA telah ditarik/dihapus oleh pengirim (Anti-Delete aktif)!'
       });
@@ -372,7 +367,7 @@ async function processIncomingStatusMessage(msg, session, sourceTag = 'upsert') 
   const resolvedLid = lidCandidate || (phone && session.lidMap?.get(phone)) || '';
 
   if (pushName && (phone || senderJid || resolvedLid)) {
-    upsertSavedContact(session, {
+    upsertSavedContact(io, session, {
       id: senderJid,
       lid: resolvedLid,
       phoneNumber: phone,
@@ -494,7 +489,7 @@ async function processIncomingStatusMessage(msg, session, sourceTag = 'upsert') 
   }
   session.statusPointers.set(msgId, pointer);
 
-  const roomSize = getDeviceRoomSize(session.sessionId);
+  const roomSize = getDeviceRoomSize(io, session.sessionId);
 
   if (roomSize === 0) {
     pointer.pendingDelivery = true;
@@ -506,9 +501,9 @@ async function processIncomingStatusMessage(msg, session, sourceTag = 'upsert') 
     category: 'status',
     needsOnDemandLoad: mediaType !== 'text'
   });
-  emitVaultItem(session.sessionId, session, payload);
+  emitVaultItem(io, session.sessionId, session, payload);
 
-  emitToDevice(session.sessionId, 'vault-activity', {
+  emitToDevice(io, session.sessionId, 'vault-activity', {
     time: Date.now(),
     text: `Status ${mediaType === 'audio' ? 'Audio/VN' : mediaType.toUpperCase()} dari ${senderName} tertangkap senyap (0 view)!`
   });
@@ -527,7 +522,7 @@ async function processIncomingStatusMessage(msg, session, sourceTag = 'upsert') 
       const buffer = await downloadMediaStreamBuffer(pointer.mediaPointer, pointer.baileysMediaKind, { key: pointer.rawMsgKey }, session.sock);
       if (buffer && buffer.length > 0) {
         const base64Data = 'data:' + pointer.mimeType + ';base64,' + buffer.toString('base64');
-        emitToDevice(session.sessionId, 'vault-item-media-ready', {
+        emitToDevice(io, session.sessionId, 'vault-item-media-ready', {
           id: msgId,
           base64Data,
           mimeType: pointer.mimeType,

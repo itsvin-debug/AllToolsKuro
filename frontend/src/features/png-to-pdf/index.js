@@ -1,1 +1,2 @@
-export { default as PngToPdfScreen } from './components/PngToPdfScreen';
+export { default } from './PngToPdfScreen';
+export { default as PngToPdfScreen } from './PngToPdfScreen';

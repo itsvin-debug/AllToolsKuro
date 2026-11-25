@@ -1,1 +1,2 @@
-export { default as AnimeFinderScreen } from './components/AnimeFinderScreen';
+export { default } from './AnimeFinderScreen';
+export { default as AnimeFinderScreen } from './AnimeFinderScreen';

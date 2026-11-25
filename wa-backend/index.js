@@ -10,12 +10,10 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-const { PORT, ensureAuthRootDir } = require('./src/config/waConfig');
-const { sessions, setIoServer } = require('./src/utils/deviceAuth');
-const { cleanupOrphanedAuthDirs } = require('./src/utils/authSnapshot');
-const { globalMediaDownloadQueue } = require('./src/utils/mediaHelpers');
-const { registerSocketHandlers } = require('./src/socket/registerSocketHandlers');
-const { startLifecycleTimers } = require('./src/services/sessionLifecycle');
+const { PORT, ensureAuthRootDir } = require('./src/config/constants');
+const { sessions, globalMediaDownloadQueue, cleanupOrphanedAuthDirs } = require('./src/state/sessionStore');
+const { startLifecycleTimers } = require('./src/services/sessionLifecycleService');
+const { registerSocketHandlers } = require('./src/handlers/socketHandler');
 
 ensureAuthRootDir();
 cleanupOrphanedAuthDirs();
@@ -77,9 +75,8 @@ const io = new Server(server, {
   pingInterval: 25000
 });
 
-setIoServer(io);
 registerSocketHandlers(io);
-startLifecycleTimers();
+startLifecycleTimers(io);
 
 server.listen(PORT, () => {
   console.log(`[AllToolsKuro] WA 4-in-1 Backend v2.3.0 aktif di port ${PORT} (Isolasi Perangkat & Zero-Disk Media Aktif)`);
