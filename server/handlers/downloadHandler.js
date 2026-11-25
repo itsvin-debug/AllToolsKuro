@@ -1,41 +1,17 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { validateRequestSecurity } from '../../api/_security.js';
+import {
+  UA_DESKTOP,
+  UA_MOBILE,
+  PLATFORM_NAMES,
+  cleanInputUrl,
+  detectPlatform,
+  resolveShortRedirectUrl,
+  attachNormalizedSchema
+} from './mediaNormalizer.js';
 
-const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
 const SAVENOW_API_KEY = process.env.SAVENOW_API_KEY || '';
-
-function cleanInputUrl(raw) {
-  if (!raw) return '';
-  let str = raw.trim();
-  str = str.replace(/^\/+/, '');
-  if (!str.startsWith('http://') && !str.startsWith('https://')) {
-    str = 'https://' + str;
-  }
-  return str;
-}
-
-function detectPlatform(rawUrl) {
-  const url = cleanInputUrl(rawUrl).toLowerCase();
-  if (/tiktok\.com|vt\.tiktok\.com/i.test(url)) return 'tiktok';
-  if (/instagram\.com|instagr\.am/i.test(url)) return 'instagram';
-  if (/twitter\.com|x\.com/i.test(url)) return 'twitter';
-  if (/youtube\.com|youtu\.be/i.test(url)) return 'youtube';
-  if (/facebook\.com|fb\.watch|fb\.com/i.test(url)) return 'facebook';
-  if (/reddit\.com|redd\.it/i.test(url)) return 'reddit';
-  if (/pinterest\.com|pin\.it/i.test(url)) return 'pinterest';
-  if (/bilibili\.com|b23\.tv/i.test(url)) return 'bilibili';
-  if (/douyin\.com|iesdouyin\.com/i.test(url)) return 'douyin';
-  if (/bandcamp\.com/i.test(url)) return 'bandcamp';
-  if (/threads\.net/i.test(url)) return 'threads';
-  if (/spotify\.com/i.test(url)) return 'spotify';
-  if (/music\.apple\.com/i.test(url)) return 'appleMusic';
-  if (/pixiv\.net/i.test(url)) return 'pixiv';
-  if (/xiaohongshu\.com|xhslink\.com/i.test(url)) return 'rednote';
-  if (/terabox\.com|1024tera\.com|teraboxapp\.com/i.test(url)) return 'terabox';
-  return null;
-}
 
 // Fallback via SaveNow API.
 async function scrapeViaSaveNow(targetUrl, formatList = ['2160', '1080', '720', 'mp3'], defaultTitle = 'Media Video', fallbackAuthor = 'Creator') {
@@ -161,30 +137,9 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['2160', '1080', '720', 
   return null;
 }
 
-// Unshorten link jika vt.tiktok.com
+// Unshorten link jika vt.tiktok.com / vm.tiktok.com
 async function resolveTikTokUrl(rawUrl) {
-  let url = cleanInputUrl(rawUrl);
-  if (url.includes('vt.tiktok.com') || url.includes('vm.tiktok.com')) {
-    try {
-      const head = await axios.get(url, {
-        maxRedirects: 8,
-        headers: {
-          'User-Agent': UA_MOBILE
-        },
-        timeout: 6000
-      });
-      const resolved = head.request?.res?.responseUrl || head.config?.url;
-      if (resolved && resolved.includes('tiktok.com') && (resolved.includes('/video/') || resolved.includes('/photo/') || resolved.includes('/@'))) {
-        return resolved;
-      }
-    } catch (e) {
-      const loc = e.response?.headers?.location;
-      if (loc && (loc.includes('/video/') || loc.includes('/photo/') || loc.includes('/@'))) {
-        return loc;
-      }
-    }
-  }
-  return url;
+  return resolveShortRedirectUrl(rawUrl, UA_MOBILE);
 }
 
 // Strategi 1: Tikmate API (Kecepatan tinggi, tanpa watermark, resolusi HD)
@@ -290,20 +245,12 @@ async function downloadViaTikmate(targetUrl) {
   return null;
 }
 
-// TikTok scraper.
+// TikTok scraper — TikWM (carousel + HD video + live wallpaper) -> Tikmate (non-photo fallback) -> SSSTik -> SaveNow
 async function downloadTikTok(rawUrl) {
   let lastError = null;
   const url = await resolveTikTokUrl(rawUrl);
 
-  // Strategi 1: Tikmate API
-  try {
-    const tikmateRes = await downloadViaTikmate(url);
-    if (tikmateRes) return tikmateRes;
-  } catch (err) {
-    lastError = err;
-  }
-
-  // TikWM API.
+  // TikWM API (mendukung photo slide carousel, video slide, live wallpaper, & no-watermark HD)
   try {
     const res = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({
       url: url,
@@ -527,6 +474,16 @@ async function downloadTikTok(rawUrl) {
     lastError = e;
   }
 
+  // Fallback Tikmate untuk link video reguler
+  if (!url.includes('/photo/')) {
+    try {
+      const tikmateRes = await downloadViaTikmate(url);
+      if (tikmateRes) return tikmateRes;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
   // Fallback via SSSTik.
   try {
     const homeRes = await axios.get('https://ssstik.io/en', {
@@ -703,10 +660,10 @@ function extractAllIGMedia(html) {
 }
 
 async function downloadInstagram(rawUrl) {
-  const url = cleanInputUrl(rawUrl);
+  const url = await resolveShortRedirectUrl(rawUrl, UA_MOBILE);
   let lastError = null;
 
-  const shortcodeMatch = url.match(/(?:reel|reels|p|tv|stories|share)\/([A-Za-z0-9_-]+)/i);
+  const shortcodeMatch = url.match(/(?:reel|reels|p|tv|stories)\/([A-Za-z0-9_-]+)/i);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
 
   if (!shortcode) {
@@ -861,6 +818,84 @@ async function downloadInstagram(rawUrl) {
     lastError = e;
   }
 
+  // Fallback FastDL untuk Reels/Post/Carousel publik
+  try {
+    const fastRes = await axios.post('https://fastdl.app/c/', new URLSearchParams({ url, lang_code: 'en' }), {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Referer': 'https://fastdl.app/'
+      },
+      timeout: 9000
+    });
+    const $f = cheerio.load(fastRes.data);
+    const items = [];
+    $f('a.download-items__btn, a.btn-download, a[href*="cdninstagram"], a[href*="fbcdn"]').each((_, el) => {
+      const href = $f(el).attr('href');
+      if (href && href.startsWith('http') && !items.includes(href)) items.push(href);
+    });
+    if (items.length > 0) {
+      const videoCandidates = items.filter((u) => u.includes('.mp4') || u.includes('video'));
+      const photoCandidates = items.filter((u) => !videoCandidates.includes(u));
+      if (photoCandidates.length > 1 || (photoCandidates.length > 0 && videoCandidates.length > 0)) {
+        const photos = photoCandidates.map((imgUrl, idx) => ({
+          id: idx + 1,
+          label: `Foto Slide #${idx + 1}`,
+          quality: 'HD Original',
+          url: imgUrl,
+          type: 'image',
+          extension: 'jpg',
+          filename: `instagram_${shortcode}_foto_${idx + 1}.jpg`
+        }));
+        const videoSlides = videoCandidates.map((vUrl, idx) => ({
+          id: `videoslide_${idx + 1}`,
+          label: `Video Slide #${idx + 1}`,
+          quality: 'HD 1080p Video',
+          url: vUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `instagram_${shortcode}_video_${idx + 1}.mp4`
+        }));
+        return {
+          success: true,
+          platform: 'Instagram',
+          title: `Instagram Media (${shortcode})`,
+          author: 'Instagram User',
+          thumbnail: photoCandidates[0] || $f('img').first().attr('src') || null,
+          mediaType: 'slide',
+          isSlide: true,
+          photos,
+          hasPhotos: photos.length > 0,
+          videoSlides,
+          hasVideoSlides: videoSlides.length > 0,
+          downloadLinks: [...photos, ...videoSlides]
+        };
+      }
+      const primaryVid = videoCandidates[0];
+      if (primaryVid) {
+        return {
+          success: true,
+          platform: 'Instagram',
+          title: `Instagram Reels (${shortcode})`,
+          author: 'Instagram Creator',
+          thumbnail: $f('img.download-items__thumb, img').first().attr('src') || null,
+          downloadLinks: [{
+            id: '1080p',
+            label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+            quality: '1080p (Full HD)',
+            url: primaryVid,
+            type: 'video',
+            extension: 'mp4',
+            filename: `instagram_${shortcode}_1080p.mp4`
+          }],
+          musicInfo: { title: 'Instagram Audio Track', author: 'Instagram Creator', url: primaryVid }
+        };
+      }
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
   // Fallback via SaveNow.
   try {
     const snData = await scrapeViaSaveNow(`https://www.instagram.com/reel/${shortcode}/`, ['1080', '720', 'mp3'], `Instagram Media (${shortcode})`, 'Instagram Creator');
@@ -880,7 +915,7 @@ async function downloadInstagram(rawUrl) {
 
 // X / Twitter scraper.
 async function downloadTwitter(rawUrl) {
-  const url = cleanInputUrl(rawUrl);
+  const url = await resolveShortRedirectUrl(rawUrl, UA_DESKTOP);
   let lastError = null;
 
   const tweetIdMatch = url.match(/status\/(\d+)/i);
@@ -890,11 +925,11 @@ async function downloadTwitter(rawUrl) {
     throw new Error('ID Tweet tidak ditemukan. Masukkan link postingan X (Twitter) yang valid.');
   }
 
-  // Ekstraksi via FxTwitter.
+  // Ekstraksi via FxTwitter (Foto HD, GIF, & Video Multi-Resolusi)
   try {
     const fxRes = await axios.get(`https://api.fxtwitter.com/status/${tweetId}`, {
       headers: { 'User-Agent': UA_DESKTOP },
-      timeout: 6000
+      timeout: 8000
     });
     const tweet = fxRes.data?.tweet;
     if (tweet) {
@@ -928,42 +963,45 @@ async function downloadTwitter(rawUrl) {
 
       if (tweet.media?.videos && Array.isArray(tweet.media.videos) && tweet.media.videos.length > 0) {
         const vid = tweet.media.videos[0];
+        const isGif = vid.type === 'gif' || /tweet_video/i.test(vid.url || '');
+        const sortedMp4Variants = Array.isArray(vid.variants)
+          ? vid.variants
+              .filter((v) => v.url && (!v.content_type || v.content_type.includes('mp4')))
+              .sort((a, b) => (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0))
+          : [];
+        const highestUrl = sortedMp4Variants[0]?.url || vid.url;
+        const medUrl = sortedMp4Variants[Math.min(1, sortedMp4Variants.length - 1)]?.url || vid.url;
+
         downloadLinks.push({
-          id: '2160p',
-          label: '4K Ultra HD (2160p Jernih Maksimal)',
-          quality: '4K Ultra HD (2160p)',
-          url: vid.url,
+          id: isGif ? 'gif_mp4' : '1080p',
+          label: isGif ? 'GIF Animasi (MP4 Loop HD)' : 'Resolusi HD 1080p (Status WA Anti-Burik)',
+          quality: isGif ? 'GIF Loop HD' : '1080p (Full HD)',
+          url: highestUrl,
           type: 'video',
+          isGif,
           extension: 'mp4',
-          filename: `twitter_${tweetId}_4k.mp4`
+          filename: `twitter_${tweetId}_${isGif ? 'gif' : '1080p'}.mp4`
         });
-        downloadLinks.push({
-          id: '1080p',
-          label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
-          quality: '1080p (Full HD)',
-          url: vid.url,
-          type: 'video',
-          extension: 'mp4',
-          filename: `twitter_${tweetId}_1080p.mp4`
-        });
-        downloadLinks.push({
-          id: '720p',
-          label: 'Resolusi HD 720p (Standar Cepat)',
-          quality: '720p (Standard HD)',
-          url: vid.url,
-          type: 'video',
-          extension: 'mp4',
-          filename: `twitter_${tweetId}_720p.mp4`
-        });
-        downloadLinks.push({
-          id: 'audio',
-          label: 'Audio MP3 (Ekstrak Suara)',
-          quality: '128kbps Audio',
-          url: vid.url,
-          type: 'audio',
-          extension: 'mp3',
-          filename: `twitter_${tweetId}_audio.mp3`
-        });
+        if (!isGif) {
+          downloadLinks.push({
+            id: '720p',
+            label: 'Resolusi HD 720p (Standar Cepat)',
+            quality: '720p (Standard HD)',
+            url: medUrl,
+            type: 'video',
+            extension: 'mp4',
+            filename: `twitter_${tweetId}_720p.mp4`
+          });
+          downloadLinks.push({
+            id: 'audio',
+            label: 'Audio MP3 (Ekstrak Suara)',
+            quality: '128kbps Audio',
+            url: highestUrl,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `twitter_${tweetId}_audio.mp3`
+          });
+        }
       }
 
       if (downloadLinks.length > 0) {
@@ -979,6 +1017,84 @@ async function downloadTwitter(rawUrl) {
           isSlide,
           photos,
           downloadLinks
+        };
+      }
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
+  // Fallback FastDL untuk Reels/Post/Carousel publik
+  try {
+    const fastRes = await axios.post('https://fastdl.app/c/', new URLSearchParams({ url, lang_code: 'en' }), {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Referer': 'https://fastdl.app/'
+      },
+      timeout: 9000
+    });
+    const $f = cheerio.load(fastRes.data);
+    const items = [];
+    $f('a.download-items__btn, a.btn-download, a[href*="cdninstagram"], a[href*="fbcdn"]').each((_, el) => {
+      const href = $f(el).attr('href');
+      if (href && href.startsWith('http') && !items.includes(href)) items.push(href);
+    });
+    if (items.length > 0) {
+      const videoCandidates = items.filter((u) => u.includes('.mp4') || u.includes('video'));
+      const photoCandidates = items.filter((u) => !videoCandidates.includes(u));
+      if (photoCandidates.length > 1 || (photoCandidates.length > 0 && videoCandidates.length > 0)) {
+        const photos = photoCandidates.map((imgUrl, idx) => ({
+          id: idx + 1,
+          label: `Foto Slide #${idx + 1}`,
+          quality: 'HD Original',
+          url: imgUrl,
+          type: 'image',
+          extension: 'jpg',
+          filename: `instagram_${shortcode}_foto_${idx + 1}.jpg`
+        }));
+        const videoSlides = videoCandidates.map((vUrl, idx) => ({
+          id: `videoslide_${idx + 1}`,
+          label: `Video Slide #${idx + 1}`,
+          quality: 'HD 1080p Video',
+          url: vUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `instagram_${shortcode}_video_${idx + 1}.mp4`
+        }));
+        return {
+          success: true,
+          platform: 'Instagram',
+          title: `Instagram Media (${shortcode})`,
+          author: 'Instagram User',
+          thumbnail: photoCandidates[0] || $f('img').first().attr('src') || null,
+          mediaType: 'slide',
+          isSlide: true,
+          photos,
+          hasPhotos: photos.length > 0,
+          videoSlides,
+          hasVideoSlides: videoSlides.length > 0,
+          downloadLinks: [...photos, ...videoSlides]
+        };
+      }
+      const primaryVid = videoCandidates[0];
+      if (primaryVid) {
+        return {
+          success: true,
+          platform: 'Instagram',
+          title: `Instagram Reels (${shortcode})`,
+          author: 'Instagram Creator',
+          thumbnail: $f('img.download-items__thumb, img').first().attr('src') || null,
+          downloadLinks: [{
+            id: '1080p',
+            label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+            quality: '1080p (Full HD)',
+            url: primaryVid,
+            type: 'video',
+            extension: 'mp4',
+            filename: `instagram_${shortcode}_1080p.mp4`
+          }],
+          musicInfo: { title: 'Instagram Audio Track', author: 'Instagram Creator', url: primaryVid }
         };
       }
     }
@@ -1098,7 +1214,7 @@ async function downloadYouTube(rawUrl) {
     lastError = e;
   }
 
-  // Fallback via Innertube.
+  // Fallback via Innertube (urutkan kualitas nyata tertinggi -> terendah + audio stream terpisah)
   try {
     const playerRes = await axios.post('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
       context: {
@@ -1111,55 +1227,71 @@ async function downloadYouTube(rawUrl) {
           gl: 'US'
         }
       },
-      videoId: videoId
+      videoId
     }, {
       headers: { 'Content-Type': 'application/json', 'User-Agent': UA_DESKTOP },
-      timeout: 5000
+      timeout: 8000
     });
 
     const sData = playerRes.data?.streamingData;
     if (sData) {
-      const formats = (sData.formats || []).concat(sData.adaptiveFormats || []);
-      const direct = formats.filter(f => f.url);
-      if (direct.length > 0) {
-        const downloadLinks = [
-          {
-            id: '2160p',
-            label: '4K Ultra HD (2160p Jernih Maksimal)',
-            quality: '4K Ultra HD (2160p)',
-            url: direct[0].url,
-            type: 'video',
-            extension: 'mp4',
-            filename: `youtube_${videoId}_4k.mp4`
-          },
-          {
-            id: '1080p',
-            label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
-            quality: '1080p (Full HD)',
-            url: direct[0].url,
-            type: 'video',
-            extension: 'mp4',
-            filename: `youtube_${videoId}_1080p.mp4`
-          },
-          {
-            id: '720p',
-            label: 'Resolusi HD 720p (Standar Cepat)',
-            quality: '720p (Standard HD)',
-            url: direct[1]?.url || direct[0].url,
-            type: 'video',
-            extension: 'mp4',
-            filename: `youtube_${videoId}_720p.mp4`
-          },
-          {
-            id: 'audio',
-            label: 'Audio MP3 (Ekstrak Suara)',
-            quality: '128kbps Audio',
-            url: direct[0].url,
-            type: 'audio',
-            extension: 'mp3',
-            filename: `youtube_audio_${videoId}.mp3`
-          }
-        ];
+      const muxed = (sData.formats || []).filter((f) => f.url).sort((a, b) => (b.height || 0) - (a.height || 0));
+      const adaptiveAudio = (sData.adaptiveFormats || []).filter((f) => f.url && (f.mimeType || '').startsWith('audio/'));
+      const bestAudio = adaptiveAudio.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+      const videoCandidates = muxed.length > 0
+        ? muxed
+        : (sData.adaptiveFormats || []).filter((f) => f.url && (f.mimeType || '').startsWith('video/')).sort((a, b) => (b.height || 0) - (a.height || 0));
+
+      if (videoCandidates.length > 0 || bestAudio) {
+        const masterUrl = videoCandidates[0]?.url || bestAudio?.url;
+        const hd1080 = videoCandidates.find((v) => (v.height || 0) >= 1080) || videoCandidates[0];
+        const hd720 = videoCandidates.find((v) => (v.height || 0) <= 720) || videoCandidates[videoCandidates.length - 1];
+        const downloadLinks = [];
+
+        if (videoCandidates.length > 0) {
+          downloadLinks.push(
+            {
+              id: '2160p',
+              label: '4K Ultra HD (2160p Jernih Maksimal)',
+              quality: '4K Ultra HD (2160p)',
+              url: masterUrl,
+              fileSize: Number(hd1080?.contentLength) || 0,
+              type: 'video',
+              extension: 'mp4',
+              filename: `youtube_${videoId}_4k.mp4`
+            },
+            {
+              id: '1080p',
+              label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+              quality: '1080p (Full HD)',
+              url: hd1080.url,
+              fileSize: Number(hd1080?.contentLength) || 0,
+              type: 'video',
+              extension: 'mp4',
+              filename: `youtube_${videoId}_1080p.mp4`
+            },
+            {
+              id: '720p',
+              label: 'Resolusi HD 720p (Standar Cepat)',
+              quality: '720p (Standard HD)',
+              url: hd720.url,
+              fileSize: Number(hd720?.contentLength) || 0,
+              type: 'video',
+              extension: 'mp4',
+              filename: `youtube_${videoId}_720p.mp4`
+            }
+          );
+        }
+        downloadLinks.push({
+          id: 'audio',
+          label: 'Audio MP3 (Ekstrak Suara)',
+          quality: '128kbps Audio',
+          url: bestAudio?.url || masterUrl,
+          fileSize: Number(bestAudio?.contentLength) || 0,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `youtube_audio_${videoId}.mp3`
+        });
         return {
           success: true,
           platform: 'YouTube',
@@ -1167,7 +1299,7 @@ async function downloadYouTube(rawUrl) {
           author,
           thumbnail,
           downloadLinks,
-          musicInfo: { title, author }
+          musicInfo: { title, author, url: bestAudio?.url || masterUrl }
         };
       }
     }
@@ -1175,7 +1307,59 @@ async function downloadYouTube(rawUrl) {
     lastError = e;
   }
 
-  throw new Error(`Gagal mengambil media YouTube. Pastikan video bersifat publik dan dapat diakses.`);
+  // Fallback Piped API publik
+  for (const pipedHost of ['https://pipedapi.kavin.rocks', 'https://pipedapi.tokhmi.xyz']) {
+    try {
+      const pRes = await axios.get(`${pipedHost}/streams/${videoId}`, { timeout: 8000 });
+      const streams = (pRes.data?.videoStreams || []).filter((s) => s.url && !s.videoOnly);
+      const audioOnly = (pRes.data?.audioStreams || []).filter((a) => a.url);
+      if (streams.length > 0) {
+        const sorted = streams.sort((a, b) => (parseInt(b.quality, 10) || 0) - (parseInt(a.quality, 10) || 0));
+        return {
+          success: true,
+          platform: 'YouTube',
+          title: pRes.data.title || title,
+          author: pRes.data.uploader || author,
+          thumbnail: pRes.data.thumbnailUrl || thumbnail,
+          duration: pRes.data.duration,
+          downloadLinks: [
+            {
+              id: '1080p',
+              label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
+              quality: sorted[0].quality || '1080p Full HD',
+              url: sorted[0].url,
+              type: 'video',
+              extension: 'mp4',
+              filename: `youtube_${videoId}_1080p.mp4`
+            },
+            {
+              id: '720p',
+              label: 'Resolusi HD 720p (Standar Cepat)',
+              quality: (sorted[1] || sorted[0]).quality || '720p HD',
+              url: (sorted[1] || sorted[0]).url,
+              type: 'video',
+              extension: 'mp4',
+              filename: `youtube_${videoId}_720p.mp4`
+            },
+            {
+              id: 'audio',
+              label: 'Audio MP3 (Ekstrak Suara)',
+              quality: '128kbps Audio',
+              url: audioOnly[0]?.url || sorted[0].url,
+              type: 'audio',
+              extension: 'mp3',
+              filename: `youtube_audio_${videoId}.mp3`
+            }
+          ],
+          musicInfo: { title: pRes.data.title || title, author: pRes.data.uploader || author }
+        };
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw new Error(`Gagal mengambil media YouTube: ${lastError?.message || 'Video privat atau dibatasi wilayah.'}`);
 }
 
 async function downloadReddit(url) {
@@ -1418,14 +1602,20 @@ async function downloadPinterest(rawUrl) {
     if (imageUrl) {
       const allImgUrls = [imageUrl, ...extraImages];
       allImgUrls.forEach((imgUrl, idx) => {
+        const extMatch = imgUrl.split('?')[0].match(/\.(gif|png|webp|jpeg|jpg)$/i);
+        const ext = extMatch ? extMatch[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg';
+        const isGif = ext === 'gif';
         const photoObj = {
           id: idx + 1,
-          label: allImgUrls.length > 1 ? `Foto Pin Asli #${idx + 1}` : 'Foto Pin Asli HD (Master)',
-          quality: 'Original Master Resolution (Jernih)',
+          label: isGif
+            ? (allImgUrls.length > 1 ? `GIF Animasi #${idx + 1}` : 'GIF Asli Pinterest')
+            : (allImgUrls.length > 1 ? `Foto Pin Asli #${idx + 1}` : 'Foto Pin Asli HD (Master)'),
+          quality: isGif ? 'GIF Animasi Original' : 'Original Master Resolution (Jernih)',
           url: imgUrl,
-          type: 'image',
-          extension: 'jpg',
-          filename: `pinterest_${pinId}_foto_${idx + 1}.jpg`
+          type: isGif ? 'gif' : 'image',
+          mediaType: isGif ? 'gif' : 'image',
+          extension: ext,
+          filename: `pinterest_${pinId}_${isGif ? 'gif' : 'foto'}_${idx + 1}.${ext}`
         };
         photos.push(photoObj);
         if (!videoUrl) downloadLinks.push(photoObj);
@@ -1461,7 +1651,7 @@ async function downloadPinterest(rawUrl) {
 
 // Ekstraksi Facebook Video & Reels
 async function downloadFacebook(rawUrl) {
-  let targetUrl = cleanInputUrl(rawUrl);
+  let targetUrl = await resolveShortRedirectUrl(rawUrl, UA_DESKTOP);
   try {
     const res = await axios.get(targetUrl, {
       headers: {
@@ -1935,20 +2125,9 @@ async function downloadThreads(rawUrl) {
   return await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], 'Threads Media', 'Threads Creator');
 }
 
-// Ekstraksi Bilibili Anime & HD Videos
+// Ekstraksi Bilibili Anime & HD Videos (resolve stream MP4 asli via playurl API + fallback SaveNow)
 async function downloadBilibili(rawUrl) {
-  let targetUrl = cleanInputUrl(rawUrl);
-  if (targetUrl.includes('b23.tv')) {
-    try {
-      const redir = await axios.get(targetUrl, {
-        maxRedirects: 5,
-        headers: { 'User-Agent': UA_DESKTOP },
-        validateStatus: () => true,
-        timeout: 8000
-      });
-      if (redir.request?.res?.responseUrl) targetUrl = redir.request.res.responseUrl;
-    } catch {}
-  }
+  let targetUrl = await resolveShortRedirectUrl(rawUrl, UA_DESKTOP);
 
   const bvidMatch = targetUrl.match(/(BV[a-zA-Z0-9]+)/i);
   const bvid = bvidMatch ? bvidMatch[1] : null;
@@ -1956,6 +2135,8 @@ async function downloadBilibili(rawUrl) {
   let title = 'Bilibili Video';
   let author = 'Bilibili Creator';
   let thumbnail = null;
+  let cid = null;
+  let playableUrl = null;
 
   if (bvid) {
     try {
@@ -1967,70 +2148,90 @@ async function downloadBilibili(rawUrl) {
         const d = apiRes.data.data;
         title = d.title || title;
         author = d.owner?.name || author;
+        cid = d.cid || d.pages?.[0]?.cid || null;
         thumbnail = d.pic ? (d.pic.startsWith('http') ? d.pic : 'https:' + d.pic) : null;
       }
     } catch {}
   }
 
-  if (title === 'Bilibili Video' || !thumbnail) {
+  if (bvid && cid) {
     try {
-      const htmlRes = await axios.get(targetUrl, {
-        headers: { 'User-Agent': 'facebookexternalhit/1.1 (+https://www.facebook.com/externalhit_uatext.php)' },
-        timeout: 8000
-      });
-      const $ = cheerio.load(htmlRes.data);
-      title = $('meta[property="og:title"]').attr('content') || $('title').text().trim() || title;
-      author = $('meta[name="author"]').attr('content') || author;
-      if (!thumbnail) thumbnail = $('meta[property="og:image"]').attr('content') || null;
+      const playRes = await axios.get(
+        `https://api.bilibili.com/x/player/playurl?bvid=${bvid}&cid=${cid}&qn=80&fnval=1&platform=html5&high_quality=1`,
+        {
+          headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://www.bilibili.com/' },
+          timeout: 8000
+        }
+      );
+      const durl = playRes.data?.data?.durl;
+      if (Array.isArray(durl) && durl[0]?.url) {
+        playableUrl = durl[0].url;
+      }
     } catch {}
   }
 
-  return {
-    success: true,
-    platform: 'Bilibili',
-    mediaType: 'video',
-    isSlide: false,
-    title,
-    author,
-    thumbnail,
-    duration: 'HD',
-    photos: [],
-    hasPhotos: false,
-    videoSlides: [],
-    hasVideoSlides: false,
-    liveWallpapers: [],
-    hasLiveWallpapers: false,
-    musicInfo: { title, author, url: targetUrl },
-    downloadLinks: [
-      {
-        id: '1080p',
-        label: 'Resolusi HD 1080p (Anime Master)',
-        quality: '1080p Full HD',
-        url: targetUrl,
-        type: 'video',
-        extension: 'mp4',
-        filename: `bilibili_${bvid || Date.now()}_1080p.mp4`
-      },
-      {
-        id: '720p',
-        label: 'Resolusi HD 720p',
-        quality: '720p Standard HD',
-        url: targetUrl,
-        type: 'video',
-        extension: 'mp4',
-        filename: `bilibili_${bvid || Date.now()}_720p.mp4`
-      },
-      {
-        id: 'audio',
-        label: 'Audio MP3 Soundtrack',
-        quality: '320kbps Audio',
-        url: targetUrl,
-        type: 'audio',
-        extension: 'mp3',
-        filename: `bilibili_${bvid || Date.now()}_soundtrack.mp3`
-      }
-    ]
-  };
+  if (playableUrl) {
+    return {
+      success: true,
+      platform: 'Bilibili',
+      mediaType: 'video',
+      isSlide: false,
+      title,
+      author,
+      thumbnail,
+      duration: 'HD',
+      photos: [],
+      hasPhotos: false,
+      videoSlides: [],
+      hasVideoSlides: false,
+      liveWallpapers: [],
+      hasLiveWallpapers: false,
+      musicInfo: { title, author, url: playableUrl },
+      downloadLinks: [
+        {
+          id: '1080p',
+          label: 'Resolusi HD 1080p (Anime Master)',
+          quality: '1080p Full HD',
+          url: playableUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `bilibili_${bvid || Date.now()}_1080p.mp4`
+        },
+        {
+          id: '720p',
+          label: 'Resolusi HD 720p',
+          quality: '720p Standard HD',
+          url: playableUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `bilibili_${bvid || Date.now()}_720p.mp4`
+        },
+        {
+          id: 'audio',
+          label: 'Audio MP3 Soundtrack',
+          quality: '128kbps Audio',
+          url: playableUrl,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `bilibili_${bvid || Date.now()}_soundtrack.mp3`
+        }
+      ]
+    };
+  }
+
+  const sn = await scrapeViaSaveNow(targetUrl, ['1080', '720', 'mp3'], title, author);
+  if (sn && sn.downloadLinks?.length > 0) {
+    return {
+      success: true,
+      platform: 'Bilibili',
+      mediaType: 'video',
+      isSlide: false,
+      ...sn,
+      thumbnail: sn.thumbnail || thumbnail
+    };
+  }
+
+  throw new Error('Tidak dapat mengambil stream video Bilibili (hanya berlaku untuk video publik non-DRM).');
 }
 
 // Ekstraksi Douyin Video & Slide Foto
@@ -2453,12 +2654,31 @@ async function downloadTerabox(rawUrl) {
       directUrl = directMatch[1].replace(/\\/g, '');
     }
 
+    if (!directUrl && surl) {
+      try {
+        const infoRes = await axios.get(`https://www.terabox.com/api/shorturlinfo?shorturl=${encodeURIComponent(surl)}&root=1`, {
+          headers: { 'User-Agent': UA_DESKTOP, 'Referer': targetUrl },
+          timeout: 8000
+        });
+        const firstFile = infoRes.data?.list?.[0];
+        if (firstFile?.dlink) directUrl = firstFile.dlink;
+      } catch {}
+    }
+
+    if (!directUrl) {
+      const sn = await scrapeViaSaveNow(targetUrl, ['1080', '720'], title, 'TeraBox Cloud');
+      if (sn && sn.downloadLinks?.length > 0) {
+        return { success: true, platform: 'Terabox', mediaType: 'video', isSlide: false, ...sn };
+      }
+      throw new Error('Link Terabox memerlukan login atau tidak mengekspos tautan unduhan langsung publik.');
+    }
+
     const downloadLinks = [
       {
         id: '1080p',
         label: 'Unduh File Asli HD (Direct Cloud)',
         quality: 'Original Master High-Speed',
-        url: directUrl || targetUrl,
+        url: directUrl,
         type: 'video',
         extension: 'mp4',
         filename: `terabox_${surl || Date.now()}.mp4`
@@ -2467,7 +2687,7 @@ async function downloadTerabox(rawUrl) {
         id: '720p',
         label: 'Unduh Standar (720p)',
         quality: 'Standard 720p',
-        url: directUrl || targetUrl,
+        url: directUrl,
         type: 'video',
         extension: 'mp4',
         filename: `terabox_${surl || Date.now()}_720p.mp4`
@@ -2476,7 +2696,7 @@ async function downloadTerabox(rawUrl) {
         id: 'audio',
         label: 'Audio MP3 Ekstrak',
         quality: '320kbps Audio',
-        url: directUrl || targetUrl,
+        url: directUrl,
         type: 'audio',
         extension: 'mp3',
         filename: `terabox_${surl || Date.now()}_audio.mp3`
@@ -2504,6 +2724,165 @@ async function downloadTerabox(rawUrl) {
   } catch (err) {
     throw new Error(`Gagal mengekstrak media Terabox: ${err.message}. Pastikan tautan masih aktif dan publik.`);
   }
+}
+
+// Ekstraksi CapCut Template & Video Tanpa Watermark
+async function downloadCapCut(rawUrl) {
+  const targetUrl = await resolveShortRedirectUrl(rawUrl, UA_DESKTOP);
+  const idMatch = targetUrl.match(/(?:template-detail|watch|t)\/([a-zA-Z0-9_-]+)/i);
+  const templateId = idMatch ? idMatch[1] : `${Date.now()}`;
+
+  try {
+    const res = await axios.get(targetUrl, {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      maxRedirects: 8,
+      timeout: 10000
+    });
+    const html = typeof res.data === 'string' ? res.data : '';
+    const $ = cheerio.load(html);
+
+    const title = $('meta[property="og:title"]').attr('content') || $('title').text().trim().replace(/\s*\|\s*CapCut.*/i, '') || 'CapCut Template Video';
+    const thumbnail = $('meta[property="og:image"]').attr('content') || null;
+    let videoUrl = $('meta[property="og:video"]').attr('content') || $('meta[property="og:video:secure_url"]').attr('content') || null;
+
+    if (!videoUrl) {
+      const m = html.match(/"video_url"\s*:\s*"([^"]+)"/) || html.match(/"videoUrl"\s*:\s*"([^"]+)"/) || html.match(/https?:\/\/[^\s"'\\]+capcutcdn\.com[^\s"'\\]+\.mp4[^\s"'\\]*/i);
+      if (m) {
+        videoUrl = (m[1] || m[0]).replace(/\\u002F/gi, '/').replace(/\\u0026/gi, '&').replace(/\\/g, '');
+      }
+    }
+
+    if (videoUrl && videoUrl.startsWith('http')) {
+      return {
+        success: true,
+        platform: 'CapCut',
+        mediaType: 'video',
+        isSlide: false,
+        title,
+        author: 'CapCut Creator',
+        thumbnail,
+        downloadLinks: [
+          {
+            id: '1080p',
+            label: 'Video CapCut HD 1080p (No Watermark)',
+            quality: '1080p Full HD',
+            url: videoUrl,
+            type: 'video',
+            extension: 'mp4',
+            filename: `capcut_${templateId}_1080p.mp4`
+          },
+          {
+            id: 'audio',
+            label: 'Audio MP3 Template',
+            quality: '128kbps Audio',
+            url: videoUrl,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `capcut_${templateId}_audio.mp3`
+          }
+        ],
+        musicInfo: { title, author: 'CapCut Creator', url: videoUrl }
+      };
+    }
+  } catch {}
+
+  const sn = await scrapeViaSaveNow(targetUrl, ['1080', '720', 'mp3'], 'CapCut Video', 'CapCut Creator');
+  if (sn && sn.downloadLinks?.length > 0) {
+    return { success: true, platform: 'CapCut', ...sn };
+  }
+  throw new Error('Gagal mengekstrak video CapCut. Pastikan tautan template bersifat publik.');
+}
+
+// Ekstraksi SoundCloud Track MP3 & Cover Artwork
+async function downloadSoundCloud(rawUrl) {
+  const targetUrl = await resolveShortRedirectUrl(rawUrl, UA_DESKTOP);
+
+  let title = 'SoundCloud Track';
+  let author = 'SoundCloud Artist';
+  let thumbnail = null;
+  let audioUrl = null;
+
+  try {
+    const oe = await axios.get(`https://soundcloud.com/oembed?format=json&url=${encodeURIComponent(targetUrl)}`, { timeout: 7000 });
+    if (oe.data?.title) title = oe.data.title;
+    if (oe.data?.author_name) author = oe.data.author_name;
+    if (oe.data?.thumbnail_url) thumbnail = oe.data.thumbnail_url.replace(/-large\./, '-t500x500.');
+  } catch {}
+
+  try {
+    const htmlRes = await axios.get(targetUrl, {
+      headers: { 'User-Agent': UA_DESKTOP },
+      timeout: 10000
+    });
+    const html = typeof htmlRes.data === 'string' ? htmlRes.data : '';
+    const hydMatch = html.match(/window\.__sc_hydration\s*=\s*(\[[\s\S]*?\]);<\/script>/);
+    const clientMatch = html.match(/client_id=([a-zA-Z0-9]{20,40})/) || html.match(/"client_id"\s*:\s*"([a-zA-Z0-9]{20,40})"/);
+    const clientId = clientMatch ? clientMatch[1] : null;
+
+    if (hydMatch) {
+      const hyd = JSON.parse(hydMatch[1]);
+      const soundObj = hyd.find((x) => x.hydratable === 'sound')?.data;
+      if (soundObj) {
+        title = soundObj.title || title;
+        author = soundObj.user?.username || author;
+        if (soundObj.artwork_url) thumbnail = soundObj.artwork_url.replace('-large', '-t500x500');
+        const progTranscoding = soundObj.media?.transcodings?.find((t) => t.format?.protocol === 'progressive');
+        if (progTranscoding?.url && clientId) {
+          const streamMeta = await axios.get(`${progTranscoding.url}?client_id=${clientId}`, { timeout: 7000 });
+          if (streamMeta.data?.url) audioUrl = streamMeta.data.url;
+        }
+      }
+    }
+  } catch {}
+
+  const downloadLinks = [];
+  if (audioUrl) {
+    downloadLinks.push({
+      id: 'audio',
+      label: 'Audio MP3 SoundCloud (Original)',
+      quality: 'MP3 Stream Original',
+      url: audioUrl,
+      type: 'audio',
+      extension: 'mp3',
+      filename: `soundcloud_${Date.now()}.mp3`
+    });
+  }
+  if (thumbnail) {
+    downloadLinks.push({
+      id: 'cover_art',
+      label: 'Cover Artwork HD',
+      quality: '500x500 Artwork',
+      url: thumbnail,
+      type: 'image',
+      extension: 'jpg',
+      filename: `soundcloud_artwork_${Date.now()}.jpg`
+    });
+  }
+
+  if (downloadLinks.length > 0) {
+    return {
+      success: true,
+      platform: 'SoundCloud',
+      mediaType: 'video',
+      isSlide: false,
+      title,
+      author,
+      thumbnail,
+      photos: thumbnail ? [downloadLinks.find((d) => d.type === 'image')] : [],
+      hasPhotos: Boolean(thumbnail),
+      musicInfo: audioUrl ? { title, author, url: audioUrl } : null,
+      downloadLinks
+    };
+  }
+
+  const sn = await scrapeViaSaveNow(targetUrl, ['mp3'], title, author);
+  if (sn && sn.downloadLinks?.length > 0) {
+    return { success: true, platform: 'SoundCloud', ...sn };
+  }
+  throw new Error('Gagal mengekstrak trek SoundCloud. Pastikan trek bersifat publik dan dapat diputar.');
 }
 
 async function downloadGenericPlatform(url, platformName) {
@@ -2624,28 +3003,9 @@ export default async function handler(req, res) {
   if (!platform) {
     return res.status(400).json({
       success: false,
-      message: 'URL tidak dikenali. Layanan ini mendukung 16 platform: TikTok, Instagram, YouTube, X (Twitter), Spotify, Bilibili, Douyin, Rednote, Threads, Pinterest, Apple Music, Facebook, Bandcamp, Pixiv, Reddit, dan Terabox.'
+      message: 'URL tidak dikenali. Layanan ini mendukung 18 platform: TikTok, Instagram, YouTube, X (Twitter), Spotify, Bilibili, Douyin, Rednote, Threads, Pinterest, Apple Music, Facebook, Bandcamp, Pixiv, Reddit, Terabox, CapCut, dan SoundCloud.'
     });
   }
-
-  const PLATFORM_NAMES = {
-    tiktok: 'TikTok',
-    instagram: 'Instagram',
-    twitter: 'X (Twitter)',
-    youtube: 'YouTube',
-    facebook: 'Facebook',
-    reddit: 'Reddit',
-    pinterest: 'Pinterest',
-    bilibili: 'Bilibili',
-    douyin: 'Douyin',
-    bandcamp: 'Bandcamp',
-    threads: 'Threads',
-    spotify: 'Spotify',
-    appleMusic: 'Apple Music',
-    pixiv: 'Pixiv',
-    rednote: 'Rednote',
-    terabox: 'Terabox'
-  };
 
   if (expectedPlatform && expectedPlatform !== platform) {
     return res.status(400).json({
@@ -2672,6 +3032,8 @@ export default async function handler(req, res) {
     else if (platform === 'bandcamp') data = await downloadBandcamp(cleaned);
     else if (platform === 'pixiv') data = await downloadPixiv(cleaned);
     else if (platform === 'terabox') data = await downloadTerabox(cleaned);
+    else if (platform === 'capcut') data = await downloadCapCut(cleaned);
+    else if (platform === 'soundcloud') data = await downloadSoundCloud(cleaned);
     else data = await downloadGenericPlatform(cleaned, PLATFORM_NAMES[platform] || 'Media');
 
     // Normalisasi agar setiap video reguler selalu memiliki opsi 4K, 1080p, 720p, dan MP3
@@ -2691,6 +3053,7 @@ export default async function handler(req, res) {
           label: '4K Ultra HD (2160p Jernih Maksimal)',
           quality: '4K Ultra HD (2160p)',
           url: masterVid.url,
+          fileSize: masterVid.fileSize || 0,
           type: 'video',
           extension: 'mp4',
           filename: `${platform}_${data.id || Date.now()}_4k.mp4`
@@ -2701,6 +3064,7 @@ export default async function handler(req, res) {
           label: 'Resolusi HD 1080p (Status WA Anti-Burik)',
           quality: '1080p (Full HD)',
           url: masterVid.url,
+          fileSize: masterVid.fileSize || 0,
           type: 'video',
           extension: 'mp4',
           filename: `${platform}_${data.id || Date.now()}_1080p.mp4`
@@ -2711,6 +3075,7 @@ export default async function handler(req, res) {
           label: 'Resolusi HD 720p (Standar Cepat)',
           quality: '720p (Standard HD)',
           url: masterVid.url,
+          fileSize: masterVid.fileSize || 0,
           type: 'video',
           extension: 'mp4',
           filename: `${platform}_${data.id || Date.now()}_720p.mp4`
@@ -2735,11 +3100,11 @@ export default async function handler(req, res) {
       }
     }
 
-    // Format proxy URL untuk download mobile langsung ke penyimpanan/galeri & streamUrl untuk inline streaming
+    // Format proxy URL (GET fallback) & streamUrl (inline preview)
     if (data?.downloadLinks) {
       data.downloadLinks = data.downloadLinks.map(item => ({
         ...item,
-        proxyUrl: `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(item.filename || (item.type === 'audio' ? 'kaze_audio.mp3' : 'kaze_media.mp4'))}`,
+        proxyUrl: `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(item.filename || (item.type === 'audio' ? 'kuro_audio.mp3' : 'kuro_media.mp4'))}`,
         streamUrl: (item.type === 'video' || item.type === 'audio')
           ? `/api/proxy-stream?url=${encodeURIComponent(item.url)}&type=${item.type}`
           : undefined
@@ -2747,14 +3112,14 @@ export default async function handler(req, res) {
     }
 
     if (data?.musicInfo && data.musicInfo.url) {
-      data.musicInfo.proxyUrl = `/api/proxy-download?url=${encodeURIComponent(data.musicInfo.url)}&filename=tiktok_audio.mp3`;
+      data.musicInfo.proxyUrl = `/api/proxy-download?url=${encodeURIComponent(data.musicInfo.url)}&filename=${encodeURIComponent(`${platform}_audio.mp3`)}`;
       data.musicInfo.streamUrl = `/api/proxy-stream?url=${encodeURIComponent(data.musicInfo.url)}&type=audio`;
     }
 
     if (data?.photos && Array.isArray(data.photos)) {
       data.photos = data.photos.map((item, idx) => ({
         ...item,
-        proxyUrl: `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(item.filename || `kuro_photo_${idx + 1}.jpg`)}`
+        proxyUrl: `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(item.filename || `kuro_photo_${idx + 1}.${item.extension || 'jpg'}`)}`
       }));
     }
 
@@ -2775,6 +3140,8 @@ export default async function handler(req, res) {
           : undefined
       }));
     }
+
+    data = attachNormalizedSchema(data, platform);
 
     return res.status(200).json({ success: true, data });
   } catch (error) {

@@ -372,18 +372,29 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   const videoPreviewUrl = primaryVideoSource?.streamUrl || primaryVideoSource?.url;
   const activeSlide = activeSlideList[currentSlideIndex] || activeSlideList[0];
 
-  // Proses canvas client-side agar foto pas ukuran 1080p native Status WA (anti-burik)
+  // Proses canvas client-side agar foto pas ukuran 1080p native Status WA (anti-burik) via POST proxy anti-HTTP 400
   const processImageResolution = async (imageUrl, targetRes = '1080p') => {
     return new Promise((resolve) => {
-      if (targetRes === '2160p') {
+      if (targetRes === '2160p' || /\.gif(\?|$)/i.test(imageUrl || '')) {
         resolve(null);
         return;
       }
 
-      const proxyUrl = `/api/proxy-download?url=${encodeURIComponent(imageUrl)}&filename=image_temp.jpg`;
-      fetch(proxyUrl)
-        .then(res => res.blob())
+      fetch('/api/proxy-download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: imageUrl,
+          filename: 'image_temp.jpg',
+          platform: result?.platformName || result?.platform || ''
+        })
+      })
+        .then(res => (res.ok && !(res.headers.get('content-type') || '').includes('text/html') ? res.blob() : null))
         .then(blob => {
+          if (!blob || blob.size === 0) {
+            resolve(null);
+            return;
+          }
           const blobObjUrl = URL.createObjectURL(blob);
           const img = new Image();
           img.onload = () => {
@@ -445,27 +456,31 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     });
   };
 
-  // State error/toast untuk proxy download
+  // State error & metrik stream untuk proxy download
   const [proxyError, setProxyError] = useState('');
 
-  // Pemicu unduhan via /api/proxy-download dengan validasi content-type anti-HTML,
-  // fallback otomatis ke wa-backend jika Vercel gagal, dan state loading per tombol.
-  const triggerNativeDownload = async (url, filename, mediaId = null) => {
+  // Pemicu unduhan 3-lapis (Direct CORS -> Vercel POST -> Render Zero-Disk POST)
+  const triggerNativeDownload = async (rawUrl, filename, mediaId = null) => {
     const id = mediaId || filename || 'dl';
     setDownloadingId(id);
     setProxyError('');
-    setDownloadProgress(prev => ({ ...prev, [id]: 20 }));
+    setDownloadProgress(prev => ({ ...prev, [id]: 12 }));
 
     try {
       await downloadMediaViaProxy({
-        url,
+        url: rawUrl,
         filename,
-        onLoading: () => setDownloadProgress(prev => ({ ...prev, [id]: 60 })),
+        platform: result?.platformName || result?.platform || '',
+        onProgress: ({ percent }) => {
+          if (typeof percent === 'number') {
+            setDownloadProgress(prev => ({ ...prev, [id]: Math.max(prev[id] || 12, percent) }));
+          }
+        },
         onError: (msg) => setProxyError(msg),
       });
       setDownloadProgress(prev => ({ ...prev, [id]: 100 }));
     } catch {
-      // onError sudah dipanggil di dalam downloadMediaViaProxy
+      // onError sudah menampilkan toast di halaman
     } finally {
       setTimeout(() => {
         setDownloadingId(null);
@@ -474,18 +489,26 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
           delete next[id];
           return next;
         });
-      }, 700);
+      }, 750);
     }
   };
 
   const downloadPhotoSlide = async (slideItem, index) => {
     if (!slideItem) return;
     const slideId = `slide_${slideItem.id || index}`;
+    const isGif = slideItem.type === 'gif' || slideItem.extension === 'gif' || slideItem.mediaType === 'gif';
+    if (isGif) {
+      await downloadToDevice(slideItem, slideItem.filename || `slide_${index + 1}.gif`, slideId);
+      return;
+    }
+
     setDownloadingId(slideId);
+    setProxyError('');
     setDownloadProgress(prev => ({ ...prev, [slideId]: 15 }));
 
     const resLabel = selectedPhotoRes === '2160p' ? '4k' : selectedPhotoRes === '1080p' ? '1080p_sw' : '720p';
-    const filename = `slide_${index + 1}_${resLabel}.jpg`;
+    const ext = slideItem.extension || 'jpg';
+    const filename = `slide_${index + 1}_${resLabel}.${ext}`;
 
     try {
       setDownloadProgress(prev => ({ ...prev, [slideId]: 45 }));
@@ -510,10 +533,10 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
           });
         }, 600);
       } else {
-        downloadToDevice(slideItem, filename, slideId);
+        await downloadToDevice(slideItem, filename, slideId);
       }
     } catch {
-      downloadToDevice(slideItem, filename, slideId);
+      await downloadToDevice(slideItem, filename, slideId);
     }
   };
 
@@ -537,12 +560,12 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       addGalleryItem({
         title,
         type: isAud ? 'audio' : isVid ? 'video' : 'image',
-        category: `Downloader (${result.platform || (isVid ? 'Video' : 'Foto')})`,
+        category: `Downloader (${result.platformName || result.platform || (isVid ? 'Video' : 'Foto')})`,
         extension: ext.toUpperCase(),
         size: mediaItem.quality || (isVid ? 'HD Video' : isAud ? '128kbps' : 'HD Foto'),
-        thumbnail: mediaItem.thumbnail || (mediaItem.type === 'image' || mediaItem.type === 'photo' ? mediaItem.url : result.thumbnail),
+        thumbnail: mediaItem.thumbnail || (mediaItem.type === 'image' || mediaItem.type === 'photo' || mediaItem.type === 'gif' ? mediaItem.url : result.thumbnail),
         previewUrl: isVid ? (mediaItem.streamUrl || mediaItem.url) : mediaItem.url,
-        downloadData: mediaItem.proxyUrl || mediaItem.url,
+        downloadData: mediaItem.url || mediaItem.proxyUrl,
         filename: finalFilename
       });
     } catch (e) {
@@ -550,20 +573,21 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     }
   };
 
-  // Mengunduh media langsung ke folder Downloads perangkat tanpa izin manual
-  const downloadToDevice = (mediaItem, customFilename = null, explicitId = null) => {
+  // Mengunduh media langsung ke perangkat melalui jalur POST proxy 3-lapis anti-HTTP 400
+  const downloadToDevice = async (mediaItem, customFilename = null, explicitId = null) => {
     if (!mediaItem) return;
     const mediaId = explicitId || mediaItem.id || mediaItem.type || 'media';
-    setDownloadingId(mediaId);
-    setDownloadProgress(prev => ({ ...prev, [mediaId]: 25 }));
 
     const ext = mediaItem.extension || (
+      mediaItem.type === 'gif' ? 'gif' :
       mediaItem.type === 'image' || mediaItem.type === 'photo' ? 'jpg' :
       mediaItem.type === 'audio' ? 'mp3' : 'mp4'
     );
 
     const filename = customFilename || mediaItem.filename || (
-      mediaItem.type === 'image' || mediaItem.type === 'photo'
+      mediaItem.type === 'gif'
+        ? `kuro_gif_${Date.now()}.${ext}`
+        : mediaItem.type === 'image' || mediaItem.type === 'photo'
         ? `kuro_photo_${Date.now()}.${ext}` 
         : mediaItem.type === 'audio' 
         ? `kuro_audio_${Date.now()}.mp3` 
@@ -572,31 +596,11 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
         : `kuro_video_${Date.now()}.${ext}`
     );
 
-    let proxyUrl = mediaItem.proxyUrl 
-      || `/api/proxy-download?url=${encodeURIComponent(mediaItem.url)}&filename=${encodeURIComponent(filename)}`;
-    if (mediaItem.id && !proxyUrl.includes('resolution=')) {
-      proxyUrl += `&resolution=${encodeURIComponent(mediaItem.id)}`;
-    }
-
-    // Catat ke Galeri perangkat lokal
     recordMediaInGallery(mediaItem, filename, mediaId);
-
-    // Langsung picu unduhan native browser agar masuk ke memori/folder Downloads tanpa jeda timeout async
-    setDownloadProgress(prev => ({ ...prev, [mediaId]: 70 }));
-    triggerNativeDownload(proxyUrl, filename, mediaId);
-
-    setDownloadProgress(prev => ({ ...prev, [mediaId]: 100 }));
-    setTimeout(() => {
-      setDownloadingId(null);
-      setDownloadProgress(prev => {
-        const next = { ...prev };
-        delete next[mediaId];
-        return next;
-      });
-    }, 600);
+    await triggerNativeDownload(mediaItem.url, filename, mediaId);
   };
 
-  // Mengunduh seluruh slide secara berurutan sebagai file satuan (.jpg/.mp4) langsung ke folder Downloads
+  // Mengunduh seluruh slide secara berurutan sebagai file satuan (.jpg/.gif/.mp4)
   const handleDownloadAllSlidesSequential = async () => {
     if (!allSlidesToDownload || allSlidesToDownload.length === 0) return;
     setDownloadingAllSlides(true);
@@ -607,47 +611,44 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
       for (let i = 0; i < total; i++) {
         const item = allSlidesToDownload[i];
         const isVid = item.type === 'video' || item.type === 'live_wallpaper';
-        const ext = item.extension || (isVid ? 'mp4' : 'jpg');
+        const isGif = item.type === 'gif' || item.extension === 'gif' || item.mediaType === 'gif';
+        const ext = item.extension || (isGif ? 'gif' : isVid ? 'mp4' : 'jpg');
         const resLabel = selectedPhotoRes === '2160p' ? '4k' : selectedPhotoRes === '1080p' ? '1080p_sw' : '720p';
         const filename = item.filename || (
-          isVid ? `video_slide_${i + 1}.${ext}` : `slide_${i + 1}_${resLabel}.${ext}`
+          isGif ? `slide_gif_${i + 1}.${ext}` : isVid ? `video_slide_${i + 1}.${ext}` : `slide_${i + 1}_${resLabel}.${ext}`
         );
 
         setDownloadAllProgressText(
           isEn 
-            ? `Downloading ${i + 1} of ${total} (${isVid ? 'Video' : 'Photo'})...` 
-            : `Mengunduh ${i + 1} dari ${total} (${isVid ? 'Video' : 'Foto'})...`
+            ? `Downloading ${i + 1} of ${total} (${isGif ? 'GIF' : isVid ? 'Video' : 'Photo'})...` 
+            : `Mengunduh ${i + 1} dari ${total} (${isGif ? 'GIF' : isVid ? 'Video' : 'Foto'})...`
         );
 
-        // Jika foto dan resolusi status WA dipilih, proses resolusi terlebih dahulu
-        if (!isVid && selectedPhotoRes !== '2160p') {
+        // Lewati resize canvas pada Video/GIF agar animasi tetap terjaga
+        if (!isVid && !isGif && selectedPhotoRes !== '2160p') {
           try {
             const procBlob = await processImageResolution(item.url, selectedPhotoRes);
             if (procBlob && procBlob.size > 0) {
               downloadBlob(procBlob, filename);
               recordMediaInGallery(item, filename, `slide_${i + 1}`);
-              await new Promise(r => setTimeout(r, 450));
+              await new Promise(r => setTimeout(r, 350));
               continue;
             }
           } catch {}
         }
 
-        const proxyUrl = item.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(item.url)}&filename=${encodeURIComponent(filename)}`;
-        triggerNativeDownload(proxyUrl, filename);
+        await triggerNativeDownload(item.url, filename, `slide_bulk_${i + 1}`);
         recordMediaInGallery(item, filename, `slide_${i + 1}`);
-
-        // Beri jeda 450ms antar unduhan agar browser menangani unduhan berkas satu per satu dengan tertib
-        await new Promise(r => setTimeout(r, 450));
+        await new Promise(r => setTimeout(r, 350));
       }
 
       // Jika ada audio trek, unduh juga sebagai file audio satuan
       if (activeAudio && activeAudio.url) {
         setDownloadAllProgressText(isEn ? 'Downloading audio track...' : 'Mengunduh musik...');
         const audioFilename = activeAudio.filename || `slide_audio_${Date.now()}.mp3`;
-        const audioProxyUrl = activeAudio.proxyUrl || `/api/proxy-download?url=${encodeURIComponent(activeAudio.url)}&filename=${encodeURIComponent(audioFilename)}`;
-        triggerNativeDownload(audioProxyUrl, audioFilename);
+        await triggerNativeDownload(activeAudio.url, audioFilename, 'audio_bulk');
         recordMediaInGallery(activeAudio, audioFilename, 'audio');
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 350));
       }
 
       setDownloadAllProgressText(isEn ? 'All files downloaded!' : 'Semua slide berhasil diunduh!');
@@ -1001,6 +1002,11 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                   <Film className="w-3 h-3 stroke-[2.5]" />
                   <span>VIDEO SLIDE</span>
                 </>
+              ) : (activeSlide?.type === 'gif' || activeSlide?.extension === 'gif') ? (
+                <>
+                  <Sparkles className="w-3 h-3 stroke-[2.5]" />
+                  <span>GIF ANIMASI</span>
+                </>
               ) : activeSlide?.type === 'live_wallpaper' ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-black inline-block animate-ping" />
@@ -1117,8 +1123,10 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
               return (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (activeSlide.type === 'photo' || activeSlide.type === 'image') {
+                    onClick={() => {
+                    if (activeSlide.type === 'gif' || activeSlide.extension === 'gif') {
+                      downloadToDevice(activeSlide, activeSlide.filename || `slide_${currentSlideIndex + 1}.gif`, slideId);
+                    } else if (activeSlide.type === 'photo' || activeSlide.type === 'image') {
                       downloadPhotoSlide(activeSlide, currentSlideIndex);
                     } else {
                       downloadToDevice(activeSlide, activeSlide.filename, slideId);
@@ -1141,7 +1149,9 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
                   <span className="relative z-10 font-bold">
                     {isSlideDownloading ? (
                       `Mengunduh... ${slidePercent}%`
-                    ) : activeSlide.type === 'video'
+                    ) : (activeSlide.type === 'gif' || activeSlide.extension === 'gif')
+                      ? `Unduh GIF Asli (#${currentSlideIndex + 1})`
+                      : activeSlide.type === 'video'
                       ? (isEn ? `Download Slide Ini (Video #${currentSlideIndex + 1})` : `Unduh Slide Ini (Video #${currentSlideIndex + 1})`)
                       : activeSlide.type === 'live_wallpaper'
                       ? (isEn ? `Download Slide Ini (Live Wallpaper #${currentSlideIndex + 1})` : `Unduh Slide Ini (Live Wallpaper #${currentSlideIndex + 1})`)
@@ -1250,7 +1260,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="px-2 py-0.5 rounded text-xs font-mono font-bold border border-black bg-neutral-100 text-black">
-                  {result.platform || 'Video HD'}
+                  {result.platformName || result.platform || 'Video HD'}
                 </span>
                 <span className="px-2 py-0.5 rounded text-xs font-mono font-bold border border-black bg-black text-white">
                   {isEn ? 'Watermark Free' : 'Bebas Watermark'}

@@ -220,80 +220,184 @@ export async function downloadFromUrl(fileUrl, filename = 'kuro_download') {
   return { ok: true, filename: safeName, fallbackAnchor: true };
 }
 
+const CORS_FRIENDLY_HOSTS = ['pbs.twimg.com', 'f4.bcbits.com', 'i.scdn.co', 'mzstatic.com'];
+
+function isCorsFriendlyUrl(targetUrl) {
+  try {
+    const host = new URL(targetUrl).hostname.toLowerCase();
+    return CORS_FRIENDLY_HOSTS.some((h) => host === h || host.endsWith('.' + h));
+  } catch {
+    return false;
+  }
+}
+
+function getBackupBackendBaseUrl() {
+  const nativeBase = getApiBaseUrl();
+  const waEnvBase = (import.meta?.env?.VITE_WA_BACKEND_URL || '').trim().replace(/\/+$/, '');
+  if (waEnvBase) return waEnvBase;
+  if (nativeBase && typeof window !== 'undefined' && nativeBase !== window.location.origin) {
+    return nativeBase;
+  }
+  if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname)) {
+    return 'http://localhost:4000';
+  }
+  return '';
+}
+
+async function readStreamToBlob(res, onProgress) {
+  const totalHeader = Number(res.headers.get('content-length') || res.headers.get('x-file-size') || 0);
+  const contentType = res.headers.get('content-type') || 'application/octet-stream';
+
+  if (!res.body || typeof res.body.getReader !== 'function') {
+    const blob = await res.blob();
+    onProgress?.({ percent: 100, loadedBytes: blob.size, totalBytes: blob.size });
+    return blob;
+  }
+
+  const reader = res.body.getReader();
+  const chunks = [];
+  let loaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value && value.byteLength > 0) {
+      chunks.push(value);
+      loaded += value.byteLength;
+      if (onProgress) {
+        const pct = totalHeader > 0
+          ? Math.min(98, Math.max(10, Math.round((loaded / totalHeader) * 100)))
+          : Math.min(92, 15 + Math.round(loaded / (256 * 1024)) * 5);
+        onProgress({ percent: pct, loadedBytes: loaded, totalBytes: totalHeader || loaded });
+      }
+    }
+  }
+
+  onProgress?.({ percent: 99, loadedBytes: loaded, totalBytes: totalHeader || loaded });
+  return new Blob(chunks, { type: contentType });
+}
+
 /**
- * downloadMediaViaProxy — Unduh media dari URL eksternal (TikTok, IG, YT, dll.)
- * melalui /api/proxy-download dengan validasi content-type anti-HTML,
- * fallback ke wa-backend jika Vercel gagal, dan state loading untuk UI.
- *
- * @param {object} options
- * @param {string} options.url            - URL CDN media target
- * @param {string} [options.filename]     - Nama file tujuan (tanpa harus ada ekstensi)
- * @param {function} [options.onLoading]  - Callback(true/false) untuk state loading tombol
- * @param {function} [options.onError]    - Callback(message) untuk tampil toast error
- * @returns {Promise<{ok:boolean, filename?:string, sizeBytes?:number}>}
+ * downloadMediaViaProxy — Unduh media 3-lapis tahan HTTP 400/413:
+ *   1. Direct CORS (khusus host ramah CORS, hemat server)
+ *   2. Vercel POST /api/proxy-download (stream dengan Content-Length progress)
+ *   3. Auto-fallback Render POST ${WA_BACKEND_URL}/api/proxy-download (untuk video HD > 4.5 MB)
  */
-export async function downloadMediaViaProxy({ url, filename = 'kuro-media', onLoading, onError } = {}) {
+export async function downloadMediaViaProxy({
+  url,
+  filename = 'kuro-media',
+  platform = '',
+  referer = '',
+  allowDirectCors = true,
+  onLoading,
+  onProgress,
+  onError
+} = {}) {
   if (!url || typeof url !== 'string' || !url.trim()) {
     const msg = 'URL media tidak valid atau kosong.';
     onError?.(msg);
     throw new Error(msg);
   }
 
-  const urlExtMatch = url.split('?')[0].split('#')[0].match(/\.([a-zA-Z0-9]{2,8})$/);
+  // Ekstrak raw URL jika caller telanjur mengirim `/api/proxy-download?url=...`
+  let targetUrl = url.trim();
+  if (targetUrl.startsWith('/api/proxy-download') || targetUrl.startsWith('/api/proxy-stream')) {
+    try {
+      const parsedProxy = new URL(targetUrl, window.location.origin);
+      const inner = parsedProxy.searchParams.get('url');
+      if (inner) targetUrl = inner.trim();
+    } catch {}
+  }
+
+  const urlExtMatch = targetUrl.split('?')[0].split('#')[0].match(/\.([a-zA-Z0-9]{2,8})$/);
   const fallbackExt = urlExtMatch ? urlExtMatch[1].toLowerCase() : 'mp4';
   const safeName = sanitizeFilename(filename, fallbackExt);
 
   onLoading?.(true);
-
-  const proxyEndpoints = [
-    `/api/proxy-download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(safeName)}`,
-  ];
-
-  // Fallback ke wa-backend jika tersedia (untuk video HD besar > 4.5MB yang melebihi limit Vercel)
-  try {
-    const backendBase = getApiBaseUrl();
-    if (backendBase && typeof window !== 'undefined' && backendBase !== window.location.origin) {
-      proxyEndpoints.push(
-        `${backendBase}/api/proxy-download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(safeName)}`
-      );
-    }
-  } catch {
-    // getApiBaseUrl tidak tersedia atau tidak ada backend tambahan — abaikan
-  }
+  onProgress?.({ percent: 8, loadedBytes: 0, totalBytes: 0 });
 
   let lastError = null;
-  for (const proxyUrl of proxyEndpoints) {
+
+  // Lapis 1: Direct CORS cepat khusus domain ramah CORS
+  if (allowDirectCors && isCorsFriendlyUrl(targetUrl)) {
     try {
-      const res = await fetch(proxyUrl);
+      const directRes = await fetch(targetUrl, { method: 'GET', mode: 'cors', signal: AbortSignal.timeout(15000) });
+      const directCt = (directRes.headers.get('content-type') || '').toLowerCase();
+      if (directRes.ok && !directCt.includes('text/html')) {
+        const blob = await readStreamToBlob(directRes, onProgress);
+        if (blob && blob.size > 0) {
+          onProgress?.({ percent: 100, loadedBytes: blob.size, totalBytes: blob.size });
+          onLoading?.(false);
+          return downloadBlob(blob, safeName);
+        }
+      }
+    } catch {}
+  }
 
-      // Tolak jika bukan respons sukses
+  // Susun Lapis 2 (Vercel POST) + Lapis 3 (Render Backend POST fallback)
+  const postTargets = ['/api/proxy-download'];
+  const backupBase = getBackupBackendBaseUrl();
+  if (backupBase) {
+    postTargets.push(`${backupBase}/api/proxy-download`);
+  }
+
+  const payload = JSON.stringify({
+    url: targetUrl,
+    filename: safeName,
+    platform,
+    referer
+  });
+
+  for (const endpoint of postTargets) {
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        signal: AbortSignal.timeout(45000)
+      });
+
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+
       if (!res.ok) {
-        lastError = `Server mengembalikan HTTP ${res.status}`;
+        if (ct.includes('application/json')) {
+          try {
+            const errJson = await res.json();
+            lastError = errJson?.error || errJson?.message || `Server mengembalikan HTTP ${res.status}`;
+          } catch {
+            lastError = `Server mengembalikan HTTP ${res.status}`;
+          }
+        } else {
+          lastError = res.status === 413
+            ? 'Ukuran video melebihi batas serverless, mengalihkan ke jalur streaming cadangan...'
+            : `Server mengembalikan HTTP ${res.status}`;
+        }
         continue;
       }
 
-      // Tolak jika content-type adalah HTML (artinya halaman 404/error, bukan media)
-      const ct = res.headers.get('content-type') || '';
       if (ct.includes('text/html')) {
-        lastError = 'Server mengembalikan halaman HTML, bukan berkas media. Link mungkin kedaluwarsa.';
+        lastError = 'Server mengembalikan halaman HTML, bukan berkas media. Tautan mungkin sudah kedaluwarsa.';
         continue;
       }
 
-      const blob = await res.blob();
+      const blob = await readStreamToBlob(res, onProgress);
       if (!blob || blob.size === 0) {
         lastError = 'Berkas yang diterima kosong (0 byte).';
         continue;
       }
 
+      onProgress?.({ percent: 100, loadedBytes: blob.size, totalBytes: blob.size });
       onLoading?.(false);
       return downloadBlob(blob, safeName);
     } catch (err) {
-      lastError = err?.message || 'Gagal terhubung ke server proxy.';
+      lastError = err?.name === 'TimeoutError'
+        ? 'Koneksi unduhan habis waktu (timeout).'
+        : (err?.message || 'Gagal terhubung ke server proxy.');
     }
   }
 
   onLoading?.(false);
-  const finalMsg = lastError || 'Semua jalur unduhan gagal. Silakan coba lagi atau proses ulang link.';
+  const finalMsg = lastError || 'Tautan unduhan kedaluwarsa atau gagal diambil. Silakan klik Proses Ulang.';
   onError?.(finalMsg);
   throw new Error(finalMsg);
 }

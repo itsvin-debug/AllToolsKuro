@@ -14,6 +14,7 @@ const { PORT, ensureAuthRootDir } = require('./src/config/constants');
 const { sessions, globalMediaDownloadQueue, cleanupOrphanedAuthDirs } = require('./src/state/sessionStore');
 const { startLifecycleTimers } = require('./src/services/sessionLifecycleService');
 const { registerSocketHandlers } = require('./src/handlers/socketHandler');
+const mediaProxyRoute = require('./src/routes/mediaProxyRoute');
 
 ensureAuthRootDir();
 cleanupOrphanedAuthDirs();
@@ -26,10 +27,12 @@ app.use(
     origin: (origin, callback) => {
       callback(null, true);
     },
-    credentials: true
+    credentials: true,
+    exposedHeaders: ['Content-Length', 'Content-Disposition', 'Content-Type', 'X-File-Size']
   })
 );
 app.use(express.json());
+app.use(mediaProxyRoute);
 
 // Endpoint status ringan untuk Render Free Tier & monitoring RAM
 app.get('/ping', (req, res) => {

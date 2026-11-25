@@ -45,10 +45,6 @@
   ],
   "rewrites": [
     {
-      "source": "/api/stalk/image-proxy",
-      "destination": "/api/media?__route=proxy-download&stream=true"
-    },
-    {
       "source": "/api/stalk/(.*)",
       "destination": "/api/media?__route=stalk&platform=$1"
     },

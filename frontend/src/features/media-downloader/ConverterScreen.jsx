@@ -20,7 +20,8 @@ import {
   Flame,
   Radio,
   ExternalLink,
-  ArrowDown
+  ArrowDown,
+  Scissors
 } from 'lucide-react';
 import ResultsSection from './ResultsSection';
 import { translations } from '../../shared/utils/translations';
@@ -45,7 +46,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
     setActivePlatform(initialPlatform);
   }, [initialPlatform]);
 
-  // 16 Platform Medsos & Streaming yang Didukung (Dwibahasa dinamis via translations)
+  // 18 Platform Medsos & Streaming yang Didukung
   const platforms = [
     {
       id: 'tiktok',
@@ -54,7 +55,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
       placeholder: dl.platforms.tiktok.placeholder,
       hint: dl.platforms.tiktok.hint,
       icon: Music2,
-      domains: ['tiktok.com']
+      domains: ['tiktok.com', 'vt.tiktok.com', 'vm.tiktok.com']
     },
     {
       id: 'instagram',
@@ -85,7 +86,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
           <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"></path>
         </svg>
       ),
-      domains: ['x.com', 'twitter.com']
+      domains: ['x.com', 'twitter.com', 't.co', 'fxtwitter.com', 'vxtwitter.com']
     },
     {
       id: 'spotify',
@@ -130,7 +131,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
       placeholder: dl.platforms.threads.placeholder,
       hint: dl.platforms.threads.hint,
       icon: Share2,
-      domains: ['threads.net']
+      domains: ['threads.net', 'threads.com']
     },
     {
       id: 'pinterest',
@@ -139,7 +140,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
       placeholder: dl.platforms.pinterest.placeholder,
       hint: dl.platforms.pinterest.hint,
       icon: ImageIcon,
-      domains: ['pinterest.com', 'pin.it']
+      domains: ['pinterest.', 'pin.it']
     },
     {
       id: 'appleMusic',
@@ -157,7 +158,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
       placeholder: dl.platforms.facebook.placeholder,
       hint: dl.platforms.facebook.hint,
       icon: Play,
-      domains: ['facebook.com', 'fb.watch']
+      domains: ['facebook.com', 'fb.watch', 'fb.com', 'fb.me']
     },
     {
       id: 'bandcamp',
@@ -193,7 +194,25 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
       placeholder: dl.platforms.terabox.placeholder,
       hint: dl.platforms.terabox.hint,
       icon: FolderDown,
-      domains: ['terabox.com', '1024tera.com', 'teraboxapp.com']
+      domains: ['terabox.com', '1024tera.com', '1024terabox.com', 'teraboxapp.com', 'teraboxlink.com']
+    },
+    {
+      id: 'capcut',
+      name: 'CapCut',
+      badge: dl.platforms.capcut?.badge || 'Template HD',
+      placeholder: dl.platforms.capcut?.placeholder || 'Tempel link template/video CapCut (capcut.com/... atau capcut.link/...)',
+      hint: dl.platforms.capcut?.hint || 'Unduh video preview & template CapCut HD tanpa watermark.',
+      icon: Scissors,
+      domains: ['capcut.com', 'capcut.link']
+    },
+    {
+      id: 'soundcloud',
+      name: 'SoundCloud',
+      badge: dl.platforms.soundcloud?.badge || 'Audio MP3',
+      placeholder: dl.platforms.soundcloud?.placeholder || 'Tempel link lagu SoundCloud (soundcloud.com/... atau on.soundcloud.com/...)',
+      hint: dl.platforms.soundcloud?.hint || 'Unduh lagu MP3 & sampul album SoundCloud langsung ke perangkat.',
+      icon: Radio,
+      domains: ['soundcloud.com', 'on.soundcloud.com', 'snd.sc']
     }
   ];
 
@@ -262,10 +281,23 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
   };
 
   const detectPlatformFromUrl = (url) => {
-    const raw = url.toLowerCase().trim();
+    const raw = String(url || '').toLowerCase().trim();
+    if (!raw) return 'unknown';
+
+    let host = '';
+    try {
+      const normalized = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `https://${raw.replace(/^\/+/, '')}`;
+      host = new URL(normalized).hostname.replace(/\.$/, '');
+    } catch {
+      host = raw.replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
+    }
+
     for (const p of platforms) {
       for (const d of p.domains) {
-        if (raw.includes(d)) {
+        if (d === 'pinterest.' && /^(?:.+\.)?pinterest\.[a-z.]+$/.test(host)) {
+          return p.id;
+        }
+        if (host === d || host.endsWith('.' + d)) {
           return p.id;
         }
       }
@@ -402,7 +434,7 @@ export default function ConverterScreen({ activePlatform: initialPlatform = 'tik
           <CosmicBackButton onClick={onBack} label={t.nav.backToHome} />
 
           <span className="text-[10px] font-mono font-bold px-2.5 py-1 rounded border-2 border-black bg-neutral-100 text-black uppercase">
-            {dl.platformsAvailable}
+            {isEn ? `${platforms.length} PLATFORMS AVAILABLE` : `${platforms.length} PLATFORM TERSEDIA`}
           </span>
         </div>
 
