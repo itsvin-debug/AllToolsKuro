@@ -1,60 +1,41 @@
 import React, { useState, useEffect } from 'react';
-import SplashScreen from './components/SplashScreen';
-import WelcomeScreen from './components/WelcomeScreen';
-import ConverterScreen from './components/ConverterScreen';
-import LinkToDocScreen from './components/LinkToDocScreen';
-import ImageToLinkScreen from './components/ImageToLinkScreen';
-import PhotoStudioScreen from './components/PhotoStudioScreen';
-import VideoStudioScreen from './components/VideoStudioScreen';
-import VideoTrimmerScreen from './components/VideoTrimmerScreen';
-import BgRemoverScreen from './components/BgRemoverScreen';
-import LinkResolverScreen from './components/LinkResolverScreen';
-import JjFinderScreen from './components/JjFinderScreen';
-import AnimeFinderScreen from './components/AnimeFinderScreen';
-import ManhwaFinderScreen from './components/ManhwaFinderScreen';
-import IpCheckerScreen from './components/IpCheckerScreen';
-import TiktokStalkerScreen from './components/TiktokStalkerScreen';
-import WaViewOnceView from './components/tools/WaViewOnceView';
-import CodeToVideoView from './components/tools/CodeToVideoView';
-import PngToPdfScreen from './components/PngToPdfScreen';
-import MediaCompressorScreen from './components/MediaCompressorScreen';
-import QrStudioScreen from './components/QrStudioScreen';
-import AudioMergerScreen from './components/AudioMergerScreen';
-import GalleryScreen from './components/GalleryScreen';
-import HistoryScreen from './components/HistoryScreen';
-import SettingsScreen from './components/SettingsScreen';
-import FallingLeavesBackground from './components/FallingLeavesBackground';
-import CyberGridBackground from './components/CyberGridBackground';
-import Navbar from './components/Navbar';
-import MobileBottomNav from './components/MobileBottomNav';
-import Toast from './components/Toast';
-import Footer from './components/Footer';
-import ErrorBoundary from './components/ErrorBoundary';
-import AiKuroWidget from './components/AiKuroWidget';
-import { getSettings, saveSettings, logHistoryItem, isToolLocked, isAdminAuthenticated } from './services/storageService';
+import { SplashScreen } from './features/splash';
+import { WelcomeScreen } from './features/dashboard';
+import { ConverterScreen } from './features/media-downloader';
+import { LinkToDocScreen } from './features/link-to-doc';
+import { ImageToLinkScreen } from './features/image-to-link';
+import { PhotoStudioScreen } from './features/photo-studio';
+import { VideoStudioScreen } from './features/video-studio';
+import { VideoTrimmerScreen } from './features/video-trimmer';
+import { BgRemoverScreen } from './features/bg-remover';
+import { LinkResolverScreen } from './features/link-resolver';
+import { JjFinderScreen } from './features/jj-finder';
+import { AnimeFinderScreen } from './features/anime-finder';
+import { ManhwaFinderScreen } from './features/manhwa-finder';
+import { IpCheckerScreen } from './features/ip-checker';
+import { TiktokStalkerScreen } from './features/social-stalker';
+import { WaViewOnceView } from './features/wa-vault';
+import { CodeToVideoView } from './features/code-to-video';
+import { PngToPdfScreen } from './features/png-to-pdf';
+import { MediaCompressorScreen } from './features/media-compressor';
+import { QrStudioScreen } from './features/qr-studio';
+import { AudioMergerScreen } from './features/audio-merger';
+import { GalleryScreen } from './features/gallery';
+import { HistoryScreen } from './features/history';
+import { SettingsScreen } from './features/settings';
+import { AiKuroWidget } from './features/kurobot';
+import FallingLeavesBackground from './shared/components/FallingLeavesBackground';
+import CyberGridBackground from './shared/components/CyberGridBackground';
+import Navbar from './shared/components/Navbar';
+import MobileBottomNav from './shared/components/MobileBottomNav';
+import Toast from './shared/components/Toast';
+import Footer from './shared/components/Footer';
+import ErrorBoundary from './shared/components/ErrorBoundary';
+import { TOOL_NAMES_BY_ID } from './shared/config/toolsRegistry';
+import { getSettings, saveSettings, logHistoryItem, isToolLocked, isAdminAuthenticated } from './shared/utils/storageService';
 
 // Kamus nama alat untuk logging riwayat aktivitas
-const TOOL_NAMES = {
-  downloader: 'Media Downloader',
-  jjFinder: 'Cari Link JJ',
-  pngToPdf: 'PNG to PDF',
-  linkToDoc: 'Link to PDF/PPT',
-  imageToLink: 'File ke Link',
-  compressor: 'Kompres Media & PDF',
-  qrStudio: 'QR Code Studio',
-  audioMerger: 'Audio Merger',
-  photoStudio: 'Photo Studio',
-  videoStudio: 'Video Studio',
-  videoTrimmer: 'Video Trimmer',
-  bgRemover: 'Hapus Background',
-  resolver: 'Safelink Resolver',
-  animeFinder: 'Rekomendasi Anime',
-  manhwaFinder: 'Rekomendasi Manhwa',
-  ipChecker: 'IP & DNS Checker',
-  tiktokStalker: 'Social Media Stalker',
-  waViewOnce: 'WA View Once Vault',
-  codeToVideo: 'Code to Video Studio'
-};
+const TOOL_NAMES = TOOL_NAMES_BY_ID;
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState('welcome');
