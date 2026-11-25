@@ -502,10 +502,10 @@ function resolvePalette(rawPrompt, lower, designSystem, options = {}) {
   let pal = { ...baseMood };
 
   if (moodId === 'custom') {
-    pal.bg1 = normalizeHex(options.customBg1) || pal.bg1;
-    pal.bg2 = normalizeHex(options.customBg2) || pal.bg2;
-    pal.accent = normalizeHex(options.customAccent) || pal.accent;
-    pal.text = normalizeHex(options.customText) || pal.text;
+    pal.bg1 = normalizeHex(options.customBg1 || options.bgColor1) || pal.bg1;
+    pal.bg2 = normalizeHex(options.customBg2 || options.bgColor2) || pal.bg2;
+    pal.accent = normalizeHex(options.customAccent || options.tintColor) || pal.accent;
+    pal.text = normalizeHex(options.customText || options.hudTextColor) || pal.text;
     pal.isLight = getHexLuminance(pal.bg1) > 0.55;
     pal.border = pal.isLight ? '#0f172a' : pal.accent;
     pal.muted = pal.isLight ? '#334155' : '#cbd5e1';
@@ -1035,7 +1035,33 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
  * Compiler Utama Text Prompt -> SceneGraph Multi-Adegan + Kode HTML5 Canvas 60 FPS
  */
 export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {}, requestedDurationSec = 12) {
-  const options = { ...DEFAULT_TEXT_OPTIONS, ...(rawOptions || {}) };
+  const optIn = rawOptions || {};
+  const isPure = Boolean(optIn.pureBypassMode);
+
+  const normalizedFont = !optIn.fontFamily || optIn.fontFamily === 'original' ? 'geometric' : optIn.fontFamily;
+  const normalizedPattern = !optIn.bgPattern || optIn.bgPattern === 'none' ? 'auto' : optIn.bgPattern;
+  const normalizedTransition = !optIn.transitionStyle || optIn.transitionStyle === 'none' ? 'auto' : optIn.transitionStyle;
+
+  const options = isPure
+    ? { ...DEFAULT_TEXT_OPTIONS, autoDuration: Boolean(optIn.autoDuration) }
+    : {
+        ...DEFAULT_TEXT_OPTIONS,
+        ...optIn,
+        designStyle: optIn.designStyle || optIn.visualStyle || 'auto',
+        bgPattern: normalizedPattern,
+        fontFamily: normalizedFont,
+        transitionStyle: normalizedTransition,
+        sceneParticles: optIn.sceneParticles || (optIn.particles ? (optIn.particleStyle || 'petals-stars') : 'auto'),
+        showProgressBar: optIn.showProgressBar ?? true,
+        showShimmer: optIn.showShimmer ?? true,
+        showBrandBadge: optIn.showBrandBadge ?? true,
+        showMetricCounters: optIn.showMetricCounters ?? true,
+        customBg1: optIn.customBg1 || optIn.bgColor1 || DEFAULT_TEXT_OPTIONS.customBg1,
+        customBg2: optIn.customBg2 || optIn.bgColor2 || DEFAULT_TEXT_OPTIONS.customBg2,
+        customAccent: optIn.customAccent || optIn.tintColor || DEFAULT_TEXT_OPTIONS.customAccent,
+        customText: optIn.customText || optIn.hudTextColor || DEFAULT_TEXT_OPTIONS.customText
+      };
+
   const promptText = String(rawPromptText || '').trim() || QUICK_PROMPT_SAMPLES[0].prompt;
   const lower = promptText.toLowerCase();
 
@@ -1043,6 +1069,9 @@ export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {
   const heroVisual = detectHeroVisual(lower, designSystem, options.heroVisual);
   const palette = resolvePalette(promptText, lower, designSystem, options);
   const entities = extractCoreEntities(promptText);
+  if (!isPure && optIn.brandBadgeEnabled && String(optIn.brandBadgeText || '').trim()) {
+    entities.brand = String(optIn.brandBadgeText).trim().toUpperCase();
+  }
 
   const explicitPromptDur = extractExplicitDurationSec(promptText);
   const durationToUse = options.autoDuration

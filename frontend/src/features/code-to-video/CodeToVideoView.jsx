@@ -15,7 +15,6 @@ import {
   Upload,
   Code2,
   Sparkles,
-  Cloud,
   Type,
   AlertCircle,
   Clapperboard,
@@ -24,17 +23,13 @@ import {
   Maximize2,
   Minimize2,
   CheckCircle2,
-  Tv,
-  Maximize,
   SlidersHorizontal,
-  Palette,
   Wand2,
   Layers,
   FolderArchive,
   FileCode2,
   Save,
   Info,
-  ShieldCheck,
   Clock
 } from 'lucide-react';
 import {
@@ -49,22 +44,14 @@ import {
   compileUniversalCode,
   detectCodeLanguage,
   findPrimaryCanvas,
-  BITRATE_PRESETS
+  BITRATE_PRESETS,
+  DEFAULT_STUDIO_SETTINGS,
+  STUDIO_FONT_PRESETS,
+  buildCssFilterString,
+  computeMotionAndFrameRect
 } from './codeToVideoEngine';
 import {
   QUICK_PROMPT_SAMPLES,
-  PROMPT_DESIGN_STYLES,
-  PROMPT_COLOR_MOODS,
-  PROMPT_BG_PATTERNS,
-  PROMPT_HERO_VISUALS,
-  PROMPT_CARD_STYLES,
-  PROMPT_SCENE_PARTICLES,
-  PROMPT_FONT_FAMILIES,
-  PROMPT_TEXT_SCALES,
-  PROMPT_TEXT_ALIGNS,
-  PROMPT_TRANSITIONS,
-  PROMPT_EASINGS,
-  DEFAULT_TEXT_OPTIONS,
   compileTextPromptToSceneGraph
 } from './textPromptCompiler';
 import {
@@ -74,6 +61,7 @@ import {
   exportKuroStudioProjectJson,
   parseKuroStudioProjectJson
 } from './projectExporter';
+import StudioCustomPanel from './StudioCustomPanel';
 
 function formatSecondsToMmSs(sec = 0) {
   const safe = Math.max(0, Math.round(Number(sec) || 0));
@@ -86,10 +74,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   // --- TEMPLATE, TAB EDITOR UNIVERSAL & EDITOR TEKS ---
   const [selectedTemplateId, setSelectedTemplateId] = useState('promo-ad');
   const [editorTab, setEditorTab] = useState('code'); // 'code' | 'text'
-  const [textOptionTab, setTextOptionTab] = useState('design'); // 'design' | 'shapes' | 'typo' | 'motion'
   const [showStudioInfo, setShowStudioInfo] = useState(true);
 
-  // Kode tunggal universal (otomatis mendeteksi HTML, SVG, CSS, GLSL, atau JS)
   const [universalCode, setUniversalCode] = useState(() => {
     return (
       localStorage.getItem('kuro_c2v_universal_code') ||
@@ -98,50 +84,31 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     );
   });
 
-  // Konfigurasi Editor Teks Berbasis Prompt Ide Bebas + Kontrol Kaya
   const [textPrompt, setTextPrompt] = useState(() => {
     return localStorage.getItem('kuro_c2v_text_prompt') || QUICK_PROMPT_SAMPLES[0].prompt;
   });
-  const [promptOptions, setPromptOptions] = useState(() => {
-    try {
-      const saved = localStorage.getItem('kuro_c2v_prompt_options');
-      if (saved) return { ...DEFAULT_TEXT_OPTIONS, ...JSON.parse(saved) };
-    } catch {}
-    return { ...DEFAULT_TEXT_OPTIONS };
-  });
 
-  const [copied, setCopied] = useState(false);
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [errorLog, setErrorLog] = useState(null);
-
-  // --- SETTINGS (SYNCHRONIZED VIA settingsRef) ---
+  // Satukan seluruh pengaturan desain, efek, HUD, dan kamera dalam 1 objek persisten
   const [settings, setSettings] = useState(() => {
-    return {
-      ...CODE_TEMPLATES[0].defaults,
-      pureBypassMode: true, // Default ON agar Editor Kode & Studio langsung berjalan polos murni
-      stage3d: false,
-      vignette: false,
-      colorBoost: false,
-      contrastBoost: 0,
-      brightnessBoost: 0,
-      softBloom: false,
-      filmGrain: false,
-      fadeInOut: false,
-      hudStyle: 'brutalist',
-      hudAccentColor: '#ff0055',
-      hudScale: 1,
-      watermarkEnabled: false,
-      watermarkText: 'KURO STUDIO'
-    };
+    try {
+      const saved = localStorage.getItem('kuro_c2v_studio_settings');
+      if (saved) return { ...DEFAULT_STUDIO_SETTINGS, ...JSON.parse(saved) };
+    } catch {}
+    return { ...DEFAULT_STUDIO_SETTINGS };
   });
 
   const settingsRef = useRef(settings);
   useEffect(() => {
     settingsRef.current = settings;
+    try {
+      localStorage.setItem('kuro_c2v_studio_settings', JSON.stringify(settings));
+    } catch {}
   }, [settings]);
 
-  // Tab Pengaturan Visual & Tab Mobile
-  const [activeTab, setActiveTab] = useState('camera'); // 'camera' | 'fx' | 'hud'
+  const [copied, setCopied] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [errorLog, setErrorLog] = useState(null);
+
   const [mobileSection, setMobileSection] = useState('preview'); // 'preview' | 'editor' | 'export'
 
   // --- VIEWPORT & PREVIEW STATE ---
@@ -180,15 +147,15 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   // Kompilasi SceneGraph & HTML animasi multi-adegan dari prompt Editor Teks
   const compiledPrompt = useMemo(() => {
     const dur = Math.max(3, Math.min(Number(exportDuration) || 12, 300));
-    return compileTextPromptToSceneGraph(textPrompt, promptOptions, dur);
-  }, [textPrompt, promptOptions, exportDuration]);
+    return compileTextPromptToSceneGraph(textPrompt, settings, dur);
+  }, [textPrompt, settings, exportDuration]);
 
   const effectiveExportDuration = useMemo(() => {
-    if (editorTab === 'text' && promptOptions.autoDuration) {
+    if (editorTab === 'text' && settings.autoDuration) {
       return Math.max(3, Math.min(300, compiledPrompt.summary.recommendedDuration || 12));
     }
     return Math.max(3, Math.min(300, Number(exportDuration) || 12));
-  }, [editorTab, promptOptions.autoDuration, compiledPrompt.summary.recommendedDuration, exportDuration]);
+  }, [editorTab, settings.autoDuration, compiledPrompt.summary.recommendedDuration, exportDuration]);
 
   const effectiveDurationRef = useRef(effectiveExportDuration);
   useEffect(() => {
@@ -197,6 +164,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
   // --- REFS ---
   const liveIframeRef = useRef(null);
+  const stageContentWrapRef = useRef(null);
   const overlayCanvasRef = useRef(null);
   const canvasRef = useRef(null);
   const viewportRef = useRef(null);
@@ -209,7 +177,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const textareaRef = useRef(null);
   const lastRenderSignatureRef = useRef('');
 
-  // Auto-save kode universal & prompt Editor Teks ke storage
   useEffect(() => {
     try {
       localStorage.setItem('kuro_c2v_universal_code', universalCode);
@@ -222,13 +189,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     } catch {}
   }, [textPrompt]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('kuro_c2v_prompt_options', JSON.stringify(promptOptions));
-    } catch {}
-  }, [promptOptions]);
-
-  // Helper resolusi kode sumber aktif sesuai tab Editor Kode / Editor Teks
   const getActiveSourceCode = useCallback(() => {
     if (editorTab === 'text') {
       return compiledPrompt.generatedHtmlCode;
@@ -236,7 +196,11 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     return universalCode;
   }, [editorTab, compiledPrompt.generatedHtmlCode, universalCode]);
 
-  // Status pasif auto-detect jenis bahasa kode
+  const getActiveFontCss = useCallback((cfg = settingsRef.current) => {
+    if (cfg?.pureBypassMode) return '';
+    return STUDIO_FONT_PRESETS[cfg?.fontFamily] || '';
+  }, []);
+
   const detectedLanguage = useMemo(() => {
     if (editorTab === 'text') {
       return {
@@ -287,7 +251,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (liveIframeRef.current) {
       liveIframeRef.current.srcdoc = compileUniversalCode(getActiveSourceCode(), 'live', {
         width: initialDims.width,
-        height: initialDims.height
+        height: initialDims.height,
+        fontCss: getActiveFontCss(settingsRef.current)
       });
     }
 
@@ -296,20 +261,50 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
 
-    // Loop animasi live preview Direct GPU
+    // Loop animasi live preview Direct GPU dengan sinkronisasi WYSIWYG 100%
     const loop = (now) => {
       if (isPlaying && compositorRef.current) {
         const curSettings = settingsRef.current;
         const isBypass = Boolean(curSettings.pureBypassMode);
+        const is3d = !isBypass && (curSettings.frameStyle === '3d-tv' || Boolean(curSettings.stage3d));
         const spd = isBypass ? 1.0 : (curSettings.motionSpeed || 1.0);
-        const elapsed = ((now - startTimeRef.current) / 1000) * spd;
-        const frameSettings = { ...curSettings, totalDuration: effectiveDurationRef.current };
+        const totalDur = effectiveDurationRef.current;
+        const elapsedRaw = ((now - startTimeRef.current) / 1000) * spd;
+        const loopT = totalDur > 0 ? (elapsedRaw % totalDur) : elapsedRaw;
+        const frameSettings = { ...curSettings, totalDuration: totalDur };
 
-        if (isBypass || !curSettings.stage3d) {
+        if (!is3d) {
+          // Terapkan CSS Filter, Bingkai, Camera Motion & Transisi Intro/Outro di DOM Live Stage tanpa re-render React
+          const wrapEl = stageContentWrapRef.current;
+          const iframeEl = liveIframeRef.current;
+          const motion = computeMotionAndFrameRect(
+            compositorRef.current.width,
+            compositorRef.current.height,
+            loopT,
+            totalDur,
+            frameSettings
+          );
+          if (wrapEl) {
+            wrapEl.style.left = `${motion.rect.x}px`;
+            wrapEl.style.top = `${motion.rect.y}px`;
+            wrapEl.style.width = `${motion.rect.w}px`;
+            wrapEl.style.height = `${motion.rect.h}px`;
+            wrapEl.style.borderRadius = `${motion.rect.radius}px`;
+            wrapEl.style.clipPath = motion.wipeProgress < 1
+              ? `inset(0 ${Math.round((1 - motion.wipeProgress) * 100)}% 0 0)`
+              : 'none';
+          }
+          if (iframeEl) {
+            iframeEl.style.filter = isBypass ? 'none' : buildCssFilterString(curSettings);
+            iframeEl.style.opacity = String(isBypass ? 1 : motion.alpha);
+            iframeEl.style.transform = isBypass
+              ? 'none'
+              : `translate(${motion.tx.toFixed(1)}px, ${motion.ty.toFixed(1)}px) scale(${motion.scale.toFixed(4)})`;
+          }
           if (overlayCanvasRef.current) {
             const oCanvas = overlayCanvasRef.current;
             const oCtx = oCanvas.getContext('2d');
-            compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, elapsed, frameSettings);
+            compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, loopT, frameSettings);
           }
         } else {
           try {
@@ -324,7 +319,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             }
           } catch {}
 
-          compositorRef.current.renderFrame(elapsed, frameSettings);
+          compositorRef.current.renderFrame(loopT, frameSettings);
         }
 
         frameCount++;
@@ -387,14 +382,62 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (liveIframeRef.current) {
         liveIframeRef.current.srcdoc = compileUniversalCode(compiledPrompt.generatedHtmlCode, 'live', {
           width: virtualDims.width,
-          height: virtualDims.height
+          height: virtualDims.height,
+          fontCss: getActiveFontCss(settingsRef.current)
         });
       }
       startTimeRef.current = performance.now();
       setIsPlaying(true);
     }, 280);
     return () => clearTimeout(timer);
-  }, [editorTab, compiledPrompt.generatedHtmlCode, virtualDims.width, virtualDims.height]);
+  }, [editorTab, compiledPrompt.generatedHtmlCode, virtualDims.width, virtualDims.height, getActiveFontCss]);
+
+  const sendLiveSpeed = (spd) => {
+    try {
+      liveIframeRef.current?.contentWindow?.postMessage({
+        type: 'ctv-live-speed',
+        speedMultiplier: spd
+      }, '*');
+    } catch {}
+  };
+
+  // Mengubah opsi di StudioCustomPanel otomatis mengaktifkan Kustomisasi
+  const handleChangeSetting = useCallback((patch) => {
+    setSettings((prev) => {
+      const next = { ...prev, ...patch, pureBypassMode: false };
+      if ('fontFamily' in patch) {
+        try {
+          liveIframeRef.current?.contentWindow?.postMessage({
+            type: 'ctv-live-font',
+            fontCss: STUDIO_FONT_PRESETS[patch.fontFamily] || ''
+          }, '*');
+        } catch {}
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleBypass = useCallback((bypassOn) => {
+    setSettings((prev) => ({ ...prev, pureBypassMode: Boolean(bypassOn) }));
+    try {
+      const fontCss = bypassOn ? '' : (STUDIO_FONT_PRESETS[settingsRef.current.fontFamily] || '');
+      liveIframeRef.current?.contentWindow?.postMessage({ type: 'ctv-live-font', fontCss }, '*');
+      sendLiveSpeed(bypassOn ? 1.0 : (settingsRef.current.motionSpeed || 1.0));
+    } catch {}
+    onShowToast?.(
+      bypassOn ? 'Mode Polos Murni aktif — semua efek dibatalkan.' : 'Mode Kustomisasi Studio aktif.',
+      'info'
+    );
+  }, [onShowToast]);
+
+  const handleResetAllStudioEffectsToPure = useCallback(() => {
+    setSettings({ ...DEFAULT_STUDIO_SETTINGS, pureBypassMode: true });
+    try {
+      liveIframeRef.current?.contentWindow?.postMessage({ type: 'ctv-live-font', fontCss: '' }, '*');
+      sendLiveSpeed(1.0);
+    } catch {}
+    onShowToast?.('Seluruh pengaturan direset ke Mode Polos Murni.', 'info');
+  }, [onShowToast]);
 
   // Terapkan perubahan kode atau prompt teks ke Live Iframe
   const handleApplyCode = useCallback(() => {
@@ -404,26 +447,28 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (liveIframeRef.current) {
       liveIframeRef.current.srcdoc = compileUniversalCode(targetCode, 'live', {
         width: virtualDims.width,
-        height: virtualDims.height
+        height: virtualDims.height,
+        fontCss: getActiveFontCss(settingsRef.current)
       });
     }
 
     startTimeRef.current = performance.now();
     setIsPlaying(true);
     onShowToast?.('Pratinjau visual berhasil diperbarui.', 'success');
-  }, [getActiveSourceCode, virtualDims.width, virtualDims.height, onShowToast]);
+  }, [getActiveSourceCode, getActiveFontCss, virtualDims.width, virtualDims.height, onShowToast]);
 
   const handleGeneratePromptAnimation = () => {
     setErrorLog(null);
     const dur = effectiveExportDuration;
-    const fresh = compileTextPromptToSceneGraph(textPrompt, promptOptions, dur);
-    if (promptOptions.autoDuration && fresh.summary.recommendedDuration) {
+    const fresh = compileTextPromptToSceneGraph(textPrompt, settings, dur);
+    if (settings.autoDuration && fresh.summary.recommendedDuration) {
       setExportDuration(fresh.summary.recommendedDuration);
     }
     if (liveIframeRef.current) {
       liveIframeRef.current.srcdoc = compileUniversalCode(fresh.generatedHtmlCode, 'live', {
         width: virtualDims.width,
-        height: virtualDims.height
+        height: virtualDims.height,
+        fontCss: getActiveFontCss(settings)
       });
     }
     startTimeRef.current = performance.now();
@@ -443,7 +488,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (liveIframeRef.current) {
       liveIframeRef.current.srcdoc = compileUniversalCode(generatedHtml, 'live', {
         width: virtualDims.width,
-        height: virtualDims.height
+        height: virtualDims.height,
+        fontCss: getActiveFontCss(settingsRef.current)
       });
     }
     startTimeRef.current = performance.now();
@@ -458,11 +504,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
     setSelectedTemplateId(templateId);
     setEditorTab('code');
-    setSettings((prev) => ({
-      ...prev,
-      ...tmpl.defaults,
-      pureBypassMode: prev.pureBypassMode
-    }));
     setErrorLog(null);
 
     const nextCode =
@@ -474,34 +515,14 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (liveIframeRef.current) {
       liveIframeRef.current.srcdoc = compileUniversalCode(nextCode, 'live', {
         width: virtualDims.width,
-        height: virtualDims.height
+        height: virtualDims.height,
+        fontCss: getActiveFontCss(settingsRef.current)
       });
     }
 
     startTimeRef.current = performance.now();
     setIsPlaying(true);
     onShowToast?.(`Template "${tmpl.name}" aktif.`, 'info');
-  };
-
-  const handleResetAllStudioEffectsToPure = () => {
-    setSettings((s) => ({
-      ...s,
-      pureBypassMode: true,
-      stage3d: false,
-      clouds: false,
-      particles: false,
-      hudEnabled: false,
-      watermarkEnabled: false,
-      vignette: false,
-      colorBoost: false,
-      contrastBoost: 0,
-      brightnessBoost: 0,
-      softBloom: false,
-      filmGrain: false,
-      fadeInOut: false,
-      motionSpeed: 1
-    }));
-    onShowToast?.('Seluruh efek studio direset ke Mode Polos Murni.', 'info');
   };
 
   // Preset Cepat Komposisi
@@ -512,23 +533,27 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       setSettings((s) => ({
         ...s,
         pureBypassMode: false,
+        frameStyle: 'full',
         stage3d: false,
         particles: true,
         particleStyle: 'sparks',
         particleCount: 100,
         vignette: true,
-        colorBoost: true
+        colorBoost: true,
+        shimmerSweep: true
       }));
       onShowToast?.('Preset Sinematik aktif (Full Layar + Partikel + Vignette).', 'info');
     } else if (presetName === 'studio-3d') {
       setSettings((s) => ({
         ...s,
         pureBypassMode: false,
+        frameStyle: '3d-tv',
         stage3d: true,
         autoOrbit: true,
+        cameraMotion: 'auto-orbit',
         clouds: true,
         particles: true,
-        particleStyle: 'stars',
+        particleStyle: 'petals-stars',
         vignette: false
       }));
       onShowToast?.('Preset Studio 3D aktif (Bingkai TV + Orbit + Awan).', 'info');
@@ -556,8 +581,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
     if (editorTab === 'text') {
       setTextPrompt(QUICK_PROMPT_SAMPLES[0].prompt);
-      setPromptOptions({ ...DEFAULT_TEXT_OPTIONS });
-      onShowToast?.('Prompt & seluruh opsi Editor Teks dikembalikan ke bawaan.', 'info');
+      setSettings({ ...DEFAULT_STUDIO_SETTINGS, pureBypassMode: true });
+      onShowToast?.('Prompt & seluruh pengaturan Editor Teks dikembalikan ke bawaan.', 'info');
     } else {
       const currentTmpl = CODE_TEMPLATES.find((t) => t.id === selectedTemplateId) || CODE_TEMPLATES[0];
       handleSelectTemplate(currentTmpl.id);
@@ -607,8 +632,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
           if (restored.selectedTemplateId) setSelectedTemplateId(restored.selectedTemplateId);
           if (restored.universalCode) setUniversalCode(restored.universalCode);
           if (restored.promptInput) setTextPrompt(restored.promptInput);
-          if (restored.promptOptions) setPromptOptions({ ...DEFAULT_TEXT_OPTIONS, ...restored.promptOptions });
-          if (restored.settings) setSettings((s) => ({ ...s, ...restored.settings }));
+          const mergedSettings = {
+            ...DEFAULT_STUDIO_SETTINGS,
+            ...(restored.promptOptions || {}),
+            ...(restored.settings || {})
+          };
+          setSettings(mergedSettings);
           if (restored.exportOptions) {
             if (restored.exportOptions.res) setExportRes(restored.exportOptions.res);
             if (restored.exportOptions.aspect) setExportAspect(restored.exportOptions.aspect);
@@ -619,16 +648,17 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
           setEditorTab(restored.editorTab);
           setErrorLog(null);
 
-          const durRestore = Number(restored.exportOptions?.duration) || Number(exportDuration) || 10;
+          const durRestore = Number(restored.exportOptions?.duration) || Number(exportDuration) || 12;
           const aspectRestore = restored.exportOptions?.aspect || exportAspect;
           const vDims = getVirtualStageSize(aspectRestore);
           const nextHtml = restored.editorTab === 'text'
-            ? compileTextPromptToSceneGraph(restored.promptInput || textPrompt, restored.promptOptions, durRestore).generatedHtmlCode
+            ? compileTextPromptToSceneGraph(restored.promptInput || textPrompt, mergedSettings, durRestore).generatedHtmlCode
             : restored.universalCode || universalCode;
           if (liveIframeRef.current) {
             liveIframeRef.current.srcdoc = compileUniversalCode(nextHtml, 'live', {
               width: vDims.width,
-              height: vDims.height
+              height: vDims.height,
+              fontCss: getActiveFontCss(mergedSettings)
             });
           }
           startTimeRef.current = performance.now();
@@ -646,7 +676,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (liveIframeRef.current) {
         liveIframeRef.current.srcdoc = compileUniversalCode(content, 'live', {
           width: virtualDims.width,
-          height: virtualDims.height
+          height: virtualDims.height,
+          fontCss: getActiveFontCss(settingsRef.current)
         });
       }
       startTimeRef.current = performance.now();
@@ -964,7 +995,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       selectedTemplateId,
       universalCode,
       promptInput: textPrompt,
-      promptOptions,
+      promptOptions: settingsRef.current,
       settings: settingsRef.current,
       exportOptions: {
         res: exportRes,
@@ -1073,15 +1104,15 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       <div className="grid grid-cols-3 lg:hidden bg-white border-2 border-black shadow-[3px_3px_0px_#000] p-1 gap-1 w-full">
         <button
           onClick={() => setMobileSection('preview')}
-          className={`py-2 px-1 text-[11px] font-black uppercase text-center transition-colors truncate ${
+          className={`py-2 px-1 text-[10px] sm:text-[11px] font-black uppercase text-center transition-colors truncate ${
             mobileSection === 'preview' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
-          Preview
+          Preview &amp; Kustom
         </button>
         <button
           onClick={() => setMobileSection('editor')}
-          className={`py-2 px-1 text-[11px] font-black uppercase text-center transition-colors truncate ${
+          className={`py-2 px-1 text-[10px] sm:text-[11px] font-black uppercase text-center transition-colors truncate ${
             mobileSection === 'editor' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
@@ -1089,7 +1120,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         </button>
         <button
           onClick={() => setMobileSection('export')}
-          className={`py-2 px-1 text-[11px] font-black uppercase text-center transition-colors truncate ${
+          className={`py-2 px-1 text-[10px] sm:text-[11px] font-black uppercase text-center transition-colors truncate ${
             mobileSection === 'export' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
@@ -1118,7 +1149,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                     if (liveIframeRef.current) {
                       liveIframeRef.current.srcdoc = compileUniversalCode(universalCode, 'live', {
                         width: virtualDims.width,
-                        height: virtualDims.height
+                        height: virtualDims.height,
+                        fontCss: getActiveFontCss(settingsRef.current)
                       });
                     }
                     startTimeRef.current = performance.now();
@@ -1177,7 +1209,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               />
             </div>
           ) : (
-            <div className="p-3.5 sm:p-4 bg-white space-y-3.5 max-h-[650px] overflow-y-auto text-xs min-w-0">
+            <div className="p-3.5 sm:p-4 bg-white space-y-3.5 max-h-[600px] overflow-y-auto text-xs min-w-0">
               {/* Contoh Cepat 1-Klik */}
               <div className="space-y-1.5">
                 <span className="font-black uppercase text-[11px] text-neutral-700 block">
@@ -1190,7 +1222,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                       type="button"
                       onClick={() => {
                         setTextPrompt(sample.prompt);
-                        setPromptOptions({ ...DEFAULT_TEXT_OPTIONS, ...(sample.options || {}) });
+                        setSettings((prev) => ({
+                          ...DEFAULT_STUDIO_SETTINGS,
+                          pureBypassMode: true,
+                          ...(sample.options?.designStyle ? { visualStyle: sample.options.designStyle } : {}),
+                          ...(sample.options?.mood ? { mood: sample.options.mood } : {})
+                        }));
                       }}
                       className="px-2.5 py-1.5 bg-neutral-100 hover:bg-yellow-300 text-black border border-black font-bold text-[11px] transition-colors cursor-pointer"
                     >
@@ -1213,8 +1250,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 <textarea
                   value={textPrompt}
                   onChange={(e) => setTextPrompt(e.target.value)}
-                  placeholder={'Ceritakan desain, warna #hex, struktur adegan (Adegan 1, Adegan 2...), poin fitur, harga, dan ajakan CTA...\nMendukung video singkat 5 detik hingga naskah 5 menit!'}
-                  className="w-full min-h-[190px] sm:min-h-[225px] p-3 bg-neutral-50 border-2 border-black font-semibold text-xs sm:text-sm leading-relaxed resize-y focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
+                  placeholder={'Ceritakan desain, warna #hex, struktur adegan (Adegan 1, Adegan 2...), poin fitur, harga, dan ajakan CTA...\nMendukung video singkat 5 detik hingga naskah 5 menit!\nAtur seluruh gaya, warna, partikel, HUD, dan kamera lewat Panel Kustomisasi Studio.'}
+                  className="w-full min-h-[240px] sm:min-h-[295px] p-3 bg-neutral-50 border-2 border-black font-semibold text-xs sm:text-sm leading-relaxed resize-y focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
                 />
               </div>
 
@@ -1242,269 +1279,9 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 )}
               </div>
 
-              {/* Pengaturan Generator Teks (4 Sub-Tab Terorganisir) */}
-              <div className="border-2 border-black bg-neutral-50 p-2.5 space-y-3">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 border-b-2 border-black pb-2">
-                  {[
-                    { id: 'design', label: 'Desain & Warna' },
-                    { id: 'shapes', label: 'Bentukan & Latar' },
-                    { id: 'typo', label: 'Tipografi & Opsi' },
-                    { id: 'motion', label: 'Gerak & Durasi' }
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setTextOptionTab(tab.id)}
-                      className={`px-2 py-1.5 border border-black font-black text-[10px] sm:text-[11px] uppercase truncate cursor-pointer ${
-                        textOptionTab === tab.id ? 'bg-yellow-300 text-black shadow-[1.5px_1.5px_0px_#000]' : 'bg-white hover:bg-neutral-100 text-neutral-700'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Sub-Tab 1: Desain & Warna */}
-                {textOptionTab === 'design' && (
-                  <div className="space-y-2.5">
-                    <div>
-                      <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Gaya Desain:</label>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
-                        {PROMPT_DESIGN_STYLES.map((st) => (
-                          <button
-                            key={st.id}
-                            type="button"
-                            onClick={() => setPromptOptions((prev) => ({ ...prev, designStyle: st.id }))}
-                            title={st.desc}
-                            className={`px-2 py-1.5 border border-black font-bold text-[10px] text-left truncate cursor-pointer ${
-                              promptOptions.designStyle === st.id ? 'bg-black text-white' : 'bg-white hover:bg-neutral-100 text-black'
-                            }`}
-                          >
-                            {st.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="font-black uppercase text-[10px] text-neutral-700 flex items-center gap-1 mb-1">
-                        <Palette className="w-3 h-3" /> Mood Warna:
-                      </label>
-                      <div className="flex flex-wrap gap-1">
-                        {PROMPT_COLOR_MOODS.map((mood) => (
-                          <button
-                            key={mood.id}
-                            type="button"
-                            onClick={() => setPromptOptions((prev) => ({ ...prev, mood: mood.id }))}
-                            className={`px-2 py-1 border border-black text-[10px] font-bold flex items-center gap-1 cursor-pointer ${
-                              promptOptions.mood === mood.id ? 'bg-black text-white' : 'bg-white hover:bg-neutral-100 text-black'
-                            }`}
-                          >
-                            <span className="w-2.5 h-2.5 rounded-full border border-black inline-block shrink-0" style={{ background: mood.dot }} />
-                            <span>{mood.name}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5 pt-1 border-t border-neutral-200">
-                      <label className="flex items-center gap-2 font-bold text-[11px] cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={promptOptions.usePromptHexColors !== false}
-                          onChange={(e) => setPromptOptions((prev) => ({ ...prev, usePromptHexColors: e.target.checked }))}
-                          className="w-3.5 h-3.5 accent-black cursor-pointer"
-                        />
-                        <span>Prioritaskan kode warna #hex langsung dari teks prompt</span>
-                      </label>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                        {[
-                          { key: 'customBg1', label: 'Latar 1' },
-                          { key: 'customBg2', label: 'Latar 2' },
-                          { key: 'customAccent', label: 'Aksen' },
-                          { key: 'customText', label: 'Teks' }
-                        ].map((cp) => (
-                          <label key={cp.key} className="flex items-center justify-between gap-1 px-2 py-1 bg-white border border-black cursor-pointer">
-                            <span className="font-bold text-[10px]">{cp.label}</span>
-                            <input
-                              type="color"
-                              value={promptOptions[cp.key] || '#38bdf8'}
-                              onChange={(e) =>
-                                setPromptOptions((prev) => ({
-                                  ...prev,
-                                  mood: 'custom',
-                                  [cp.key]: e.target.value
-                                }))
-                              }
-                              className="w-6 h-5 p-0 border border-black cursor-pointer bg-transparent"
-                            />
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Sub-Tab 2: Bentukan & Latar */}
-                {textOptionTab === 'shapes' && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Pola Latar:</label>
-                      <select
-                        value={promptOptions.bgPattern}
-                        onChange={(e) => setPromptOptions((p) => ({ ...p, bgPattern: e.target.value }))}
-                        className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                      >
-                        {PROMPT_BG_PATTERNS.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Ilustrasi Hero:</label>
-                      <select
-                        value={promptOptions.heroVisual}
-                        onChange={(e) => setPromptOptions((p) => ({ ...p, heroVisual: e.target.value }))}
-                        className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                      >
-                        {PROMPT_HERO_VISUALS.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Gaya Kartu:</label>
-                      <select
-                        value={promptOptions.cardStyle}
-                        onChange={(e) => setPromptOptions((p) => ({ ...p, cardStyle: e.target.value }))}
-                        className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                      >
-                        {PROMPT_CARD_STYLES.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Partikel Bawaan:</label>
-                      <select
-                        value={promptOptions.sceneParticles}
-                        onChange={(e) => setPromptOptions((p) => ({ ...p, sceneParticles: e.target.value }))}
-                        className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                      >
-                        {PROMPT_SCENE_PARTICLES.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                )}
-
-                {/* Sub-Tab 3: Tipografi & Elemen */}
-                {textOptionTab === 'typo' && (
-                  <div className="space-y-2.5">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                      <div>
-                        <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Jenis Font:</label>
-                        <select
-                          value={promptOptions.fontFamily}
-                          onChange={(e) => setPromptOptions((p) => ({ ...p, fontFamily: e.target.value }))}
-                          className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                        >
-                          {PROMPT_FONT_FAMILIES.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Skala Teks:</label>
-                        <select
-                          value={promptOptions.textScale}
-                          onChange={(e) => setPromptOptions((p) => ({ ...p, textScale: e.target.value }))}
-                          className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                        >
-                          {PROMPT_TEXT_SCALES.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Perataan:</label>
-                        <select
-                          value={promptOptions.textAlign}
-                          onChange={(e) => setPromptOptions((p) => ({ ...p, textAlign: e.target.value }))}
-                          className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                        >
-                          {PROMPT_TEXT_ALIGNS.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-1.5 pt-1">
-                      {[
-                        { key: 'showProgressBar', label: 'Progress Bar Bawah' },
-                        { key: 'showShimmer', label: 'Kilau (Shimmer Sweep)' },
-                        { key: 'showBrandBadge', label: 'Badge Brand Atas' },
-                        { key: 'showMetricCounters', label: 'Animasi Angka/Harga' }
-                      ].map((tgl) => (
-                        <label key={tgl.key} className="flex items-center gap-1.5 p-1.5 bg-white border border-black font-bold text-[10px] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={promptOptions[tgl.key] !== false}
-                            onChange={(e) => setPromptOptions((p) => ({ ...p, [tgl.key]: e.target.checked }))}
-                            className="w-3.5 h-3.5 accent-black cursor-pointer"
-                          />
-                          <span className="truncate">{tgl.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Sub-Tab 4: Koreografi, Transisi & Durasi */}
-                {textOptionTab === 'motion' && (
-                  <div className="space-y-2.5">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Transisi Antar-Adegan:</label>
-                        <select
-                          value={promptOptions.transitionStyle}
-                          onChange={(e) => setPromptOptions((p) => ({ ...p, transitionStyle: e.target.value }))}
-                          className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                        >
-                          {PROMPT_TRANSITIONS.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="font-black uppercase text-[10px] text-neutral-700 block mb-1">Karakter Gerak:</label>
-                        <select
-                          value={promptOptions.motionEasing}
-                          onChange={(e) => setPromptOptions((p) => ({ ...p, motionEasing: e.target.value }))}
-                          className="w-full bg-white border border-black p-1.5 font-bold text-[11px] cursor-pointer"
-                        >
-                          {PROMPT_EASINGS.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2 bg-white border border-black">
-                      <label className="flex items-center gap-2 font-bold text-[11px] cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(promptOptions.autoDuration)}
-                          onChange={(e) => {
-                            const checked = e.target.checked;
-                            setPromptOptions((p) => ({ ...p, autoDuration: checked }));
-                            if (checked && compiledPrompt.summary.recommendedDuration) {
-                              setExportDuration(compiledPrompt.summary.recommendedDuration);
-                            }
-                          }}
-                          className="w-3.5 h-3.5 accent-black cursor-pointer"
-                        />
-                        <span>Auto Durasi Sesuai Panjang Teks (hingga 5 menit)</span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExportDuration(compiledPrompt.summary.recommendedDuration);
-                          onShowToast?.(`Durasi render diatur ke ${compiledPrompt.summary.recommendedDuration} detik.`, 'info');
-                        }}
-                        className="px-2 py-1 bg-cyan-200 hover:bg-cyan-300 border border-black font-black text-[10px] cursor-pointer shrink-0"
-                      >
-                        Pakai Saran ({compiledPrompt.summary.recommendedDuration}s)
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
+              <p className="text-[11px] font-semibold text-neutral-600 bg-neutral-50 border border-black p-2">
+                Tip: Gunakan <strong>Panel Kustomisasi Studio</strong> di bawah preview untuk mengubah warna, pola latar, gaya kartu, font, efek partikel, dan transisi kapan saja.
+              </p>
 
               {/* Tombol Aksi Prompt Compiler */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
@@ -1647,8 +1424,8 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 minHeight: '210px'
               }}
             >
-              {/* Mode Layar Penuh: Panggung Virtual HD Tersekalakan (Tajam & Anti-Terpotong di HP) */}
-              {(settings.pureBypassMode || !settings.stage3d) ? (
+              {/* Mode Layar Penuh / Bingkai Kustom: Panggung Virtual HD Tersekalakan */}
+              {(settings.pureBypassMode || (settings.frameStyle !== '3d-tv' && !settings.stage3d)) ? (
                 <div
                   style={{
                     width: `${Math.max(1, Math.round(virtualDims.width * stageScale))}px`,
@@ -1664,23 +1441,41 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                       height: `${virtualDims.height}px`,
                       transform: `scale(${stageScale})`,
                       transformOrigin: 'top left',
-                      position: 'relative'
+                      position: 'relative',
+                      background:
+                        !settings.pureBypassMode && (settings.frameStyle === 'neo-brutalist' || settings.frameStyle === 'glass')
+                          ? settings.bgType === 'solid'
+                            ? settings.bgColor1
+                            : `linear-gradient(135deg, ${settings.bgColor1}, ${settings.bgColor2})`
+                          : 'transparent'
                     }}
                   >
-                    <iframe
-                      ref={liveIframeRef}
-                      sandbox="allow-scripts allow-same-origin"
-                      className="border-0"
+                    <div
+                      ref={stageContentWrapRef}
                       style={{
                         position: 'absolute',
-                        inset: 0,
+                        left: 0,
+                        top: 0,
                         width: '100%',
                         height: '100%',
-                        zIndex: 1,
-                        pointerEvents: isRendering || bundleExportState.active ? 'none' : 'auto'
+                        overflow: 'hidden',
+                        zIndex: 1
                       }}
-                      title="Live Animation Stage"
-                    />
+                    >
+                      <iframe
+                        ref={liveIframeRef}
+                        sandbox="allow-scripts allow-same-origin"
+                        className="border-0"
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          width: '100%',
+                          height: '100%',
+                          pointerEvents: isRendering || bundleExportState.active ? 'none' : 'auto'
+                        }}
+                        title="Live Animation Stage"
+                      />
+                    </div>
                     <canvas
                       ref={overlayCanvasRef}
                       width={virtualDims.width}
@@ -1752,7 +1547,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-[10px] sm:text-[11px] font-mono px-2 py-0.5 bg-neutral-800 border border-neutral-700 text-yellow-300 truncate">
-                  {exportAspect} &bull; {virtualDims.width}&times;{virtualDims.height} &bull; {settings.pureBypassMode ? 'POLOS MURNI' : settings.stage3d ? '3D TV' : 'KUSTOM FX'}
+                  {exportAspect} &bull; {virtualDims.width}&times;{virtualDims.height} &bull; {settings.pureBypassMode ? 'POLOS MURNI' : settings.frameStyle === '3d-tv' || settings.stage3d ? '3D TV' : 'KUSTOM AKTIF'}
                 </span>
                 <button
                   onClick={handleToggleFullscreen}
@@ -1765,433 +1560,22 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             </div>
           </div>
 
-          {/* SAKELAR MASTER: MODE POLOS MURNI + PANEL KONTROL STUDIO */}
-          <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4 space-y-4">
-            <div className={`p-3 border-2 border-black flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${settings.pureBypassMode ? 'bg-emerald-100' : 'bg-amber-50'}`}>
-              <div className="min-w-0">
-                <span className="font-black text-xs sm:text-sm text-black flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
-                  <span>Mode Polos Murni (Bypass Semua Pengaturan)</span>
-                </span>
-                <p className="text-[11px] font-semibold text-neutral-700 mt-0.5 leading-snug">
-                  {settings.pureBypassMode
-                    ? 'ON: Kode berjalan 100% asli full-bleed tanpa 3D TV, partikel, vignette, HUD, maupun override kecepatan.'
-                    : 'OFF: Mode kustom studio aktif — seluruh efek 3D TV, awan, partikel, polesan HD, & HUD diterapkan ke preview & ekspor.'}
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSettings((s) => ({ ...s, pureBypassMode: !s.pureBypassMode }))}
-                  className={`px-3 py-1.5 border-2 border-black font-black text-xs shadow-[2px_2px_0px_#000] cursor-pointer ${
-                    settings.pureBypassMode ? 'bg-black text-yellow-300' : 'bg-white text-black hover:bg-neutral-100'
-                  }`}
-                >
-                  {settings.pureBypassMode ? 'POLOS: ON' : 'POLOS: OFF'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetAllStudioEffectsToPure}
-                  className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border-2 border-black font-bold text-[11px] cursor-pointer"
-                  title="Reset seluruh pengaturan efek ke Polos Murni"
-                >
-                  Reset Polos
-                </button>
-              </div>
-            </div>
-
-            {settings.pureBypassMode ? (
-              <div className="p-3 bg-neutral-50 border border-black flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                <span className="font-semibold text-neutral-700">
-                  Ingin menambahkan bingkai 3D TV, partikel, vignette, bloom, atau badge HUD di atas video Anda?
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSettings((s) => ({ ...s, pureBypassMode: false }))}
-                  className="px-3 py-1.5 bg-yellow-300 hover:bg-yellow-400 border-2 border-black font-black text-xs shadow-[1.5px_1.5px_0px_#000] cursor-pointer shrink-0"
-                >
-                  Buka Kontrol Efek Studio
-                </button>
-              </div>
-            ) : (
-              <>
-                {/* Header Tab (Grid 3 Kolom Anti-Terpotong Mobile) */}
-                <div className="grid grid-cols-3 border-b-2 border-black mb-4 gap-1 sm:gap-2 pb-1">
-                  <button
-                    onClick={() => setActiveTab('camera')}
-                    className={`px-1.5 sm:px-3 py-2 text-[11px] sm:text-xs font-black uppercase flex items-center justify-center gap-1 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer truncate ${
-                      activeTab === 'camera' ? 'bg-yellow-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    <Tv className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">3D TV</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('fx')}
-                    className={`px-1.5 sm:px-3 py-2 text-[11px] sm:text-xs font-black uppercase flex items-center justify-center gap-1 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer truncate ${
-                      activeTab === 'fx' ? 'bg-cyan-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Awan &amp; Efek</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveTab('hud')}
-                    className={`px-1.5 sm:px-3 py-2 text-[11px] sm:text-xs font-black uppercase flex items-center justify-center gap-1 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer truncate ${
-                      activeTab === 'hud' ? 'bg-pink-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-                    }`}
-                  >
-                    <Type className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Teks HUD</span>
-                  </button>
-                </div>
-
-                {/* TAB 1: PANGGUNG & KAMERA 3D */}
-                {activeTab === 'camera' && (
-                  <div className="space-y-4 text-xs">
-                    <div className="p-3 bg-neutral-50 border-2 border-black flex items-center justify-between gap-2">
-                      <div>
-                        <span className="font-black text-black block text-sm">
-                          Aktifkan Bingkai TV / Panggung 3D
-                        </span>
-                        <span className="text-[11px] text-neutral-500">
-                          {settings.stage3d
-                            ? 'Animasi dimuat ke dalam bingkai TV 3D mengambang dengan latar.'
-                            : 'OFF: Animasi tampil 100% Layar Penuh (Direct GPU Full-Bleed + efek pilihan Anda).'}
-                        </span>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={settings.stage3d}
-                        onChange={(e) => setSettings((s) => ({ ...s, stage3d: e.target.checked }))}
-                        className="w-5 h-5 accent-black cursor-pointer"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between font-bold mb-1">
-                        <span>Kecepatan Gerak (Speed Multiplier):</span>
-                        <span className="font-mono">{settings.motionSpeed}x</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.25"
-                        max="3.0"
-                        step="0.25"
-                        value={settings.motionSpeed}
-                        onChange={(e) => {
-                          const spd = Number(e.target.value);
-                          setSettings((s) => ({ ...s, motionSpeed: spd }));
-                          try {
-                            liveIframeRef.current?.contentWindow?.postMessage({
-                              type: 'ctv-live-speed',
-                              speedMultiplier: spd
-                            }, '*');
-                          } catch {}
-                        }}
-                        className="w-full accent-black cursor-pointer h-2"
-                      />
-                    </div>
-
-                    {settings.stage3d && (
-                      <div className="space-y-4 pt-1 border-t border-neutral-200">
-                        <div>
-                          <span className="font-bold text-neutral-700 block mb-1.5">Preset Sudut 3D:</span>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                            {[
-                              { name: 'Flat Depan', rx: 0, ry: 0, rz: 0 },
-                              { name: 'Isometric', rx: 22, ry: -25, rz: 0 },
-                              { name: 'Cinematic Tilt', rx: 16, ry: -20, rz: 0 },
-                              { name: 'Top-Down', rx: 45, ry: 0, rz: 0 }
-                            ].map((p) => (
-                              <button
-                                key={p.name}
-                                onClick={() =>
-                                  setSettings((s) => ({
-                                    ...s,
-                                    rotateX: p.rx,
-                                    rotateY: p.ry,
-                                    rotateZ: p.rz
-                                  }))
-                                }
-                                className="p-2 bg-neutral-100 hover:bg-neutral-200 border border-black font-bold text-center active:bg-yellow-200 transition-colors cursor-pointer"
-                              >
-                                {p.name}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div>
-                            <div className="flex justify-between font-bold mb-1">
-                              <span>Pitch (X):</span>
-                              <span className="font-mono">{settings.rotateX}°</span>
-                            </div>
-                            <input type="range" min="-60" max="60" value={settings.rotateX} onChange={(e) => setSettings((s) => ({ ...s, rotateX: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                          </div>
-                          <div>
-                            <div className="flex justify-between font-bold mb-1">
-                              <span>Yaw (Y):</span>
-                              <span className="font-mono">{settings.rotateY}°</span>
-                            </div>
-                            <input type="range" min="-60" max="60" value={settings.rotateY} onChange={(e) => setSettings((s) => ({ ...s, rotateY: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                          </div>
-                          <div>
-                            <div className="flex justify-between font-bold mb-1">
-                              <span>Roll (Z):</span>
-                              <span className="font-mono">{settings.rotateZ}°</span>
-                            </div>
-                            <input type="range" min="-45" max="45" value={settings.rotateZ} onChange={(e) => setSettings((s) => ({ ...s, rotateZ: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="flex justify-between font-bold mb-1">
-                            <span>Zoom Kamera:</span>
-                            <span className="font-mono">{settings.zoom}x</span>
-                          </div>
-                          <input type="range" min="0.5" max="2.0" step="0.05" value={settings.zoom} onChange={(e) => setSettings((s) => ({ ...s, zoom: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                        </div>
-
-                        <div className="flex items-center justify-between p-2.5 bg-neutral-50 border border-black">
-                          <div>
-                            <span className="font-black text-black block">Auto-Orbit 3D</span>
-                            <span className="text-[11px] text-neutral-500">Gerakan melayang bernapas di ruang 3D</span>
-                          </div>
-                          <input type="checkbox" checked={settings.autoOrbit} onChange={(e) => setSettings((s) => ({ ...s, autoOrbit: e.target.checked }))} className="w-5 h-5 accent-black cursor-pointer" />
-                        </div>
-
-                        <div className="pt-2 border-t border-neutral-200 space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-neutral-800">Latar Belakang TV:</span>
-                            <div className="flex gap-2">
-                              <button onClick={() => setSettings((s) => ({ ...s, bgType: 'gradient' }))} className={`px-2.5 py-1 border border-black font-bold text-[11px] cursor-pointer ${settings.bgType === 'gradient' ? 'bg-black text-white' : 'bg-white text-black'}`}>Gradien</button>
-                              <button onClick={() => setSettings((s) => ({ ...s, bgType: 'solid' }))} className={`px-2.5 py-1 border border-black font-bold text-[11px] cursor-pointer ${settings.bgType === 'solid' ? 'bg-black text-white' : 'bg-white text-black'}`}>Solid</button>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-semibold text-neutral-600">Warna 1:</span>
-                              <input type="color" value={settings.bgColor1} onChange={(e) => setSettings((s) => ({ ...s, bgColor1: e.target.value }))} className="w-8 h-8 p-0 border border-black cursor-pointer" />
-                            </div>
-                            {settings.bgType === 'gradient' && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-semibold text-neutral-600">Warna 2:</span>
-                                <input type="color" value={settings.bgColor2} onChange={(e) => setSettings((s) => ({ ...s, bgColor2: e.target.value }))} className="w-8 h-8 p-0 border border-black cursor-pointer" />
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* TAB 2: AWAN, PARTIKEL & POLESAN HD */}
-                {activeTab === 'fx' && (
-                  <div className="space-y-4 text-xs">
-                    {/* Awan Atmosferik */}
-                    <div className="p-3 bg-neutral-50 border border-black space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Cloud className="w-4 h-4 text-black" />
-                          <span className="font-black text-black">Awan Atmosferik</span>
-                        </div>
-                        <input type="checkbox" checked={settings.clouds} onChange={(e) => setSettings((s) => ({ ...s, clouds: e.target.checked }))} className="w-4 h-4 accent-black cursor-pointer" />
-                      </div>
-                      {settings.clouds && (
-                        <div className="space-y-2 pt-1 border-t border-neutral-200">
-                          <div>
-                            <div className="flex justify-between font-bold mb-1">
-                              <span>Densitas / Opasitas:</span>
-                              <span className="font-mono">{Math.round(settings.cloudDensity * 100)}%</span>
-                            </div>
-                            <input type="range" min="0.05" max="0.9" step="0.05" value={settings.cloudDensity} onChange={(e) => setSettings((s) => ({ ...s, cloudDensity: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold">Warna Awan:</span>
-                            <input type="color" value={settings.cloudColor} onChange={(e) => setSettings((s) => ({ ...s, cloudColor: e.target.value }))} className="w-8 h-8 p-0 border border-black cursor-pointer" />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Partikel Udara */}
-                    <div className="p-3 bg-neutral-50 border border-black space-y-2.5">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Sparkles className="w-4 h-4 text-black" />
-                          <span className="font-black text-black">Partikel Udara</span>
-                        </div>
-                        <input type="checkbox" checked={settings.particles} onChange={(e) => setSettings((s) => ({ ...s, particles: e.target.checked }))} className="w-4 h-4 accent-black cursor-pointer" />
-                      </div>
-                      {settings.particles && (
-                        <div className="space-y-2.5 pt-1 border-t border-neutral-200">
-                          <div>
-                            <span className="font-bold block mb-1">Gaya Partikel:</span>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
-                              {[
-                                { id: 'dust', label: 'Bokeh Dust' },
-                                { id: 'stars', label: 'Stars' },
-                                { id: 'snow', label: 'Soft Snow' },
-                                { id: 'sparks', label: 'Neon Sparks' }
-                              ].map((st) => (
-                                <button
-                                  key={st.id}
-                                  onClick={() => setSettings((s) => ({ ...s, particleStyle: st.id }))}
-                                  className={`p-2 border border-black font-bold text-center text-[11px] cursor-pointer ${settings.particleStyle === st.id ? 'bg-cyan-300 text-black' : 'bg-white hover:bg-neutral-100'}`}
-                                >
-                                  {st.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="flex justify-between font-bold mb-1">
-                              <span>Kepadatan:</span>
-                              <span className="font-mono">{settings.particleCount} titik</span>
-                            </div>
-                            <input type="range" min="20" max="300" step="20" value={settings.particleCount} onChange={(e) => setSettings((s) => ({ ...s, particleCount: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold">Warna Cahaya:</span>
-                            <input type="color" value={settings.particleColor} onChange={(e) => setSettings((s) => ({ ...s, particleColor: e.target.value }))} className="w-8 h-8 p-0 border border-black cursor-pointer" />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Polesan Sinematik HD Lengkap */}
-                    <div className="p-3 bg-neutral-50 border border-black space-y-2.5">
-                      <span className="font-black text-black block uppercase">Polesan Sinematik &amp; Color Grading HD:</span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                        {[
-                          { key: 'vignette', label: 'Vignette Edge Shadow' },
-                          { key: 'colorBoost', label: 'Color Boost / Vivid' },
-                          { key: 'softBloom', label: 'Soft Bloom / Glow' },
-                          { key: 'filmGrain', label: 'Subtle Film Grain' },
-                          { key: 'fadeInOut', label: 'Fade In/Out Intro-Outro' }
-                        ].map((fx) => (
-                          <label key={fx.key} className="flex items-center gap-2 p-2 bg-white border border-black cursor-pointer select-none">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(settings[fx.key])}
-                              onChange={(e) => setSettings((s) => ({ ...s, [fx.key]: e.target.checked }))}
-                              className="w-4 h-4 accent-black cursor-pointer"
-                            />
-                            <span className="font-bold text-[11px]">{fx.label}</span>
-                          </label>
-                        ))}
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-neutral-200">
-                        <div>
-                          <div className="flex justify-between font-bold mb-1">
-                            <span>Ekstra Kontras:</span>
-                            <span className="font-mono">+{Math.round((settings.contrastBoost || 0) * 100)}%</span>
-                          </div>
-                          <input type="range" min="0" max="0.35" step="0.05" value={settings.contrastBoost || 0} onChange={(e) => setSettings((s) => ({ ...s, contrastBoost: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                        </div>
-                        <div>
-                          <div className="flex justify-between font-bold mb-1">
-                            <span>Kecerahan:</span>
-                            <span className="font-mono">{(settings.brightnessBoost || 0) > 0 ? '+' : ''}{Math.round((settings.brightnessBoost || 0) * 100)}%</span>
-                          </div>
-                          <input type="range" min="-0.2" max="0.25" step="0.05" value={settings.brightnessBoost || 0} onChange={(e) => setSettings((s) => ({ ...s, brightnessBoost: Number(e.target.value) }))} className="w-full accent-black cursor-pointer h-2" />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* TAB 3: TIPOGRAFI HUD & WATERMARK */}
-                {activeTab === 'hud' && (
-                  <div className="space-y-3 text-xs">
-                    <div className="flex items-center justify-between p-2.5 bg-neutral-50 border border-black">
-                      <div>
-                        <span className="font-black text-black block">Tampilkan Judul &amp; Subjudul HUD</span>
-                        <span className="text-[11px] text-neutral-500">Badge teks tajam langsung di video (Full Layar &amp; 3D)</span>
-                      </div>
-                      <input type="checkbox" checked={settings.hudEnabled} onChange={(e) => setSettings((s) => ({ ...s, hudEnabled: e.target.checked }))} className="w-5 h-5 accent-black cursor-pointer" />
-                    </div>
-
-                    {settings.hudEnabled && (
-                      <div className="space-y-3 pt-1">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div>
-                            <label className="font-bold text-neutral-800 block mb-1">Judul Utama:</label>
-                            <input type="text" value={settings.hudTitle} onChange={(e) => setSettings((s) => ({ ...s, hudTitle: e.target.value }))} placeholder="Contoh: SPECIAL LAUNCH" className="w-full bg-white border-2 border-black p-2 font-bold font-mono text-xs focus:outline-none" />
-                          </div>
-                          <div>
-                            <label className="font-bold text-neutral-800 block mb-1">Subjudul:</label>
-                            <input type="text" value={settings.hudSubtitle} onChange={(e) => setSettings((s) => ({ ...s, hudSubtitle: e.target.value }))} placeholder="Contoh: LIMITED EDITION" className="w-full bg-white border-2 border-black p-2 font-bold font-mono text-xs focus:outline-none" />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div>
-                            <label className="font-bold text-neutral-800 block mb-1">Gaya Badge HUD:</label>
-                            <select value={settings.hudStyle || 'brutalist'} onChange={(e) => setSettings((s) => ({ ...s, hudStyle: e.target.value }))} className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer">
-                              <option value="brutalist">Neo-Brutalist (Box Tegas)</option>
-                              <option value="glass">Glassmorphism Gelap</option>
-                              <option value="minimal">Strip Minimalis</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="font-bold text-neutral-800 block mb-1">Skala &amp; Warna Aksen:</label>
-                            <div className="flex items-center gap-2">
-                              <input type="range" min="0.7" max="1.4" step="0.1" value={settings.hudScale || 1} onChange={(e) => setSettings((s) => ({ ...s, hudScale: Number(e.target.value) }))} className="flex-1 accent-black cursor-pointer" />
-                              <input type="color" value={settings.hudAccentColor || '#ff0055'} onChange={(e) => setSettings((s) => ({ ...s, hudAccentColor: e.target.value }))} className="w-8 h-8 p-0 border border-black cursor-pointer shrink-0" />
-                            </div>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="font-bold text-neutral-800 block mb-1">Posisi HUD:</label>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                            {[
-                              { id: 'bottom-left', label: 'Bawah Kiri' },
-                              { id: 'bottom-center', label: 'Bawah Tengah' },
-                              { id: 'top-left', label: 'Atas Kiri' },
-                              { id: 'top-center', label: 'Atas Tengah' }
-                            ].map((pos) => (
-                              <button
-                                key={pos.id}
-                                onClick={() => setSettings((s) => ({ ...s, hudPosition: pos.id }))}
-                                className={`p-2 border border-black font-bold text-[11px] text-center cursor-pointer ${settings.hudPosition === pos.id ? 'bg-pink-300 text-black' : 'bg-white hover:bg-neutral-100'}`}
-                              >
-                                {pos.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Watermark / Brand Pill Opsional */}
-                    <div className="p-2.5 bg-neutral-50 border border-black space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="font-black text-black">Watermark Pojok Kanan Atas</span>
-                        <input type="checkbox" checked={Boolean(settings.watermarkEnabled)} onChange={(e) => setSettings((s) => ({ ...s, watermarkEnabled: e.target.checked }))} className="w-4 h-4 accent-black cursor-pointer" />
-                      </div>
-                      {settings.watermarkEnabled && (
-                        <input
-                          type="text"
-                          value={settings.watermarkText || ''}
-                          onChange={(e) => setSettings((s) => ({ ...s, watermarkText: e.target.value }))}
-                          placeholder="Teks watermark, misal: @kuro.studio"
-                          className="w-full bg-white border border-black p-2 font-mono font-bold text-xs"
-                        />
-                      )}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+          {/* PANEL KUSTOMISASI TERPADU (DIPAKAI BERSAMA EDITOR KODE & EDITOR TEKS) */}
+          <StudioCustomPanel
+            editorTab={editorTab}
+            settings={settings}
+            onChangeSetting={handleChangeSetting}
+            onToggleBypass={handleToggleBypass}
+            onResetToPure={handleResetAllStudioEffectsToPure}
+            recommendedDuration={compiledPrompt.summary.recommendedDuration}
+            onSendLiveSpeed={sendLiveSpeed}
+            onSyncTextDuration={() => {
+              const rec = compiledPrompt.summary.recommendedDuration || 12;
+              handleChangeSetting({ autoDuration: true });
+              setExportDuration(rec);
+              onShowToast?.(`Durasi disinkronkan dengan teks: ${rec}s.`, 'info');
+            }}
+          />
         </div>
       </div>
 
@@ -2290,7 +1674,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 value={effectiveExportDuration}
                 onChange={(e) => {
                   const next = Math.max(3, Math.min(300, Number(e.target.value) || 12));
-                  setPromptOptions((p) => ({ ...p, autoDuration: false }));
+                  setSettings((p) => ({ ...p, autoDuration: false }));
                   setExportDuration(next);
                 }}
                 disabled={isRendering || bundleExportState.active}
@@ -2310,7 +1694,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                     key={p.sec}
                     type="button"
                     onClick={() => {
-                      setPromptOptions((prev) => ({ ...prev, autoDuration: false }));
+                      setSettings((prev) => ({ ...prev, autoDuration: false }));
                       setExportDuration(p.sec);
                     }}
                     disabled={isRendering || bundleExportState.active}
@@ -2325,7 +1709,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   type="button"
                   onClick={() => {
                     const rec = compiledPrompt.summary.recommendedDuration || 12;
-                    setPromptOptions((prev) => ({ ...prev, autoDuration: true }));
+                    setSettings((prev) => ({ ...prev, autoDuration: true }));
                     setExportDuration(rec);
                     onShowToast?.(`Durasi mengikuti naskah Editor Teks: ${rec}s (${formatSecondsToMmSs(rec)}).`, 'info');
                   }}

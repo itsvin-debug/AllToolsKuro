@@ -83,6 +83,188 @@ export const BITRATE_PRESETS = {
   ultra: 26_000_000     // 26 Mbps
 };
 
+export const STUDIO_FONT_PRESETS = {
+  original: '',
+  geometric: "'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif",
+  'bold-display': "'Montserrat', 'Arial Black', system-ui, sans-serif",
+  'editorial-serif': "'Georgia', 'Times New Roman', serif",
+  'tech-mono': "'JetBrains Mono', ui-monospace, 'Cascadia Code', monospace"
+};
+
+export const STUDIO_VISUAL_STYLES = [
+  { id: 'auto', name: 'Otomatis / Asli' },
+  { id: 'neo-brutalist', name: 'Neo-Brutalist' },
+  { id: 'glassmorphism', name: 'Glassmorphism 3D' },
+  { id: 'warm-promo', name: 'Sinematik Promo' },
+  { id: 'cyber-neon', name: 'Neon Cyber' },
+  { id: 'editorial-minimal', name: 'Minimalis Terang' },
+  { id: 'culinary-warm', name: 'Kuliner Hangat' },
+  { id: 'quotes-editorial', name: 'Editorial Quotes' }
+];
+
+export const STUDIO_MOOD_PRESETS = [
+  { id: 'auto', name: 'Asli / Otomatis', dot: '#94a3b8', bg1: '#f8fafc', bg2: '#e0f2fe', accent: '#38bdf8', text: '#ffffff', sat: 100, con: 100, bri: 100, hue: 0 },
+  { id: 'pearl-sky', name: 'Mutiara & Biru Langit', dot: '#bae6fd', bg1: '#f8fafc', bg2: '#e0f2fe', accent: '#38bdf8', text: '#0f172a', sat: 105, con: 102, bri: 105, hue: 0 },
+  { id: 'deep-indigo', name: 'Deep Indigo Neon', dot: '#4f46e5', bg1: '#07091e', bg2: '#1e1b4b', accent: '#38bdf8', text: '#f8fafc', sat: 120, con: 110, bri: 98, hue: -8 },
+  { id: 'luxury-gold', name: 'Emas Mewah', dot: '#facc15', bg1: '#0b0b10', bg2: '#231807', accent: '#facc15', text: '#ffffff', sat: 122, con: 112, bri: 98, hue: 10 },
+  { id: 'crimson-fire', name: 'Merah Mercon', dot: '#ef4444', bg1: '#150506', bg2: '#420a10', accent: '#ef4444', text: '#fff5f5', sat: 130, con: 114, bri: 100, hue: -12 },
+  { id: 'emerald-clean', name: 'Emerald Clean', dot: '#34d399', bg1: '#04120e', bg2: '#073528', accent: '#34d399', text: '#ecfdf5', sat: 118, con: 108, bri: 102, hue: 28 },
+  { id: 'sakura-pastel', name: 'Sakura Pastel', dot: '#fb7185', bg1: '#fff1f2', bg2: '#ffe4e6', accent: '#f43f5e', text: '#1f2937', sat: 110, con: 98, bri: 106, hue: -18 },
+  { id: 'sharp-mono', name: 'Monokrom Tajam', dot: '#0f172a', bg1: '#ffffff', bg2: '#e2e8f0', accent: '#0f172a', text: '#09090b', sat: 0, con: 125, bri: 102, hue: 0 },
+  { id: 'custom', name: 'Kustom Sendiri', dot: '#a855f7', bg1: '#f8fafc', bg2: '#e0f2fe', accent: '#38bdf8', text: '#ffffff', sat: 100, con: 100, bri: 100, hue: 0 }
+];
+
+export const DEFAULT_STUDIO_SETTINGS = {
+  pureBypassMode: true,
+  visualStyle: 'auto',
+  mood: 'auto',
+  usePromptHexColors: true,
+  bgType: 'gradient',
+  bgColor1: '#f8fafc',
+  bgColor2: '#e0f2fe',
+  tintColor: '#38bdf8',
+  hudTextColor: '#ffffff',
+  saturation: 100,
+  contrast: 100,
+  brightness: 100,
+  hueRotate: 0,
+  bgPattern: 'none',
+  frameStyle: 'full',
+  heroVisual: 'auto',
+  cardStyle: 'auto',
+  stage3d: false,
+  clouds: false,
+  cloudDensity: 0.25,
+  cloudColor: '#ffffff',
+  particles: false,
+  particleStyle: 'petals-stars',
+  particleCount: 100,
+  particleColor: '#ffffff',
+  vignette: false,
+  softBloom: false,
+  filmGrain: false,
+  shimmerSweep: false,
+  colorBoost: false,
+  contrastBoost: 0,
+  brightnessBoost: 0,
+  fadeInOut: false,
+  fontFamily: 'original',
+  hudEnabled: false,
+  hudTitle: 'KURO STUDIO',
+  hudSubtitle: '60 FPS MOTION VIDEO',
+  brandBadgeEnabled: false,
+  brandBadgeText: 'KURO STUDIO',
+  hudPosition: 'bottom-left',
+  hudStyle: 'brutalist',
+  hudAccentColor: '#ff0055',
+  hudScale: 1.0,
+  progressBarEnabled: false,
+  textScale: 'normal',
+  textAlign: 'left',
+  showMetricCounters: true,
+  motionSpeed: 1.0,
+  transitionStyle: 'none',
+  cameraMotion: 'static',
+  rotateX: 18,
+  rotateY: -20,
+  rotateZ: 0,
+  zoom: 1.05,
+  autoOrbit: false,
+  motionEasing: 'bouncy',
+  autoDuration: false,
+  watermarkEnabled: false,
+  watermarkText: 'KURO STUDIO'
+};
+
+export function buildCssFilterString(settings = {}) {
+  if (settings?.pureBypassMode) return 'none';
+  const moodPreset = STUDIO_MOOD_PRESETS.find((m) => m.id === settings.mood);
+  const baseSat = moodPreset ? moodPreset.sat : 100;
+  const baseCon = moodPreset ? moodPreset.con : 100;
+  const baseBri = moodPreset ? moodPreset.bri : 100;
+  const baseHue = moodPreset ? moodPreset.hue : 0;
+
+  const userSat = Number(settings.saturation ?? 100);
+  const userCon = Number(settings.contrast ?? 100);
+  const userBri = Number(settings.brightness ?? 100);
+  const userHue = Number(settings.hueRotate ?? 0);
+
+  const sat = Math.max(0, Math.round((baseSat * userSat) / 100));
+  const con = Math.max(30, Math.round((baseCon * userCon) / 100 + (settings.colorBoost ? 8 : 0)));
+  const bri = Math.max(30, Math.round((baseBri * userBri) / 100));
+  const hue = Math.round(baseHue + userHue);
+
+  if (sat === 100 && con === 100 && bri === 100 && hue === 0) return 'none';
+  return `saturate(${sat}%) contrast(${con}%) brightness(${bri}%) hue-rotate(${hue}deg)`;
+}
+
+export function computeMotionAndFrameRect(width, height, t = 0, totalDuration = 12, settings = {}) {
+  if (settings?.pureBypassMode) {
+    return {
+      rect: { x: 0, y: 0, w: width, h: height, radius: 0 },
+      alpha: 1,
+      scale: 1,
+      tx: 0,
+      ty: 0,
+      wipeProgress: 1
+    };
+  }
+
+  const frameStyle = settings.frameStyle || (settings.stage3d ? '3d-tv' : 'full');
+  const pad = frameStyle === 'neo-brutalist'
+    ? Math.round(Math.min(width, height) * 0.055)
+    : frameStyle === 'glass'
+    ? Math.round(Math.min(width, height) * 0.048)
+    : 0;
+  const radius = frameStyle === 'neo-brutalist' ? 10 : frameStyle === 'glass' ? 22 : 0;
+  const rect = { x: pad, y: pad, w: Math.max(16, width - pad * 2), h: Math.max(16, height - pad * 2), radius };
+
+  let alpha = 1;
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+  let wipeProgress = 1;
+
+  const cam = settings.cameraMotion || 'static';
+  if (cam === 'ken-burns') {
+    const prog = Math.min(1, t / Math.max(1, totalDuration));
+    scale *= 1 + prog * 0.09;
+    tx += Math.sin(prog * Math.PI) * width * 0.015;
+    ty -= Math.sin(prog * Math.PI) * height * 0.012;
+  } else if (cam === 'floating') {
+    scale *= 1.035;
+    tx += Math.sin(t * 1.1) * width * 0.01;
+    ty += Math.cos(t * 0.85) * height * 0.01;
+  }
+
+  const tr = settings.fadeInOut && (!settings.transitionStyle || settings.transitionStyle === 'none')
+    ? 'fade'
+    : (settings.transitionStyle || 'none');
+
+  if (tr !== 'none') {
+    const transDur = 0.55;
+    const enterProg = Math.min(1, Math.max(0, t / transDur));
+    const exitRemain = Math.max(0, totalDuration - t);
+    const exitProg = totalDuration > 1.5 && exitRemain < transDur ? Math.min(1, exitRemain / transDur) : 1;
+    const gate = Math.min(enterProg, exitProg);
+
+    if (tr === 'fade') {
+      alpha *= gate;
+    } else if (tr === 'zoom') {
+      alpha *= gate;
+      scale *= enterProg < 1 ? (1.14 - enterProg * 0.14) : (exitProg < 1 ? (1 - (1 - exitProg) * 0.08) : 1);
+    } else if (tr === 'slide') {
+      alpha *= gate;
+      if (enterProg < 1) ty += (1 - Math.pow(enterProg, 2)) * height * 0.06;
+      else if (exitProg < 1) ty -= (1 - exitProg) * height * 0.05;
+    } else if (tr === 'wipe') {
+      wipeProgress = gate;
+    }
+  }
+
+  return { rect, alpha, scale, tx, ty, wipeProgress };
+}
+
 // --- PROSEDURAL TEKSTUR PARTIKEL & AWAN ---
 
 function createBokehTexture() {
@@ -640,6 +822,20 @@ export function buildLiveBridgeScript() {
         _restartOffset = _origPerfNow();
         _totalPausedMs = 0;
         _isPaused = false;
+      } else if (data.type === 'ctv-live-font') {
+        var styleId = 'ctv-font-override';
+        var existingStyle = document.getElementById(styleId);
+        var cleanFont = data.fontCss ? String(data.fontCss).replace(/[<>{}]/g, '') : '';
+        if (!cleanFont) {
+          if (existingStyle && existingStyle.parentNode) existingStyle.parentNode.removeChild(existingStyle);
+        } else {
+          if (!existingStyle) {
+            existingStyle = document.createElement('style');
+            existingStyle.id = styleId;
+            (document.head || document.documentElement).appendChild(existingStyle);
+          }
+          existingStyle.textContent = 'html,body,h1,h2,h3,h4,p,span,div,button,a{font-family:' + cleanFont + ' !important;}';
+        }
       }
     });
   })();
@@ -895,14 +1091,18 @@ function buildGlslSandboxDocument(glslSource, width, height, bridgeScript) {
  * Mendukung Full HTML, Pure SVG, HTML Fragment, GLSL Shader, Pure CSS, Pure JS Standalone, & Frame Draw Snippet.
  */
 export function compileUniversalCode(rawInput = '', mode = 'live', options = {}) {
-  const { width = 1280, height = 720, cleanBg = false } = options;
+  const { width = 1280, height = 720, cleanBg = false, fontCss = '' } = options;
   const baseBridgeScript = mode === 'render'
     ? buildRenderBridgeScript(width, height)
     : buildLiveBridgeScript();
+  const safeFontCss = fontCss ? String(fontCss).replace(/[<>{}]/g, '') : '';
+  const fontHook = safeFontCss
+    ? `<style id="ctv-font-override">html,body,h1,h2,h3,h4,p,span,div,button,a{font-family:${safeFontCss} !important;}</style>`
+    : '';
   const cleanBgHook = cleanBg
     ? '<style>h1,h2,h3,h4,h5,h6,p,span,a,button,label,text,tspan{opacity:0!important;color:transparent!important;text-shadow:none!important;}</style><script>(function(){if(window.CanvasRenderingContext2D){var p=CanvasRenderingContext2D.prototype;p.fillText=function(){};p.strokeText=function(){};}})();</script>'
     : '';
-  const bridgeScript = baseBridgeScript + cleanBgHook;
+  const bridgeScript = baseBridgeScript + fontHook + cleanBgHook;
 
   const cleanCode = sanitizeUniversalSource(rawInput);
   const { category } = detectCodeLanguage(cleanCode);
@@ -1423,7 +1623,7 @@ export class CodeToVideoCompositor {
       const subText = (settings.hudSubtitle || 'KURO STUDIO DETERMINISTIC').toUpperCase();
       const pos = settings.hudPosition || 'bottom-left';
       const hudStyle = settings.hudStyle || 'brutalist';
-      const accent = settings.hudAccentColor || '#ff0055';
+      const accent = settings.tintColor || settings.hudAccentColor || '#ff0055';
 
       ctx.save();
       const titleSize = Math.round(20 * scaleFactor);
@@ -1521,14 +1721,247 @@ export class CodeToVideoCompositor {
     }
   }
 
-  applyPostEffects(targetCtx, width, height, t, settings = {}) {
+  drawFrameBackdrop(ctx, width, height, settings = {}) {
+    const frameStyle = settings.frameStyle || (settings.stage3d ? '3d-tv' : 'full');
+    if (frameStyle !== 'neo-brutalist' && frameStyle !== 'glass') return;
+
+    const c1 = settings.bgColor1 || '#f8fafc';
+    const c2 = settings.bgColor2 || '#e0f2fe';
+    if (settings.bgType === 'solid') {
+      ctx.fillStyle = c1;
+    } else {
+      const grad = ctx.createLinearGradient(0, 0, width, height);
+      grad.addColorStop(0, c1);
+      grad.addColorStop(1, c2);
+      ctx.fillStyle = grad;
+    }
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  drawFrameBorder(ctx, rect, width, height, settings = {}) {
+    const frameStyle = settings.frameStyle || (settings.stage3d ? '3d-tv' : 'full');
+    if (frameStyle !== 'neo-brutalist' && frameStyle !== 'glass') return;
+
+    ctx.save();
+    if (frameStyle === 'neo-brutalist') {
+      const offset = Math.max(4, Math.round(Math.min(width, height) * 0.01));
+      const bw = Math.max(2.5, Math.round(Math.min(width, height) * 0.005));
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = bw;
+      // Offset drop shadow along right and bottom outer frame edge
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(rect.x + offset, rect.y + rect.h, rect.w, offset);
+      ctx.fillRect(rect.x + rect.w, rect.y + offset, offset, rect.h);
+      ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+    } else if (frameStyle === 'glass') {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+      ctx.lineWidth = 3;
+      if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(rect.x, rect.y, rect.w, rect.h, rect.radius);
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+      }
+    }
+    ctx.restore();
+  }
+
+  drawAtmosphericPattern(ctx, width, height, t, settings = {}) {
+    const pat = settings.bgPattern;
+    if (!pat || pat === 'none' || pat === 'auto' || pat === 'plain') return;
+    const accent = settings.tintColor || '#38bdf8';
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'screen';
+    if (pat === 'grid-tilted') {
+      ctx.translate(width * 0.5, height * 0.5);
+      ctx.rotate(-0.18);
+      ctx.strokeStyle = accent;
+      ctx.globalAlpha = 0.22;
+      ctx.lineWidth = 1.2;
+      const step = Math.max(40, Math.round(Math.min(width, height) * 0.075));
+      const shift = (t * 20) % step;
+      for (let gx = -width; gx <= width; gx += step) {
+        ctx.beginPath(); ctx.moveTo(gx + shift, -height); ctx.lineTo(gx + shift, height); ctx.stroke();
+      }
+      for (let gy = -height; gy <= height; gy += step) {
+        ctx.beginPath(); ctx.moveTo(-width, gy + shift); ctx.lineTo(width, gy + shift); ctx.stroke();
+      }
+    } else if (pat === 'grid-3d') {
+      ctx.strokeStyle = accent;
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = 1.2;
+      const hy = height * 0.56;
+      for (let col = -10; col <= 10; col++) {
+        ctx.beginPath();
+        ctx.moveTo(width * 0.5 + col * width * 0.025, hy);
+        ctx.lineTo(width * 0.5 + col * width * 0.16, height);
+        ctx.stroke();
+      }
+      for (let r = 1; r <= 8; r++) {
+        const prog = (r / 8 + t * 0.16) % 1;
+        const ry = hy + Math.pow(prog, 2) * (height - hy);
+        ctx.beginPath(); ctx.moveTo(0, ry); ctx.lineTo(width, ry); ctx.stroke();
+      }
+    } else if (pat === 'aurora') {
+      ctx.globalAlpha = 0.25;
+      for (let a = 0; a < 2; a++) {
+        const cx = width * (0.3 + a * 0.4 + Math.sin(t * 0.5 + a) * 0.08);
+        const cy = height * (0.35 + a * 0.25 + Math.cos(t * 0.4 + a) * 0.08);
+        const rA = Math.max(width, height) * 0.45;
+        const g = ctx.createRadialGradient(cx, cy, 10, cx, cy, rA);
+        g.addColorStop(0, accent);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, width, height);
+      }
+    } else if (pat === 'waves') {
+      ctx.strokeStyle = accent;
+      ctx.globalAlpha = 0.24;
+      ctx.lineWidth = 2;
+      for (let wv = 0; wv < 4; wv++) {
+        ctx.beginPath();
+        const baseY = height * (0.28 + wv * 0.18);
+        for (let wx = 0; wx <= width; wx += 28) {
+          const wy = baseY + Math.sin(wx * 0.008 + t * 1.4 + wv) * (height * 0.035);
+          if (wx === 0) ctx.moveTo(wx, wy); else ctx.lineTo(wx, wy);
+        }
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  drawCanvasParticlesOverlay(ctx, width, height, t, settings = {}) {
+    if (!settings?.particles) return;
+    const style = settings.particleStyle || 'petals-stars';
+    const count = Math.min(300, Math.max(20, Number(settings.particleCount) || 100));
+    const color = settings.particleColor || '#ffffff';
+    const baseScale = Math.min(width, height) / 720;
+
+    ctx.save();
+    for (let i = 0; i < count; i++) {
+      const rx = ((i * 73 + 19) % 1000) / 1000;
+      const ry = ((i * 137 + 41) % 1000) / 1000;
+      const spd = 0.03 + (i % 7) * 0.012;
+      const moveUp = style === 'fire-sparks' || style === 'sparks';
+      const x = ((rx + Math.sin(t * 0.8 + i) * 0.025) % 1 + 1) % 1 * width;
+      const y = (moveUp ? ((ry - t * spd) % 1 + 1) % 1 : ((ry + t * spd) % 1)) * height;
+      const size = (1.6 + (i % 4) * 1.1) * baseScale;
+
+      ctx.globalAlpha = style === 'dust' ? 0.35 + (i % 3) * 0.15 : 0.65;
+      ctx.fillStyle = color;
+
+      if (style === 'petals-stars' && i % 2 === 0) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(t * 0.9 + i);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, size * 1.6, size * 0.7, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, style === 'snow' ? size * 1.15 : size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  drawBrandPill(ctx, width, height, settings = {}) {
+    if (!settings?.brandBadgeEnabled || !String(settings?.brandBadgeText || '').trim()) return;
+    const label = String(settings.brandBadgeText).trim().toUpperCase();
+    const baseScale = Math.min(width / 1280, height / 720);
+    const fontSize = Math.max(12, Math.round(16 * baseScale));
+    const padX = Math.round(24 * baseScale);
+    const padY = Math.round(22 * baseScale);
+
+    ctx.save();
+    ctx.font = `900 ${fontSize}px monospace`;
+    const bw = Math.min(width * 0.55, ctx.measureText(label).width + 28 * baseScale);
+    const bh = fontSize * 2.1;
+    const isBrutalist = (settings.hudStyle || 'brutalist') === 'brutalist';
+
+    if (isBrutalist) {
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(padX + 4 * baseScale, padY + 4 * baseScale, bw, bh);
+      ctx.fillStyle = settings.tintColor || '#fde047';
+      ctx.fillRect(padX, padY, bw, bh);
+      ctx.strokeStyle = '#0f172a';
+      ctx.lineWidth = 2.5 * baseScale;
+      ctx.strokeRect(padX, padY, bw, bh);
+      ctx.fillStyle = '#0f172a';
+    } else {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+      ctx.fillRect(padX, padY, bw, bh);
+      ctx.strokeStyle = settings.tintColor || '#38bdf8';
+      ctx.lineWidth = 2 * baseScale;
+      ctx.strokeRect(padX, padY, bw, bh);
+      ctx.fillStyle = settings.hudTextColor || '#ffffff';
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, padX + bw * 0.5, padY + bh * 0.52, bw - 12 * baseScale);
+    ctx.restore();
+  }
+
+  drawBottomProgressBar(ctx, width, height, t, settings = {}) {
+    if (!settings?.progressBarEnabled) return;
+    const totalDur = Math.max(1, Number(settings.totalDuration) || 12);
+    const pct = Math.max(0, Math.min(1, t / totalDur));
+    const barH = Math.max(5, Math.round(height * 0.009));
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+    ctx.fillRect(0, height - barH, width, barH);
+    ctx.fillStyle = settings.tintColor || '#38bdf8';
+    ctx.fillRect(0, height - barH, width * pct, barH);
+    ctx.restore();
+  }
+
+  applyPostEffects(targetCtx, width, height, t, settings = {}, rectOverride = null) {
     if (!targetCtx || settings?.pureBypassMode) return;
+    const box = rectOverride || { x: 0, y: 0, w: width, h: height, radius: 0 };
+
+    // 1. Visual Look / Tint Wash lembut bila pengguna memilih aksen/style khusus
+    if (settings?.visualStyle && settings.visualStyle !== 'auto') {
+      targetCtx.save();
+      targetCtx.globalCompositeOperation = 'soft-light';
+      targetCtx.fillStyle = settings.tintColor || '#38bdf8';
+      targetCtx.globalAlpha = 0.14;
+      targetCtx.fillRect(box.x, box.y, box.w, box.h);
+      targetCtx.restore();
+    }
+
+    // 2. Pola Latar / Atmosfer Screen Blend
+    this.drawAtmosphericPattern(targetCtx, width, height, t, settings);
+
+    // 3. Diagonal Shimmer Sweep
+    if (settings?.shimmerSweep) {
+      const cycle = (t % 3.2) / 1.1;
+      if (cycle <= 1.2) {
+        targetCtx.save();
+        const sx = box.x - box.w * 0.3 + cycle * (box.w * 1.6);
+        const grad = targetCtx.createLinearGradient(sx - 60, box.y, sx + 60, box.y + box.h);
+        grad.addColorStop(0, 'rgba(255,255,255,0)');
+        grad.addColorStop(0.5, 'rgba(255,255,255,0.22)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        targetCtx.fillStyle = grad;
+        targetCtx.fillRect(box.x, box.y, box.w, box.h);
+        targetCtx.restore();
+      }
+    }
+
+    // 4. Partikel Udara Canvas 2D (5 gaya)
+    this.drawCanvasParticlesOverlay(targetCtx, width, height, t, settings);
 
     if (settings?.softBloom) {
       targetCtx.save();
       targetCtx.globalCompositeOperation = 'screen';
       const bg = targetCtx.createRadialGradient(width * 0.5, height * 0.45, width * 0.05, width * 0.5, height * 0.45, Math.max(width, height) * 0.65);
-      bg.addColorStop(0, 'rgba(255, 255, 255, 0.14)');
+      bg.addColorStop(0, 'rgba(255, 255, 255, 0.16)');
       bg.addColorStop(1, 'rgba(255, 255, 255, 0)');
       targetCtx.fillStyle = bg;
       targetCtx.fillRect(0, 0, width, height);
@@ -1546,31 +1979,11 @@ export class CodeToVideoCompositor {
       targetCtx.fillRect(0, 0, width, height);
     }
 
-    if (settings?.colorBoost || Number(settings?.contrastBoost) > 0) {
-      const cAlpha = 0.08 + Math.min(0.25, Math.max(0, Number(settings?.contrastBoost) || 0) * 0.5);
-      targetCtx.save();
-      targetCtx.globalCompositeOperation = 'soft-light';
-      targetCtx.fillStyle = `rgba(255, 255, 255, ${cAlpha.toFixed(2)})`;
-      targetCtx.fillRect(0, 0, width, height);
-      targetCtx.restore();
-    }
-
-    const bright = Number(settings?.brightnessBoost) || 0;
-    if (bright !== 0) {
-      targetCtx.save();
-      targetCtx.fillStyle = bright > 0
-        ? `rgba(255, 255, 255, ${Math.min(0.35, bright).toFixed(2)})`
-        : `rgba(0, 0, 0, ${Math.min(0.45, Math.abs(bright)).toFixed(2)})`;
-      targetCtx.fillRect(0, 0, width, height);
-      targetCtx.restore();
-    }
-
     if (settings?.filmGrain) {
-      const grainAlpha = 0.05;
       const shiftX = Math.floor((t * 37) % 19);
       const shiftY = Math.floor((t * 53) % 19);
       targetCtx.save();
-      targetCtx.fillStyle = `rgba(255,255,255,${grainAlpha})`;
+      targetCtx.fillStyle = 'rgba(255,255,255,0.05)';
       const step = Math.max(24, Math.round(Math.min(width, height) * 0.04));
       for (let gx = shiftX; gx < width; gx += step) {
         for (let gy = shiftY; gy < height; gy += step) {
@@ -1580,58 +1993,92 @@ export class CodeToVideoCompositor {
       targetCtx.restore();
     }
 
+    // 5. Border Bingkai Video (Neo-Brutalist / Glass)
+    this.drawFrameBorder(targetCtx, box, width, height, settings);
+
+    // 6. Elemen Tipografi & HUD
+    this.drawBrandPill(targetCtx, width, height, settings);
     if (settings?.hudEnabled || settings?.watermarkEnabled) {
       this.renderHud(settings);
       targetCtx.drawImage(this.hudCanvas, 0, 0, width, height);
     }
+    this.drawBottomProgressBar(targetCtx, width, height, t, settings);
+  }
 
-    if (settings?.fadeInOut) {
-      const dur = Number(settings?.totalDuration) || 0;
-      let fadeAlpha = 0;
-      if (t < 0.45) fadeAlpha = 1 - Math.max(0, t) / 0.45;
-      else if (dur > 1.5 && t > dur - 0.45) fadeAlpha = Math.min(1, (t - (dur - 0.45)) / 0.45);
-      if (fadeAlpha > 0.01) {
-        targetCtx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha.toFixed(3)})`;
-        targetCtx.fillRect(0, 0, width, height);
-      }
+  /**
+   * Fungsi Komposisi Terpadu (Direct Render ke masterCanvas saat ekspor video WebCodecs)
+   */
+  compositeCustomEffects(ctx, source, width, height, t, settings = {}) {
+    const isBypass = Boolean(settings?.pureBypassMode);
+    ctx.clearRect(0, 0, width, height);
+
+    if (isBypass) {
+      if (source) ctx.drawImage(source, 0, 0, width, height);
+      return;
     }
+
+    const totalDur = Number(settings?.totalDuration) || 12;
+    const motion = computeMotionAndFrameRect(width, height, t, totalDur, settings);
+    const box = motion.rect;
+
+    // Latar belakang frame (saat Neo-Brutalist / Glass)
+    this.drawFrameBackdrop(ctx, width, height, settings);
+
+    // Gambar video sumber di dalam area frame dengan Filter, Camera Motion & Transisi
+    if (source) {
+      ctx.save();
+      if (box.radius > 0 && ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(box.x, box.y, box.w, box.h, box.radius);
+        ctx.clip();
+      } else {
+        ctx.beginPath();
+        ctx.rect(box.x, box.y, box.w * motion.wipeProgress, box.h);
+        ctx.clip();
+      }
+
+      ctx.globalAlpha = motion.alpha;
+      const cssFilter = buildCssFilterString(settings);
+      if (cssFilter !== 'none') ctx.filter = cssFilter;
+
+      const cx = box.x + box.w * 0.5;
+      const cy = box.y + box.h * 0.5;
+      ctx.translate(cx + motion.tx, cy + motion.ty);
+      ctx.scale(motion.scale, motion.scale);
+      ctx.translate(-cx, -cy);
+
+      ctx.drawImage(source, box.x, box.y, box.w, box.h);
+      ctx.restore();
+    }
+
+    // Awan Atmosferik Three.js
+    if (settings?.clouds) {
+      this.codeGroup.visible = false;
+      this.bgMesh.visible = false;
+      if (this.particles) this.particles.visible = false;
+
+      this.updateScene(t, { ...settings, particles: false });
+      this.renderer.render(this.scene, this.camera);
+      ctx.drawImage(this.offscreenThreeCanvas, 0, 0, width, height);
+
+      this.codeGroup.visible = true;
+      this.bgMesh.visible = true;
+    }
+
+    this.applyPostEffects(ctx, width, height, t, settings, box);
   }
 
   /**
    * Render satu frame komprehensif ke masterCanvas
-   * Mendukung MODE POLOS MURNI (pureBypassMode), TRUE FULL-SCREEN CINEMATIC (stage3d: false) & 3D TV STAGE
+   * Mendukung MODE POLOS MURNI (pureBypassMode), BINGKAI/FULLSCREEN KUSTOM & 3D TV STAGE
    */
   renderFrame(t, settings = {}) {
     const isBypass = Boolean(settings?.pureBypassMode);
-    const is3dStage = !isBypass && Boolean(settings?.stage3d);
+    const is3dStage = !isBypass && (settings?.frameStyle === '3d-tv' || Boolean(settings?.stage3d));
     const source = this.latestBitmap || this.codeCanvas;
 
     if (!is3dStage) {
-      this.masterCtx.clearRect(0, 0, this.width, this.height);
-
-      if (source) {
-        this.masterCtx.drawImage(source, 0, 0, this.width, this.height);
-      }
-
-      if (!isBypass) {
-        if (settings?.clouds || settings?.particles) {
-          this.codeGroup.visible = false;
-          this.bgMesh.visible = false;
-
-          this.updateScene(t, settings);
-          this.renderer.render(this.scene, this.camera);
-
-          this.masterCtx.save();
-          this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
-          this.masterCtx.restore();
-
-          this.codeGroup.visible = true;
-          this.bgMesh.visible = true;
-        }
-
-        this.applyPostEffects(this.masterCtx, this.width, this.height, t, settings);
-      }
-
+      this.compositeCustomEffects(this.masterCtx, source, this.width, this.height, t, settings);
       if (this.previewCtx) {
         this.previewCtx.clearRect(0, 0, this.width, this.height);
         this.previewCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
@@ -1646,17 +2093,27 @@ export class CodeToVideoCompositor {
       this.codeGroup.visible = true;
       this.bgMesh.visible = true;
 
-      this.updateBackground(settings);
-      this.updateScene(t, settings);
+      const stageSettings = {
+        ...settings,
+        stage3d: true,
+        autoOrbit: settings?.cameraMotion === 'auto-orbit' || Boolean(settings?.autoOrbit),
+        particles: false
+      };
 
+      this.updateBackground(stageSettings);
+      this.updateScene(t, stageSettings);
       this.renderer.render(this.scene, this.camera);
-      this.renderHud(settings);
 
       this.masterCtx.clearRect(0, 0, this.width, this.height);
       this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
+
+      this.drawCanvasParticlesOverlay(this.masterCtx, this.width, this.height, t, settings);
+      this.drawBrandPill(this.masterCtx, this.width, this.height, settings);
+      this.renderHud(settings);
       if (settings.hudEnabled || settings.watermarkEnabled) {
         this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
       }
+      this.drawBottomProgressBar(this.masterCtx, this.width, this.height, t, settings);
 
       if (this.previewCtx) {
         this.previewCtx.clearRect(0, 0, this.width, this.height);
@@ -1666,8 +2123,7 @@ export class CodeToVideoCompositor {
   }
 
   /**
-   * Render HANYA efek overlay (Awan, Partikel, Vignette, Color Boost, Bloom, Grain, HUD)
-   * Otomatis kosong bila Mode Polos Murni aktif.
+   * Render HANYA efek overlay di atas Live Preview Iframe (sinkron 100% dengan WebCodecs renderFrame)
    */
   renderOverlayOnly(overlayCtx, width, height, t, settings) {
     if (!overlayCtx) return;
@@ -1675,35 +2131,20 @@ export class CodeToVideoCompositor {
     overlayCtx.clearRect(0, 0, width, height);
     if (settings?.pureBypassMode) return;
 
-    const hasAnyOverlay =
-      settings?.clouds ||
-      settings?.particles ||
-      settings?.vignette ||
-      settings?.colorBoost ||
-      settings?.softBloom ||
-      settings?.filmGrain ||
-      settings?.fadeInOut ||
-      Number(settings?.contrastBoost) > 0 ||
-      Number(settings?.brightnessBoost) !== 0 ||
-      settings?.hudEnabled ||
-      settings?.watermarkEnabled;
+    const totalDur = Number(settings?.totalDuration) || 12;
+    const motion = computeMotionAndFrameRect(width, height, t, totalDur, settings);
 
-    if (!hasAnyOverlay) return;
-
-    if (settings?.clouds || settings?.particles) {
+    if (settings?.clouds) {
       this.codeGroup.visible = false;
       this.bgMesh.visible = false;
-
-      this.updateScene(t, settings);
+      this.updateScene(t, { ...settings, particles: false });
       this.renderer.render(this.scene, this.camera);
-
       overlayCtx.drawImage(this.offscreenThreeCanvas, 0, 0, width, height);
-
       this.codeGroup.visible = true;
       this.bgMesh.visible = true;
     }
 
-    this.applyPostEffects(overlayCtx, width, height, t, settings);
+    this.applyPostEffects(overlayCtx, width, height, t, settings, motion.rect);
   }
 
   dispose() {
@@ -1953,7 +2394,15 @@ export async function exportVideo({
       }, 6000);
     });
 
-    renderIframe.srcdoc = compileUniversalCode(code, 'render', { width, height, cleanBg });
+    const renderFontCss = !effectiveSettings.pureBypassMode
+      ? (STUDIO_FONT_PRESETS[effectiveSettings.fontFamily] || '')
+      : '';
+    renderIframe.srcdoc = compileUniversalCode(code, 'render', {
+      width,
+      height,
+      cleanBg,
+      fontCss: renderFontCss
+    });
     await readyPromise;
 
     // ── 2. JALUR UTAMA: DETERMINISTIC WEBCODECS (MP4-MUXER / WEBM-MUXER) ──

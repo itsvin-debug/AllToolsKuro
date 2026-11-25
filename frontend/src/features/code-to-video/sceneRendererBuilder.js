@@ -523,10 +523,11 @@ export function buildProceduralSceneDocument(sceneGraph, cleanBgOnly = false) {
     for (var i = 0; i < particles.length; i++) {
       var pt = particles[i];
       var px = (pt.x + Math.sin(t * 0.6 + i) * 0.02) * W;
-      var py = (pMode === 'fire-sparks' ? ((pt.y - t * pt.spd) % 1 + 1) % 1 : ((pt.y + t * pt.spd) % 1)) * H;
+      var moveUp = pMode === 'fire-sparks' || pMode === 'sparks';
+      var py = (moveUp ? ((pt.y - t * pt.spd) % 1 + 1) % 1 : ((pt.y + t * pt.spd) % 1)) * H;
       ctx.beginPath();
-      ctx.arc(px, py, pt.r, 0, Math.PI * 2);
-      ctx.fillStyle = hexToRgba(i % 2 === 0 ? pal.accent : pal.secondary, pal.isLight ? 0.28 : 0.42);
+      ctx.arc(px, py, pMode === 'snow' ? pt.r * 1.2 : pt.r, 0, Math.PI * 2);
+      ctx.fillStyle = hexToRgba(i % 2 === 0 ? pal.accent : pal.secondary, pal.isLight ? 0.28 : 0.45);
       ctx.fill();
     }
     ctx.restore();
