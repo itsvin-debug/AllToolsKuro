@@ -56,6 +56,26 @@ export function computeTargetDimensions(resolution = '1080p', aspectRatio = '16:
   return { width: w, height: h };
 }
 
+/**
+ * Resolusi panggung virtual HD tetap untuk penskalaan Live Preview di desktop maupun layar HP
+ */
+export function getVirtualStageSize(aspectRatio = '16:9') {
+  switch (aspectRatio) {
+    case '16:9':
+      return { width: 1280, height: 720 };
+    case '9:16':
+      return { width: 720, height: 1280 };
+    case '1:1':
+      return { width: 1080, height: 1080 };
+    case '4:5':
+      return { width: 1080, height: 1350 };
+    case '21:9':
+      return { width: 1680, height: 720 };
+    default:
+      return { width: 1280, height: 720 };
+  }
+}
+
 export const BITRATE_PRESETS = {
   light: 4_000_000,     // 4 Mbps
   standard: 8_000_000,  // 8 Mbps
@@ -875,10 +895,14 @@ function buildGlslSandboxDocument(glslSource, width, height, bridgeScript) {
  * Mendukung Full HTML, Pure SVG, HTML Fragment, GLSL Shader, Pure CSS, Pure JS Standalone, & Frame Draw Snippet.
  */
 export function compileUniversalCode(rawInput = '', mode = 'live', options = {}) {
-  const { width = 1280, height = 720 } = options;
-  const bridgeScript = mode === 'render'
+  const { width = 1280, height = 720, cleanBg = false } = options;
+  const baseBridgeScript = mode === 'render'
     ? buildRenderBridgeScript(width, height)
     : buildLiveBridgeScript();
+  const cleanBgHook = cleanBg
+    ? '<style>h1,h2,h3,h4,h5,h6,p,span,a,button,label,text,tspan{opacity:0!important;color:transparent!important;text-shadow:none!important;}</style><script>(function(){if(window.CanvasRenderingContext2D){var p=CanvasRenderingContext2D.prototype;p.fillText=function(){};p.strokeText=function(){};}})();</script>'
+    : '';
+  const bridgeScript = baseBridgeScript + cleanBgHook;
 
   const cleanCode = sanitizeUniversalSource(rawInput);
   const { category } = detectCodeLanguage(cleanCode);
@@ -1807,6 +1831,7 @@ export async function exportVideo({
   fps = 60,
   duration = 10,
   bitratePreset = 'high',
+  cleanBg = false,
   onProgress,
   signal
 }) {
@@ -1847,7 +1872,7 @@ export async function exportVideo({
       setTimeout(resolve, 6000);
     });
 
-    renderIframe.srcdoc = compileUniversalCode(code, 'render', { width, height });
+    renderIframe.srcdoc = compileUniversalCode(code, 'render', { width, height, cleanBg });
     await readyPromise;
 
     // ── 2. JALUR UTAMA: DETERMINISTIC WEBCODECS (MP4-MUXER / WEBM-MUXER) ──

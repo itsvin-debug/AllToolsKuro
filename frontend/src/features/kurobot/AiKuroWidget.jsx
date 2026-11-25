@@ -169,9 +169,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       setPos(prev => {
         const clamped = clampPosition(prev, isOpen);
         if (clamped.x !== prev.x || clamped.y !== prev.y || clamped.dockSide !== prev.dockSide) {
-          try {
-            localStorage.setItem(getPosStorageKey(window.innerWidth), JSON.stringify(clamped));
-          } catch (_) {}
+          if (!isOpen) {
+            try {
+              localStorage.setItem(getPosStorageKey(window.innerWidth), JSON.stringify(clamped));
+            } catch (_) {}
+          }
           return clamped;
         }
         return prev;
@@ -309,7 +311,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     }
   };
 
-  // Tutup dan perkecil jendela chat ke launcher mengambang
+  // Tutup dan perkecil jendela chat ke launcher mengambang (kembalikan ke koordinat launcher tersimpan)
   const handleCloseWidget = () => {
     if (typingTimerRef.current) {
       clearInterval(typingTimerRef.current);
@@ -318,6 +320,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     setIsTyping(false);
     setIsOpen(false);
     setAnimState('idle');
+    setPos(clampPosition(getInitialPosition(), false));
   };
 
   // Navigasi ke fitur terpilih
@@ -831,9 +834,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
       const nextPos = { x: Math.round(clampedX), y: Math.round(clampedY), dockSide };
       setPos(nextPos);
-      try {
-        localStorage.setItem(getPosStorageKey(screenW), JSON.stringify(nextPos));
-      } catch (_) {}
+      if (!isOpen) {
+        try {
+          localStorage.setItem(getPosStorageKey(screenW), JSON.stringify(nextPos));
+        } catch (_) {}
+      }
     }
   };
 
