@@ -786,3 +786,489 @@ export function buildCompositeHtml(html = '', css = '', js = '') {
 </body>
 </html>`;
 }
+
+export const TEXT_COLOR_PRESETS = [
+  {
+    id: 'obsidian-gold',
+    name: 'Obsidian Gold',
+    bgColor: '#0b0b0f',
+    bgSecondary: '#1c170b',
+    accentColor: '#facc15',
+    textColor: '#ffffff',
+    subColor: '#d4d4d8'
+  },
+  {
+    id: 'cyber-emerald',
+    name: 'Cyber Emerald',
+    bgColor: '#04120e',
+    bgSecondary: '#072a20',
+    accentColor: '#34d399',
+    textColor: '#ecfdf5',
+    subColor: '#a7f3d0'
+  },
+  {
+    id: 'crimson-noir',
+    name: 'Crimson Noir',
+    bgColor: '#120508',
+    bgSecondary: '#2d0812',
+    accentColor: '#fb7185',
+    textColor: '#fff1f2',
+    subColor: '#fecdd3'
+  },
+  {
+    id: 'electric-cobalt',
+    name: 'Electric Cobalt',
+    bgColor: '#050b1a',
+    bgSecondary: '#0d1f47',
+    accentColor: '#38bdf8',
+    textColor: '#f0f9ff',
+    subColor: '#bae6fd'
+  },
+  {
+    id: 'clean-editorial',
+    name: 'Editorial Ivory',
+    bgColor: '#f8fafc',
+    bgSecondary: '#e2e8f0',
+    accentColor: '#0f172a',
+    textColor: '#09090b',
+    subColor: '#475569'
+  }
+];
+
+export const TEXT_ANIMATION_STYLES = [
+  { id: 'kinetic-slam', name: 'Kinetic Slam', desc: 'Hentakan tipografi tegas & presisi' },
+  { id: 'typewriter-glow', name: 'Typewriter Glow', desc: 'Mesin ketik neon dengan kursor ritmis' },
+  { id: 'parallax-slides', name: 'Parallax Slides', desc: 'Lapisan slide bertahap dengan kilau' },
+  { id: 'floating-cards', name: 'Floating Cards', desc: 'Kartu poin mengambang halus 60 FPS' },
+  { id: 'neon-pulse', name: 'Neon Pulse', desc: 'Aura cahaya dinamis berdenyut' }
+];
+
+function isLightHex(hex = '#0b0b0f') {
+  const clean = String(hex).replace('#', '');
+  if (clean.length !== 6) return false;
+  const r = parseInt(clean.slice(0, 2), 16);
+  const g = parseInt(clean.slice(2, 4), 16);
+  const b = parseInt(clean.slice(4, 6), 16);
+  return (r * 0.299 + g * 0.587 + b * 0.114) > 165;
+}
+
+/**
+ * Menghasilkan dokumen HTML5 Canvas 60 FPS deterministik dari konfigurasi Editor Teks.
+ * Kompatibel 100% dengan semua rasio aspek & pipeline WebCodecs MP4/WebM.
+ */
+export function generateTextAnimationDocument(textConfig = {}, durationSec = 10) {
+  const preset = TEXT_COLOR_PRESETS.find((p) => p.id === textConfig.presetId) || TEXT_COLOR_PRESETS[0];
+  const bgColor = textConfig.bgColor || preset.bgColor;
+  const bgSecondary = preset.bgSecondary || bgColor;
+  const accentColor = textConfig.accentColor || preset.accentColor;
+  const lightBg = isLightHex(bgColor);
+  const textColor = lightBg ? '#09090b' : (preset.textColor || '#ffffff');
+  const subColor = lightBg ? '#475569' : (preset.subColor || '#cbd5e1');
+
+  const safeCfg = {
+    brand: String(textConfig.brand || 'KURO STUDIO').trim(),
+    headline: String(textConfig.headline || 'TINGKATKAN PERFORMA BISNIS DIGITAL').trim(),
+    subtitle: String(textConfig.subtitle || 'Desain modern, cepat, dan siap konversi dalam hitungan detik.').trim(),
+    points: String(textConfig.points || 'Desain Presisi 60 FPS\nTanpa Ribet Coding\nSiap Ekspor HD MP4')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(0, 5),
+    cta: String(textConfig.cta || 'MULAI SEKARANG →').trim(),
+    styleId: textConfig.styleId || 'kinetic-slam',
+    bgColor,
+    bgSecondary,
+    accentColor,
+    textColor,
+    subColor,
+    lightBg,
+    durationSec: Math.max(2, Number(durationSec) || 10)
+  };
+
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <title>${safeCfg.headline.replace(/</g, '&lt;')}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: ${safeCfg.bgColor}; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <canvas id="textVideoCanvas"></canvas>
+  <script>
+  (function() {
+    var CFG = ${JSON.stringify(safeCfg)};
+    var canvas = document.getElementById('textVideoCanvas');
+    var ctx = canvas.getContext('2d');
+
+    function resize() {
+      canvas.width = window.innerWidth || 1280;
+      canvas.height = window.innerHeight || 720;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+    function easeOutCubic(x) { return 1 - Math.pow(1 - clamp01(x), 3); }
+    function easeOutBack(x) {
+      var t = clamp01(x);
+      var c1 = 1.70158;
+      var c3 = c1 + 1;
+      return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    }
+
+    function wrapLines(ctx, text, maxWidth) {
+      if (!text) return [];
+      var words = text.split(/\\s+/);
+      var lines = [];
+      var current = '';
+      for (var i = 0; i < words.length; i++) {
+        var test = current ? current + ' ' + words[i] : words[i];
+        if (ctx.measureText(test).width > maxWidth && current) {
+          lines.push(current);
+          current = words[i];
+        } else {
+          current = test;
+        }
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      var radius = Math.min(r, w * 0.5, h * 0.5);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + w - radius, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+      ctx.lineTo(x + w, y + h - radius);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      ctx.lineTo(x + radius, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    var particles = [];
+    for (var i = 0; i < 36; i++) {
+      particles.push({
+        x: (i * 0.6180339) % 1,
+        y: (i * 0.381966) % 1,
+        r: 1.5 + (i % 4) * 1.1,
+        spd: 0.015 + (i % 5) * 0.006,
+        phase: i * 0.9
+      });
+    }
+
+    function renderFrame(nowMs) {
+      var W = canvas.width;
+      var H = canvas.height;
+      var shortEdge = Math.min(W, H);
+      var scale = shortEdge / 720;
+      var totalTime = (nowMs || performance.now()) * 0.001;
+      var loopT = totalTime % CFG.durationSec;
+      var normT = loopT / CFG.durationSec;
+      var isPortrait = H > W * 1.05;
+
+      // Backdrop gradient
+      var grad = ctx.createRadialGradient(
+        W * (0.5 + 0.14 * Math.sin(totalTime * 0.4)),
+        H * (0.35 + 0.12 * Math.cos(totalTime * 0.35)),
+        shortEdge * 0.05,
+        W * 0.5,
+        H * 0.5,
+        Math.max(W, H) * 0.85
+      );
+      grad.addColorStop(0, CFG.bgSecondary);
+      grad.addColorStop(1, CFG.bgColor);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // Subtle architectural grid & floating particles
+      ctx.save();
+      ctx.strokeStyle = CFG.lightBg ? 'rgba(15,23,42,0.06)' : 'rgba(255,255,255,0.05)';
+      ctx.lineWidth = Math.max(1, scale);
+      var gridGap = Math.max(40, Math.round(72 * scale));
+      var gridOffX = (totalTime * 18 * scale) % gridGap;
+      var gridOffY = (totalTime * 12 * scale) % gridGap;
+      for (var gx = -gridGap + gridOffX; gx < W + gridGap; gx += gridGap) {
+        ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+      }
+      for (var gy = -gridGap + gridOffY; gy < H + gridGap; gy += gridGap) {
+        ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+      }
+
+      // Glowing accent ambient halo
+      var haloAlpha = CFG.styleId === 'neon-pulse' ? (0.18 + 0.1 * Math.sin(totalTime * 3.5)) : 0.14;
+      ctx.globalAlpha = haloAlpha;
+      ctx.fillStyle = CFG.accentColor;
+      ctx.beginPath();
+      ctx.arc(W * 0.5, H * 0.48, shortEdge * (CFG.styleId === 'neon-pulse' ? (0.38 + 0.04 * Math.sin(totalTime * 2.5)) : 0.34), 0, Math.PI * 2);
+      ctx.filter = 'blur(' + Math.round(65 * scale) + 'px)';
+      ctx.fill();
+      ctx.filter = 'none';
+      ctx.globalAlpha = 1;
+
+      for (var p = 0; p < particles.length; p++) {
+        var pt = particles[p];
+        var px = ((pt.x + totalTime * pt.spd * 0.35) % 1) * W;
+        var py = ((pt.y - totalTime * pt.spd) % 1 + 1) % 1 * H;
+        ctx.globalAlpha = 0.25 + 0.25 * Math.sin(totalTime * 2 + pt.phase);
+        ctx.fillStyle = p % 3 === 0 ? CFG.accentColor : CFG.textColor;
+        ctx.beginPath();
+        ctx.arc(px, py, pt.r * scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Parallax diagonal sweep lines
+      if (CFG.styleId === 'parallax-slides' || CFG.styleId === 'neon-pulse') {
+        ctx.save();
+        ctx.strokeStyle = CFG.accentColor;
+        ctx.globalAlpha = 0.16;
+        ctx.lineWidth = 3 * scale;
+        var sweepX = ((totalTime * 0.45) % 1.4 - 0.2) * W;
+        ctx.beginPath();
+        ctx.moveTo(sweepX, 0);
+        ctx.lineTo(sweepX - H * 0.35, H);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Master typography layout container
+      var safeMaxW = W * (isPortrait ? 0.86 : 0.78);
+      var centerX = W * 0.5;
+      var cursorY = H * (isPortrait ? 0.16 : 0.15);
+
+      // Outro fade at very end of loop for seamless transition
+      var globalFade = normT > 0.93 ? clamp01((1 - normT) / 0.07) : 1;
+      ctx.save();
+      ctx.globalAlpha = globalFade;
+
+      // 1. Brand Pill
+      if (CFG.brand) {
+        var pBrand = easeOutCubic(loopT / 0.55);
+        ctx.save();
+        ctx.font = '800 ' + Math.round((isPortrait ? 19 : 21) * scale) + 'px system-ui, -apple-system, Segoe UI, sans-serif';
+        var bText = CFG.brand.toUpperCase();
+        var bw = ctx.measureText(bText).width + 44 * scale;
+        var bh = 42 * scale;
+        var by = cursorY + (1 - pBrand) * (-22 * scale);
+        ctx.globalAlpha = globalFade * pBrand;
+        roundRect(ctx, centerX - bw * 0.5, by, bw, bh, 999);
+        ctx.fillStyle = CFG.lightBg ? 'rgba(15,23,42,0.08)' : 'rgba(255,255,255,0.08)';
+        ctx.fill();
+        ctx.lineWidth = Math.max(1.5, 2 * scale);
+        ctx.strokeStyle = CFG.accentColor;
+        ctx.stroke();
+
+        ctx.fillStyle = CFG.accentColor;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(bText, centerX, by + bh * 0.5 + scale);
+        ctx.restore();
+        cursorY += bh + 28 * scale;
+      }
+
+      // 2. Hook / Headline
+      if (CFG.headline) {
+        var headDur = CFG.styleId === 'typewriter-glow' ? 1.5 : 0.75;
+        var pHead = clamp01((loopT - 0.18) / headDur);
+        var headSize = Math.round((isPortrait ? 48 : 58) * scale);
+        ctx.font = '900 ' + headSize + 'px system-ui, -apple-system, Segoe UI, sans-serif';
+        var headLines = wrapLines(ctx, CFG.headline, safeMaxW);
+        var lineH = headSize * 1.15;
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+
+        var shownHeadText = CFG.headline;
+        if (CFG.styleId === 'typewriter-glow') {
+          var charCount = Math.floor(CFG.headline.length * easeOutCubic(pHead));
+          shownHeadText = CFG.headline.slice(0, charCount);
+          if (pHead < 1 && Math.floor(totalTime * 6) % 2 === 0) {
+            shownHeadText += '|';
+          }
+          headLines = wrapLines(ctx, shownHeadText, safeMaxW);
+        }
+
+        if (CFG.styleId === 'kinetic-slam') {
+          var slamScale = 0.7 + 0.3 * easeOutBack(pHead);
+          var midY = cursorY + (headLines.length * lineH) * 0.5;
+          ctx.translate(centerX, midY);
+          ctx.scale(slamScale, slamScale);
+          ctx.translate(-centerX, -midY);
+          ctx.globalAlpha = globalFade * easeOutCubic(pHead);
+        } else if (CFG.styleId === 'parallax-slides') {
+          ctx.translate((1 - easeOutCubic(pHead)) * -90 * scale, 0);
+          ctx.globalAlpha = globalFade * easeOutCubic(pHead);
+        } else {
+          ctx.translate(0, (1 - easeOutCubic(pHead)) * 28 * scale);
+          ctx.globalAlpha = globalFade * easeOutCubic(pHead);
+        }
+
+        if (CFG.styleId === 'neon-pulse' || CFG.styleId === 'typewriter-glow') {
+          ctx.shadowColor = CFG.accentColor;
+          ctx.shadowBlur = (CFG.styleId === 'neon-pulse' ? 24 : 14) * scale;
+        }
+
+        ctx.fillStyle = CFG.textColor;
+        for (var hl = 0; hl < headLines.length; hl++) {
+          ctx.fillText(headLines[hl], centerX, cursorY + hl * lineH);
+        }
+        ctx.restore();
+
+        // Accent underline sweep under headline
+        var ulProg = easeOutCubic((loopT - 0.5) / 0.6);
+        var ulWidth = Math.min(safeMaxW * 0.45, 240 * scale) * ulProg;
+        if (ulWidth > 2) {
+          ctx.fillStyle = CFG.accentColor;
+          roundRect(ctx, centerX - ulWidth * 0.5, cursorY + headLines.length * lineH + 10 * scale, ulWidth, 5 * scale, 4 * scale);
+          ctx.fill();
+        }
+        cursorY += headLines.length * lineH + 34 * scale;
+      }
+
+      // 3. Subtitle
+      if (CFG.subtitle) {
+        var pSub = easeOutCubic((loopT - 0.65) / 0.7);
+        var subSize = Math.round((isPortrait ? 24 : 26) * scale);
+        ctx.save();
+        ctx.font = '600 ' + subSize + 'px system-ui, -apple-system, Segoe UI, sans-serif';
+        var subLines = wrapLines(ctx, CFG.subtitle, safeMaxW * 0.92);
+        var subLineH = subSize * 1.35;
+        var sxOff = CFG.styleId === 'parallax-slides' ? (1 - pSub) * 70 * scale : 0;
+        var syOff = CFG.styleId === 'parallax-slides' ? 0 : (1 - pSub) * 20 * scale;
+        ctx.translate(sxOff, syOff);
+        ctx.globalAlpha = globalFade * pSub;
+        ctx.fillStyle = CFG.subColor;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        for (var sl = 0; sl < subLines.length; sl++) {
+          ctx.fillText(subLines[sl], centerX, cursorY + sl * subLineH);
+        }
+        ctx.restore();
+        cursorY += subLines.length * subLineH + 26 * scale;
+      }
+
+      // 4. Staggered Points / Cards
+      if (CFG.points && CFG.points.length > 0) {
+        var pFontSize = Math.round((isPortrait ? 21 : 22) * scale);
+        ctx.font = '700 ' + pFontSize + 'px system-ui, -apple-system, Segoe UI, sans-serif';
+        var cardW = Math.min(safeMaxW, 640 * scale);
+        var cardH = 50 * scale;
+        var gapY = 12 * scale;
+        var pointStartDelay = 1.2;
+        var stepDelay = Math.min(0.45, Math.max(0.22, (CFG.durationSec * 0.42) / Math.max(1, CFG.points.length)));
+
+        for (var ptIdx = 0; ptIdx < CFG.points.length; ptIdx++) {
+          var pItem = clamp01((loopT - (pointStartDelay + ptIdx * stepDelay)) / 0.55);
+          var eItem = CFG.styleId === 'floating-cards' ? easeOutBack(pItem) : easeOutCubic(pItem);
+          if (eItem <= 0.01) {
+            cursorY += cardH + gapY;
+            continue;
+          }
+
+          var floatY = CFG.styleId === 'floating-cards' ? Math.sin(totalTime * 2.2 + ptIdx * 1.1) * 4 * scale : 0;
+          var slideX = CFG.styleId === 'parallax-slides'
+            ? (ptIdx % 2 === 0 ? -1 : 1) * (1 - clamp01(eItem)) * 80 * scale
+            : 0;
+          var cx = centerX - cardW * 0.5 + slideX;
+          var cy = cursorY + (1 - clamp01(eItem)) * 22 * scale + floatY;
+
+          ctx.save();
+          ctx.globalAlpha = globalFade * clamp01(pItem * 1.2);
+          roundRect(ctx, cx, cy, cardW, cardH, 12 * scale);
+          ctx.fillStyle = CFG.lightBg ? 'rgba(255,255,255,0.88)' : 'rgba(255,255,255,0.08)';
+          ctx.fill();
+          ctx.lineWidth = Math.max(1.5, 2 * scale);
+          ctx.strokeStyle = CFG.styleId === 'neon-pulse'
+            ? CFG.accentColor
+            : (CFG.lightBg ? 'rgba(15,23,42,0.2)' : 'rgba(255,255,255,0.16)');
+          ctx.stroke();
+
+          // Bullet indicator dot
+          ctx.fillStyle = CFG.accentColor;
+          ctx.beginPath();
+          ctx.arc(cx + 26 * scale, cy + cardH * 0.5, 6 * scale, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Point text
+          ctx.fillStyle = CFG.textColor;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          var label = CFG.points[ptIdx];
+          while (label.length > 4 && ctx.measureText(label).width > cardW - 64 * scale) {
+            label = label.slice(0, -4) + '...';
+          }
+          ctx.fillText(label, cx + 46 * scale, cy + cardH * 0.5 + scale);
+          ctx.restore();
+
+          cursorY += cardH + gapY;
+        }
+      }
+
+      // 5. CTA Action Pill at bottom stage
+      if (CFG.cta) {
+        var ctaDelay = Math.min(CFG.durationSec * 0.65, 2.2);
+        var pCta = easeOutBack((loopT - ctaDelay) / 0.6);
+        if (pCta > 0.01) {
+          var ctaFont = Math.round((isPortrait ? 22 : 24) * scale);
+          ctx.save();
+          ctx.font = '900 ' + ctaFont + 'px system-ui, -apple-system, Segoe UI, sans-serif';
+          var cw = Math.min(safeMaxW, ctx.measureText(CFG.cta).width + 68 * scale);
+          var ch = 56 * scale;
+          var ctaY = Math.max(cursorY + 14 * scale, H * 0.82);
+          if (ctaY + ch > H - 24 * scale) ctaY = H - ch - 24 * scale;
+
+          var pulse = 1 + 0.025 * Math.sin(totalTime * 4.5);
+          ctx.translate(centerX, ctaY + ch * 0.5);
+          ctx.scale(clamp01(pCta) * pulse, clamp01(pCta) * pulse);
+          ctx.translate(-centerX, -(ctaY + ch * 0.5));
+          ctx.globalAlpha = globalFade * clamp01((loopT - ctaDelay) / 0.35);
+
+          if (CFG.styleId === 'neon-pulse') {
+            ctx.shadowColor = CFG.accentColor;
+            ctx.shadowBlur = 22 * scale;
+          }
+
+          roundRect(ctx, centerX - cw * 0.5, ctaY, cw, ch, 14 * scale);
+          ctx.fillStyle = CFG.accentColor;
+          ctx.fill();
+          ctx.lineWidth = Math.max(2, 2.5 * scale);
+          ctx.strokeStyle = CFG.lightBg ? '#09090b' : 'rgba(255,255,255,0.9)';
+          ctx.stroke();
+
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = isLightHexColor(CFG.accentColor) ? '#09090b' : '#ffffff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(CFG.cta, centerX, ctaY + ch * 0.5 + scale);
+          ctx.restore();
+        }
+      }
+
+      ctx.restore();
+      requestAnimationFrame(renderFrame);
+    }
+
+    function isLightHexColor(hex) {
+      var clean = String(hex || '').replace('#', '');
+      if (clean.length !== 6) return true;
+      var r = parseInt(clean.slice(0, 2), 16);
+      var g = parseInt(clean.slice(2, 4), 16);
+      var b = parseInt(clean.slice(4, 6), 16);
+      return (r * 0.299 + g * 0.587 + b * 0.114) > 145;
+    }
+
+    requestAnimationFrame(renderFrame);
+  })();
+  </script>
+</body>
+</html>`;
+}

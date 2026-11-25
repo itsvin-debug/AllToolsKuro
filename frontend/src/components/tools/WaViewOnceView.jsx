@@ -44,15 +44,49 @@ import {
   deleteMediaByIds,
   clearAllMedia,
   getVaultStorageStats,
-  pruneExpiredStatuses
+  pruneExpiredStatuses,
+  getDeviceAuthRecord,
+  getAnyDeviceAuthRecord,
+  saveDeviceAuthRecord,
+  saveDeviceAuthSnapshot,
+  clearAuthSnapshotOnly,
+  saveContactsMap,
+  getContactsMap,
+  clearContactsMap
 } from '../../utils/waMediaDB';
 
 const STORAGE_SESSION_ID = 'wa_vault_session_id';
+const STORAGE_DEVICE_TOKEN = 'wa_vault_device_token';
 const STORAGE_LOCKED_TARGET = 'wa_vault_locked_target';
 const STORAGE_CONFIRMED_LIDS = 'wa_vault_confirmed_lids';
 const STORAGE_PAIRING_PHONE = 'wa_vault_pairing_phone';
 const STORAGE_MONITOR_MODE = 'wa_vault_monitor_mode';
 const STORAGE_SW_MODE = 'wa_vault_sw_mode';
+const DEVICE_ID_REGEX = /^[a-zA-Z0-9_-]{8,64}$/;
+
+function generateDeviceId() {
+  if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  }
+  return `dev_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function generateDeviceToken() {
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+}
 
 // Helper pengaman wajib agar TIDAK ADA objek yang lolos sebagai React child (Anti React Error #31)
 const safeText = (val) => {
@@ -131,16 +165,58 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   };
 
-  // 1. Identitas sesi unik
-  const [sessionId] = useState(() => {
+  // Helper prioritas nama kontak tersimpan asli dari WA pengguna
+  const getDisplaySenderName = (item, contactsMap) => {
+    if (!item) return 'Kontak';
+    const num = safeText(item.senderNumber);
+    const lid = safeText(item.senderLid);
+    const lidDigits = lid ? lid.split('@')[0].split(':')[0] : '';
+    const keys = [num, num ? `${num}@s.whatsapp.net` : '', lid, lidDigits].filter(Boolean);
+    const activeMap = contactsMap || savedContactsMapRef.current || {};
+    for (const k of keys) {
+      if (activeMap[k]) return safeText(activeMap[k]);
+    }
+    const direct = safeText(item.senderName);
+    if (direct) return direct;
+    return num ? `+${num}` : 'Kontak';
+  };
+
+  // 1. Identitas & Token Rahasia Per Perangkat (Cryptographic Per-Device Isolation)
+  const [sessionId, setSessionId] = useState(() => {
     let id = localStorage.getItem(STORAGE_SESSION_ID);
-    if (!id) {
-      id = window.crypto?.randomUUID
-        ? window.crypto.randomUUID()
-        : `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    if (!id || !DEVICE_ID_REGEX.test(id)) {
+      id = generateDeviceId();
       localStorage.setItem(STORAGE_SESSION_ID, id);
     }
     return id;
+  });
+
+  const [deviceToken, setDeviceToken] = useState(() => {
+    let token = localStorage.getItem(STORAGE_DEVICE_TOKEN);
+    if (!token || token.length < 32) {
+      token = generateDeviceToken();
+      localStorage.setItem(STORAGE_DEVICE_TOKEN, token);
+    }
+    return token;
+  });
+
+  const deviceIdRef = useRef(sessionId);
+  const deviceTokenRef = useRef(deviceToken);
+  useEffect(() => {
+    deviceIdRef.current = sessionId;
+    deviceTokenRef.current = deviceToken;
+  }, [sessionId, deviceToken]);
+
+  const [savedContactsMap, setSavedContactsMap] = useState({});
+  const savedContactsMapRef = useRef(savedContactsMap);
+  useEffect(() => {
+    savedContactsMapRef.current = savedContactsMap;
+  }, [savedContactsMap]);
+
+  const withDeviceAuth = (payload = {}) => ({
+    ...payload,
+    sessionId: deviceIdRef.current || sessionId,
+    deviceToken: deviceTokenRef.current || deviceToken
   });
 
   // 2. Metode Penautan: Kode Pairing (Rekomendasi) atau Scan QR Code
@@ -242,21 +318,60 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     setQrWatchdogExpired(false);
   };
 
-  // Muat data dari IndexedDB & inisialisasi koneksi saat halaman dibuka
+  // Muat identitas perangkat, kontak, & snapshot auth dari IndexedDB lalu hubungkan socket
   useEffect(() => {
+    let mounted = true;
     try {
       fetch(`${backendUrl}/ping`, { mode: 'cors' })
         .then((r) => r.json())
         .then((d) => {
-          if (d && typeof d.rssMB === 'number') setServerRssMB(d.rssMB);
+          if (mounted && d && typeof d.rssMB === 'number') setServerRssMB(d.rssMB);
         })
         .catch(() => {});
     } catch (_) {}
 
-    loadSavedMedia();
-    initSocketConnection();
+    async function bootVault() {
+      try {
+        let curId = deviceIdRef.current;
+        let curToken = deviceTokenRef.current;
+        const existingRecord = await getDeviceAuthRecord(curId);
+        if (!existingRecord) {
+          const fallbackRecord = await getAnyDeviceAuthRecord();
+          if (fallbackRecord && fallbackRecord.deviceId && fallbackRecord.deviceToken) {
+            curId = fallbackRecord.deviceId;
+            curToken = fallbackRecord.deviceToken;
+            localStorage.setItem(STORAGE_SESSION_ID, curId);
+            localStorage.setItem(STORAGE_DEVICE_TOKEN, curToken);
+            deviceIdRef.current = curId;
+            deviceTokenRef.current = curToken;
+            if (mounted) {
+              setSessionId(curId);
+              setDeviceToken(curToken);
+            }
+          } else {
+            await saveDeviceAuthRecord({ deviceId: curId, deviceToken: curToken });
+          }
+        } else if (!existingRecord.deviceToken) {
+          await saveDeviceAuthRecord({ deviceId: curId, deviceToken: curToken });
+        }
+
+        const cachedContacts = await getContactsMap();
+        if (mounted && cachedContacts && Object.keys(cachedContacts).length > 0) {
+          savedContactsMapRef.current = cachedContacts;
+          setSavedContactsMap(cachedContacts);
+        }
+      } catch (_) {}
+
+      await loadSavedMedia();
+      if (mounted) {
+        initSocketConnection();
+      }
+    }
+
+    bootVault();
 
     return () => {
+      mounted = false;
       clearQrWatchdog();
       if (socketRef.current) {
         socketRef.current.off('connect');
@@ -267,6 +382,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         socketRef.current.off('pairing-code');
         socketRef.current.off('qr-code');
         socketRef.current.off('qr');
+        socketRef.current.off('auth-snapshot-sync');
+        socketRef.current.off('contacts-map-sync');
         socketRef.current.off('target-synced');
         socketRef.current.off('target-updated');
         socketRef.current.off('monitor-mode-synced');
@@ -333,7 +450,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     socketRef.current = socket;
 
-    socket.on('connect', () => {
+    socket.on('connect', async () => {
       setSocketConnected(true);
       setBackendError(null);
 
@@ -345,13 +462,19 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         savedLids = JSON.parse(localStorage.getItem(STORAGE_CONFIRMED_LIDS)) || [];
       } catch (_) {}
 
-      socket.emit('resume-session', {
-        sessionId,
+      let localSnapshot = null;
+      try {
+        const authRecord = await getDeviceAuthRecord(deviceIdRef.current);
+        localSnapshot = authRecord?.snapshot || null;
+      } catch (_) {}
+
+      socket.emit('resume-session', withDeviceAuth({
+        authSnapshot: localSnapshot,
         monitorMode: savedMode,
         swMode: savedSwMode,
         targetNumber: savedTarget ? normalizePhone(savedTarget) : null,
         confirmedLids: savedLids
-      });
+      }));
     });
 
     socket.on('disconnect', () => {
@@ -367,7 +490,22 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       );
     });
 
-    socket.on('session-status', (payload) => {
+    socket.on('auth-snapshot-sync', async (payload) => {
+      if (payload?.snapshot) {
+        await saveDeviceAuthSnapshot(deviceIdRef.current, payload.snapshot, payload.updatedAt || Date.now());
+      }
+    });
+
+    socket.on('contacts-map-sync', async (payload) => {
+      const incoming = payload?.contacts;
+      if (!incoming || typeof incoming !== 'object') return;
+      const merged = { ...savedContactsMapRef.current, ...incoming };
+      savedContactsMapRef.current = merged;
+      setSavedContactsMap(merged);
+      await saveContactsMap(incoming);
+    });
+
+    socket.on('session-status', async (payload) => {
       const status = safeText(payload?.status) || 'connecting';
       const phone = safeText(payload?.phone);
       const reason = safeText(payload?.reason);
@@ -420,8 +558,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         setQrCodeDataUrl(null);
         setPairingCode('');
         setConnectedPhone(null);
-        if (reason === 'logged_out' || message) {
+        // Hapus snapshot auth lokal HANYA jika memang keluar permanen dari HP atau tombol Putuskan
+        if (reason === 'logged_out' || reason === 'user_logout') {
+          await clearAuthSnapshotOnly(deviceIdRef.current);
           triggerToast(message || 'Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
+        } else if (message) {
+          triggerToast(message, 'info');
         }
       }
     });
@@ -515,6 +657,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           id: safeText(rawPayload?.id) || `vi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           category: rawPayload?.category === 'status' ? 'status' : 'chat',
           senderNumber: safeText(rawPayload?.senderNumber),
+          senderLid: safeText(rawPayload?.senderLid),
           senderName: safeText(rawPayload?.senderName),
           mediaType: safeText(rawPayload?.mediaType) || 'text',
           mimeType: safeText(rawPayload?.mimeType),
@@ -540,12 +683,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         await saveMediaItem(item);
         setMediaList((prev) => [item, ...prev.filter((m) => m.id !== item.id)]);
 
+        const displayName = getDisplaySenderName(item, savedContactsMapRef.current);
         if (item.isViewOnce) {
-          triggerToast(`Media Sekali Lihat baru diamankan dari ${item.senderName}!`, 'success');
+          triggerToast(`Media Sekali Lihat baru diamankan dari ${displayName}!`, 'success');
         } else if (item.category === 'status') {
-          triggerToast(`Status WA baru diamankan secara senyap dari ${item.senderName}!`, 'info');
+          triggerToast(`Status WA baru diamankan secara senyap dari ${displayName}!`, 'info');
         } else {
-          triggerToast(`Pesan baru diamankan dari ${item.senderName}!`, 'info');
+          triggerToast(`Pesan baru diamankan dari ${displayName}!`, 'info');
         }
       } catch (err) {
         console.error('Gagal memproses item vault:', err);
@@ -669,15 +813,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       setPairingCode('');
 
       if (socketRef.current) {
-        socketRef.current.emit('start-session', {
-          sessionId,
+        socketRef.current.emit('start-session', withDeviceAuth({
           monitorMode,
           swMode,
           targetNumber: lockedTargetRef.current,
           authMethod: 'pairing',
           pairingPhone: cleanPhone,
           forceNew
-        });
+        }));
       }
     } else {
       startQrWatchdog();
@@ -686,14 +829,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       setQrCodeDataUrl(null);
 
       if (socketRef.current) {
-        socketRef.current.emit('start-session', {
-          sessionId,
+        socketRef.current.emit('start-session', withDeviceAuth({
           monitorMode,
           swMode,
           targetNumber: lockedTargetRef.current,
           authMethod: 'qr',
           forceNew
-        });
+        }));
       }
     }
   };
@@ -720,11 +862,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   };
 
-  const handleLogoutSession = () => {
+  const handleLogoutSession = async () => {
     clearQrWatchdog();
     if (socketRef.current) {
-      socketRef.current.emit('logout-session', { sessionId });
+      socketRef.current.emit('logout-session', withDeviceAuth());
     }
+    await clearAuthSnapshotOnly(deviceIdRef.current);
+    await clearContactsMap();
+    savedContactsMapRef.current = {};
+    setSavedContactsMap({});
     setConnectionStatus('disconnected');
     setQrCodeDataUrl(null);
     setPairingCode('');
@@ -738,7 +884,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     setMonitorMode(newMode);
     localStorage.setItem(STORAGE_MONITOR_MODE, newMode);
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('set-monitor-mode', { sessionId, monitorMode: newMode });
+      socketRef.current.emit('set-monitor-mode', withDeviceAuth({ monitorMode: newMode }));
     }
     triggerToast(
       newMode === 'all'
@@ -753,7 +899,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     setSwMode(newSwMode);
     localStorage.setItem(STORAGE_SW_MODE, newSwMode);
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('set-sw-mode', { sessionId, swMode: newSwMode });
+      socketRef.current.emit('set-sw-mode', withDeviceAuth({ swMode: newSwMode }));
     }
     triggerToast(
       newSwMode === 'auto'
@@ -770,7 +916,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       return;
     }
     setIsSyncingStatuses(true);
-    socketRef.current.emit('sync-active-statuses', { sessionId });
+    socketRef.current.emit('sync-active-statuses', withDeviceAuth());
     triggerToast('Menyinkronkan Status WA aktif (24 jam) dari WhatsApp...', 'info');
     setTimeout(() => {
       setIsSyncingStatuses(false);
@@ -782,7 +928,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     if (!id) return;
     setLoadingMediaIds((prev) => new Set(prev).add(id));
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('fetch-status-media', { sessionId, id });
+      socketRef.current.emit('fetch-status-media', withDeviceAuth({ id }));
     }
     triggerToast('Mengunduh media status HD dari WhatsApp...', 'info');
 
@@ -826,11 +972,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     setInputTarget('');
 
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('set-target', {
-        sessionId,
+      socketRef.current.emit('set-target', withDeviceAuth({
         targetNumber: normalized,
         confirmedLids
-      });
+      }));
     }
 
     triggerToast(`Nomor target +${normalized} berhasil dikunci!`, 'success');
@@ -844,11 +989,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     setUnmappedLidAlert(null);
 
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('set-target', {
-        sessionId,
+      socketRef.current.emit('set-target', withDeviceAuth({
         targetNumber: null,
         confirmedLids: []
-      });
+      }));
     }
 
     triggerToast('Target dibuka. Silakan masukkan nomor target baru.', 'info');
@@ -858,7 +1002,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     if (!unmappedLidAlert) return;
     const lid = unmappedLidAlert.lid;
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('confirm-target-lid', { sessionId, lid });
+      socketRef.current.emit('confirm-target-lid', withDeviceAuth({ lid }));
     }
     const updated = Array.from(new Set([...confirmedLids, lid]));
     setConfirmedLids(updated);
@@ -871,7 +1015,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     if (!unmappedLidAlert) return;
     const lid = unmappedLidAlert.lid;
     if (socketRef.current && socketRef.current.connected) {
-      socketRef.current.emit('dismiss-unmapped-lid', { sessionId, lid });
+      socketRef.current.emit('dismiss-unmapped-lid', withDeviceAuth({ lid }));
     }
     setUnmappedLidAlert(null);
     triggerToast('Pesan diabaikan.', 'info');
@@ -964,11 +1108,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     const map = new Map();
     for (const it of mediaList) {
       if (it.category === 'status') {
-        const key = it.senderNumber || it.senderName || 'unknown';
+        const key = it.senderNumber || it.senderLid || it.senderName || 'unknown';
+        const resolvedName = getDisplaySenderName(it, savedContactsMap);
         if (!map.has(key)) {
           map.set(key, {
             key,
-            name: it.senderName || it.senderNumber || 'Kontak',
+            name: resolvedName,
             number: it.senderNumber || '',
             count: 0,
             latestTime: it.sentAt || 0,
@@ -976,13 +1121,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           });
         }
         const entry = map.get(key);
+        entry.name = resolvedName;
         entry.count++;
         if (it.isDeleted) entry.hasDeleted = true;
         if (it.sentAt > entry.latestTime) entry.latestTime = it.sentAt;
       }
     }
     return Array.from(map.values()).sort((a, b) => b.latestTime - a.latestTime);
-  }, [mediaList]);
+  }, [mediaList, savedContactsMap]);
 
   // Filter daftar item berdasarkan tab aktif & sub-filter & kontak & pencarian
   const filteredItems = useMemo(() => {
@@ -1008,7 +1154,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       list = mediaList.filter((it) => it.category === 'status');
       if (selectedStatusContact !== 'all') {
         list = list.filter(
-          (it) => it.senderNumber === selectedStatusContact || it.senderName === selectedStatusContact
+          (it) =>
+            it.senderNumber === selectedStatusContact ||
+            it.senderLid === selectedStatusContact ||
+            it.senderName === selectedStatusContact ||
+            getDisplaySenderName(it, savedContactsMap) === selectedStatusContact
         );
       }
       if (subFilter === 'image') list = list.filter((it) => it.mediaType === 'image');
@@ -1021,6 +1171,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       const q = searchQuery.toLowerCase();
       list = list.filter(
         (it) =>
+          getDisplaySenderName(it, savedContactsMap).toLowerCase().includes(q) ||
           safeText(it.senderName).toLowerCase().includes(q) ||
           safeText(it.senderNumber).includes(q) ||
           safeText(it.textContent).toLowerCase().includes(q) ||
@@ -1030,7 +1181,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
 
     return list;
-  }, [mediaList, activeTab, subFilter, selectedStatusContact, searchQuery]);
+  }, [mediaList, activeTab, subFilter, selectedStatusContact, searchQuery, savedContactsMap]);
 
   // Eksekusi pembersihan item tab saat ini
   const handleExecuteClearTab = async (tabKey) => {
@@ -1055,7 +1206,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const currentStoryItem = storyViewerIndex !== null ? filteredItems[storyViewerIndex] : null;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
+    <div className="w-full max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-24 space-y-5 overflow-x-hidden box-border">
       
       {/* Tombol Navigasi Kembali */}
       <button
@@ -1157,10 +1308,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       )}
 
       {/* Grid 2 Kolom Panel Kontrol (Tautkan Perangkat & Cakupan Pemantauan) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         
         {/* Panel 1: Tautkan Perangkat WhatsApp (Kode Pairing & Scan QR) */}
-        <div className="bg-white border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
+        <div className="min-w-0 bg-white border-2 border-black rounded-xl p-4 sm:p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b-2 border-black pb-3">
               <div className="flex items-center gap-2">
@@ -1290,19 +1441,19 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                               Masukkan nomor WhatsApp yang sedang aktif di HP Anda untuk meminta kode tautan (8 digit).
                             </p>
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex flex-col sm:flex-row gap-2">
                             <input
                               type="text"
                               value={pairingPhone}
                               onChange={(e) => setPairingPhone(e.target.value)}
                               placeholder="Contoh: 08123456789 atau 628xxx"
-                              className="flex-1 px-3 py-2 bg-white border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:ring-2 focus:ring-black"
+                              className="w-full sm:flex-1 min-w-0 px-3 py-2.5 sm:py-2 bg-white border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:ring-2 focus:ring-black"
                             />
                             <button
                               type="button"
                               onClick={() => handleStartSession('pairing')}
                               disabled={connectionStatus === 'connecting' && !socketConnected}
-                              className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer"
+                              className="w-full sm:w-auto justify-center px-4 py-2.5 sm:py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer"
                             >
                               {connectionStatus === 'connecting' && !socketConnected ? (
                                 <>
@@ -1415,33 +1566,33 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         </div>
 
         {/* Panel 2: Cakupan Pemantauan (Semua Nomor vs Kunci 1 Target) */}
-        <div className="bg-white border-2 border-black rounded-xl p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
+        <div className="min-w-0 bg-white border-2 border-black rounded-xl p-4 sm:p-5 shadow-[4px_4px_0px_#000] flex flex-col justify-between space-y-4">
           <div className="space-y-3">
-            <div className="flex items-center justify-between border-b-2 border-black pb-3">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-neutral-900" />
-                <h2 className="font-black text-sm md:text-base uppercase tracking-tight">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b-2 border-black pb-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <Users className="w-5 h-5 text-neutral-900 shrink-0" />
+                <h2 className="font-black text-sm md:text-base uppercase tracking-tight truncate">
                   Cakupan Pemantauan
                 </h2>
               </div>
-              <span className={`px-2 py-0.5 border border-black rounded text-[11px] font-black ${monitorMode === 'all' ? 'bg-cyan-200 text-black' : 'bg-emerald-300 text-black'}`}>
+              <span className={`px-2 py-0.5 border border-black rounded text-[11px] font-black shrink-0 ${monitorMode === 'all' ? 'bg-cyan-200 text-black' : 'bg-emerald-300 text-black'}`}>
                 {monitorMode === 'all' ? 'SEMUA NOMOR' : '1 NOMOR TERKUNCI'}
               </span>
             </div>
 
             {/* Segmented Mode Switcher */}
-            <div className="flex border-2 border-black rounded-lg overflow-hidden text-xs font-bold">
+            <div className="flex border-2 border-black rounded-lg overflow-hidden text-xs font-bold min-w-0">
               <button
                 type="button"
                 onClick={() => handleChangeMonitorMode('all')}
-                className={`flex-1 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
+                className={`flex-1 min-w-0 py-1.5 px-2 text-center transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                   monitorMode === 'all'
                     ? 'bg-black text-white font-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
                 }`}
               >
-                <Users className="w-3.5 h-3.5" />
-                <span>Semua Nomor (Ghost All)</span>
+                <Users className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Semua Nomor</span>
               </button>
               <button
                 type="button"
@@ -1500,17 +1651,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   </div>
                 ) : (
                   <form onSubmit={handleLockTarget} className="space-y-3">
-                    <div className="flex gap-2">
+                    <div className="flex flex-col sm:flex-row gap-2">
                       <input
                         type="text"
                         value={inputTarget}
                         onChange={(e) => setInputTarget(e.target.value)}
                         placeholder="Contoh: 08123456789 atau 628xxx"
-                        className="flex-1 px-3 py-2 bg-neutral-50 border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:bg-white focus:ring-2 focus:ring-black"
+                        className="w-full sm:flex-1 min-w-0 px-3 py-2.5 sm:py-2 bg-neutral-50 border-2 border-black rounded-xl text-xs font-mono font-bold outline-none focus:bg-white focus:ring-2 focus:ring-black"
                       />
                       <button
                         type="submit"
-                        className="px-4 py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 cursor-pointer"
+                        className="w-full sm:w-auto justify-center px-4 py-2.5 sm:py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 cursor-pointer"
                       >
                         <Lock className="w-3.5 h-3.5" />
                         Kunci
@@ -1533,13 +1684,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       </div>
 
       {/* Kontainer Bawah: 4-in-1 Vault Tabs */}
-      <div className="bg-white border-2 border-black rounded-xl p-5 md:p-6 shadow-[4px_4px_0px_#000] space-y-4">
+      <div className="min-w-0 bg-white border-2 border-black rounded-xl p-3.5 sm:p-6 shadow-[4px_4px_0px_#000] space-y-4">
         
         {/* Header Tabs 4-in-1 Utama */}
         <div className="flex flex-col gap-3 border-b-2 border-black pb-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            {/* 4 Tombol Tab Utama */}
-            <div className="flex flex-wrap gap-2 text-xs font-black">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            {/* 4 Tombol Tab Utama (2x2 rapi di mobile, inline di desktop) */}
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 text-[11px] sm:text-xs font-black w-full sm:w-auto min-w-0">
               {/* Tab 1: View Once */}
               <button
                 type="button"
@@ -1547,15 +1698,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('view_once');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
+                className={`min-w-0 px-2.5 sm:px-3.5 py-2 rounded-xl border-2 border-black flex items-center justify-between sm:justify-start gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'view_once'
                     ? 'bg-amber-300 text-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
                 }`}
               >
-                <Eye className="w-4 h-4" />
-                <span>Media 1x Lihat</span>
-                <span className="px-1.5 py-0.2 bg-black text-white rounded text-[10px] font-mono">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">Media 1x Lihat</span>
+                </span>
+                <span className="px-1.5 py-0.2 bg-black text-white rounded text-[10px] font-mono shrink-0">
                   {counts.vo}
                 </span>
               </button>
@@ -1567,15 +1720,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('ghost_reader');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
+                className={`min-w-0 px-2.5 sm:px-3.5 py-2 rounded-xl border-2 border-black flex items-center justify-between sm:justify-start gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'ghost_reader'
                     ? 'bg-emerald-300 text-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
                 }`}
               >
-                <MessageSquare className="w-4 h-4" />
-                <span>Ghost Reader</span>
-                <span className="px-1.5 py-0.2 bg-black text-white rounded text-[10px] font-mono">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">Ghost Reader</span>
+                </span>
+                <span className="px-1.5 py-0.2 bg-black text-white rounded text-[10px] font-mono shrink-0">
                   {counts.gr}
                 </span>
               </button>
@@ -1587,15 +1742,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('anti_delete');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
+                className={`min-w-0 px-2.5 sm:px-3.5 py-2 rounded-xl border-2 border-black flex items-center justify-between sm:justify-start gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'anti_delete'
                     ? 'bg-rose-400 text-white'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
                 }`}
               >
-                <ShieldAlert className="w-4 h-4" />
-                <span>Anti-Delete &amp; Edit</span>
-                <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${counts.ad > 0 ? 'bg-rose-600 text-white animate-pulse' : 'bg-black text-white'}`}>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <ShieldAlert className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">Anti-Delete</span>
+                </span>
+                <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono shrink-0 ${counts.ad > 0 ? 'bg-rose-600 text-white animate-pulse' : 'bg-black text-white'}`}>
                   {counts.ad}
                 </span>
               </button>
@@ -1607,15 +1764,17 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   setActiveTab('status_saver');
                   setSubFilter('all');
                 }}
-                className={`px-3.5 py-2 rounded-xl border-2 border-black flex items-center gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
+                className={`min-w-0 px-2.5 sm:px-3.5 py-2 rounded-xl border-2 border-black flex items-center justify-between sm:justify-start gap-1.5 transition-all shadow-[2px_2px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] cursor-pointer ${
                   activeTab === 'status_saver'
                     ? 'bg-cyan-300 text-black'
                     : 'bg-white text-neutral-700 hover:bg-neutral-100'
                 }`}
               >
-                <Radio className="w-4 h-4" />
-                <span>Silent Status (SW)</span>
-                <span className="px-1.5 py-0.2 bg-black text-white rounded text-[10px] font-mono">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <Radio className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">Silent Status</span>
+                </span>
+                <span className="px-1.5 py-0.2 bg-black text-white rounded text-[10px] font-mono shrink-0">
                   {counts.sw}
                 </span>
               </button>
@@ -1899,7 +2058,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
             {/* Story Filter Strip (Baris Avatar Kontak Pemilik Status) */}
             {statusContacts.length > 0 && (
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+              <div className="flex items-center gap-2 w-full max-w-full overflow-x-auto pb-1.5 scrollbar-thin">
                 <button
                   type="button"
                   onClick={() => setSelectedStatusContact('all')}
@@ -2031,9 +2190,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               >
                 {/* Header Status SW */}
                 <div className="flex items-center justify-between gap-2 border-b-2 border-black pb-2">
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-cyan-200 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px]">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-cyan-200 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px] min-w-0">
                     <Radio className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{safeText(item.senderName) || `+${safeText(item.senderNumber)}`}</span>
+                    <span className="truncate">{getDisplaySenderName(item, savedContactsMap)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     {item.isDeleted && (
@@ -2255,10 +2414,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
               >
                 {/* Header Kartu: Pengirim & Tipe Media */}
                 <div className="flex items-center justify-between gap-2 border-b-2 border-black pb-2">
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px]">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-300 text-black border-2 border-black rounded-lg text-xs font-black shadow-[1.5px_1.5px_0px_#000] truncate max-w-[210px] min-w-0">
                     <Smartphone className="w-3.5 h-3.5 shrink-0" />
                     <span className="truncate">
-                      {safeText(item.senderName) || `+${safeText(item.senderNumber)}`}
+                      {getDisplaySenderName(item, savedContactsMap)}
                     </span>
                   </div>
 
@@ -2465,8 +2624,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b-2 border-black pb-2">
-              <span className="font-bold text-xs text-neutral-800">
-                Pratinjau Media • {safeText(previewMedia.senderName) || `+${safeText(previewMedia.senderNumber)}`}
+              <span className="font-bold text-xs text-neutral-800 truncate pr-2">
+                Pratinjau Media • {getDisplaySenderName(previewMedia, savedContactsMap)}
               </span>
               <button
                 type="button"
@@ -2516,7 +2675,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                   0 VIEW
                 </span>
                 <span className="font-black text-sm truncate text-neutral-900">
-                  {safeText(currentStoryItem.senderName) || `+${safeText(currentStoryItem.senderNumber)}`}
+                  {getDisplaySenderName(currentStoryItem, savedContactsMap)}
                 </span>
                 <span className="text-[11px] font-mono text-neutral-500 shrink-0 hidden sm:inline-block">
                   • {formatWaDate(currentStoryItem.sentAt)}

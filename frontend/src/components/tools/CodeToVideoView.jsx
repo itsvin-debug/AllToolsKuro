@@ -3,7 +3,7 @@
  * Claude-Grade Direct GPU Live Preview + 100% Deterministic 60 FPS WebCodecs HD Video Renderer.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   ArrowLeft,
   Play,
@@ -26,53 +26,58 @@ import {
   CheckCircle2,
   Tv,
   Maximize,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Palette
 } from 'lucide-react';
 import {
   CODE_TEMPLATES,
-  buildCompositeHtml
+  buildCompositeHtml,
+  TEXT_COLOR_PRESETS,
+  TEXT_ANIMATION_STYLES,
+  generateTextAnimationDocument
 } from '../../utils/codeToVideoTemplates';
 import {
   CodeToVideoCompositor,
   computeTargetDimensions,
   exportVideo,
-  buildSandboxHtml,
+  compileUniversalCode,
+  detectCodeLanguage,
+  findPrimaryCanvas,
   BITRATE_PRESETS
 } from '../../utils/codeToVideoEngine';
 
-function findPrimaryCanvas(doc) {
-  if (!doc) return null;
-  const canvases = doc.querySelectorAll('canvas');
-  if (!canvases || canvases.length === 0) return null;
-  if (canvases.length === 1) return canvases[0];
-  let largest = null;
-  let maxArea = -1;
-  for (let i = 0; i < canvases.length; i++) {
-    const c = canvases[i];
-    const area = (c.width || c.clientWidth || 0) * (c.height || c.clientHeight || 0);
-    if (area > maxArea) {
-      maxArea = area;
-      largest = c;
-    }
-  }
-  return largest;
-}
-
 export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
-  // --- TEMPLATE & MODE EDITOR ---
+  // --- TEMPLATE, TAB EDITOR UNIVERSAL & EDITOR TEKS ---
   const [selectedTemplateId, setSelectedTemplateId] = useState('promo-ad');
-  const [editorMode, setEditorMode] = useState('hybrid'); // 'hybrid' | 'canvas'
-  const [hybridTab, setHybridTab] = useState('all'); // 'all' | 'html' | 'css' | 'js'
+  const [editorTab, setEditorTab] = useState('code'); // 'code' | 'text'
 
-  // State potongan kode
-  const [codeAll, setCodeAll] = useState(() => {
-    return localStorage.getItem('kuro_c2v_code_all') ||
-      buildCompositeHtml(CODE_TEMPLATES[0].html, CODE_TEMPLATES[0].css, CODE_TEMPLATES[0].js);
+  // Kode tunggal universal (otomatis mendeteksi HTML, SVG, CSS, GLSL, atau JS)
+  const [universalCode, setUniversalCode] = useState(() => {
+    return (
+      localStorage.getItem('kuro_c2v_universal_code') ||
+      localStorage.getItem('kuro_c2v_code_all') ||
+      buildCompositeHtml(CODE_TEMPLATES[0].html, CODE_TEMPLATES[0].css, CODE_TEMPLATES[0].js)
+    );
   });
-  const [codeHtml, setCodeHtml] = useState(CODE_TEMPLATES[0].html || '');
-  const [codeCss, setCodeCss] = useState(CODE_TEMPLATES[0].css || '');
-  const [codeJs, setCodeJs] = useState(CODE_TEMPLATES[0].js || '');
-  const [codeCanvas, setCodeCanvas] = useState(CODE_TEMPLATES[2].code || '');
+
+  // Konfigurasi Editor Teks (Text-to-Video Studio)
+  const [textConfig, setTextConfig] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kuro_c2v_text_config');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      brand: 'KURO STUDIO',
+      headline: 'PROMO KILAT HARI INI',
+      subtitle: 'Kualitas studio sinematik 60 FPS langsung dari browser tanpa ribet.',
+      points: 'Render WebCodecs HD MP4\nTanpa Watermark & Gratis\nResponsif Mobile & Desktop',
+      cta: 'COBA SEKARANG →',
+      styleId: 'kinetic-slam',
+      presetId: 'obsidian-gold',
+      bgColor: '#0b0b0f',
+      accentColor: '#facc15'
+    };
+  });
 
   const [copied, setCopied] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
@@ -131,12 +136,35 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
 
-  // Auto-save kode ke storage
+  // Auto-save kode universal & konfigurasi Editor Teks ke storage
   useEffect(() => {
     try {
-      localStorage.setItem('kuro_c2v_code_all', codeAll);
+      localStorage.setItem('kuro_c2v_universal_code', universalCode);
     } catch {}
-  }, [codeAll]);
+  }, [universalCode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('kuro_c2v_text_config', JSON.stringify(textConfig));
+    } catch {}
+  }, [textConfig]);
+
+  // Helper resolusi kode sumber aktif sesuai tab Editor Kode / Editor Teks
+  const getActiveSourceCode = useCallback(() => {
+    if (editorTab === 'text') {
+      const dur = Math.max(2, Math.min(Number(exportDuration) || 10, 60));
+      return generateTextAnimationDocument(textConfig, dur);
+    }
+    return universalCode;
+  }, [editorTab, textConfig, universalCode, exportDuration]);
+
+  // Status pasif auto-detect jenis bahasa kode
+  const detectedLanguage = useMemo(() => {
+    if (editorTab === 'text') {
+      return { category: 'text-builder', label: 'Teks ke Video' };
+    }
+    return detectCodeLanguage(universalCode);
+  }, [editorTab, universalCode]);
 
   // Inisialisasi Engine Compositor & Live Preview Iframe
   useEffect(() => {
@@ -151,11 +179,9 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
     // Suntikkan kode awal ke Live Iframe
     if (liveIframeRef.current) {
-      const initialCode = editorMode === 'canvas' ? codeCanvas : codeAll;
-      liveIframeRef.current.srcdoc = buildSandboxHtml(initialCode, 'live', {
+      liveIframeRef.current.srcdoc = compileUniversalCode(getActiveSourceCode(), 'live', {
         width,
-        height,
-        editorMode
+        height
       });
     }
 
@@ -237,42 +263,56 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   }, [exportAspect]);
 
-  // Terapkan perubahan kode ke Live Iframe
-  const handleApplyCode = useCallback(() => {
-    let targetCode = '';
-
-    if (editorMode === 'canvas') {
-      targetCode = codeCanvas;
-    } else {
-      if (hybridTab === 'all') {
-        targetCode = codeAll;
-      } else {
-        targetCode = buildCompositeHtml(codeHtml, codeCss, codeJs);
-        setCodeAll(targetCode);
+  // Update pratinjau otomatis (debounce 250ms) saat berada di Editor Teks
+  useEffect(() => {
+    if (editorTab !== 'text') return undefined;
+    const timer = setTimeout(() => {
+      setErrorLog(null);
+      const { width, height } = computeTargetDimensions('720p', exportAspect);
+      const dur = Math.max(2, Math.min(Number(exportDuration) || 10, 60));
+      const docHtml = generateTextAnimationDocument(textConfig, dur);
+      if (liveIframeRef.current) {
+        liveIframeRef.current.srcdoc = compileUniversalCode(docHtml, 'live', { width, height });
       }
-    }
+      startTimeRef.current = performance.now();
+      setIsPlaying(true);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [editorTab, textConfig, exportDuration, exportAspect]);
 
-    // Koreksi otomatis typo CSS seperti style yang diawali tanda minus
-    targetCode = targetCode.replace(/<style[^>]*>\s*-\s*\{/gi, '<style>\n* {');
-    if (editorMode !== 'canvas' && hybridTab === 'all') {
-      setCodeAll(targetCode);
-    }
-
+  // Terapkan perubahan kode atau teks ke Live Iframe
+  const handleApplyCode = useCallback(() => {
+    const targetCode = getActiveSourceCode();
     setErrorLog(null);
     const { width, height } = computeTargetDimensions('720p', exportAspect);
 
     if (liveIframeRef.current) {
-      liveIframeRef.current.srcdoc = buildSandboxHtml(targetCode, 'live', {
+      liveIframeRef.current.srcdoc = compileUniversalCode(targetCode, 'live', {
         width,
-        height,
-        editorMode
+        height
       });
     }
 
     startTimeRef.current = performance.now();
     setIsPlaying(true);
     onShowToast?.('Pratinjau visual berhasil diperbarui.', 'success');
-  }, [editorMode, hybridTab, codeAll, codeHtml, codeCss, codeJs, codeCanvas, exportAspect, onShowToast]);
+  }, [getActiveSourceCode, exportAspect, onShowToast]);
+
+  // Konversi hasil Editor Teks menjadi kode HTML5 utuh di Editor Kode
+  const handleOpenTextInCodeEditor = () => {
+    const dur = Math.max(2, Math.min(Number(exportDuration) || 10, 60));
+    const generatedHtml = generateTextAnimationDocument(textConfig, dur);
+    setUniversalCode(generatedHtml);
+    setEditorTab('code');
+    setErrorLog(null);
+    const { width, height } = computeTargetDimensions('720p', exportAspect);
+    if (liveIframeRef.current) {
+      liveIframeRef.current.srcdoc = compileUniversalCode(generatedHtml, 'live', { width, height });
+    }
+    startTimeRef.current = performance.now();
+    setIsPlaying(true);
+    onShowToast?.('Animasi teks dibuka ke Editor Kode.', 'success');
+  };
 
   // Ganti Template Preset
   const handleSelectTemplate = (templateId) => {
@@ -280,6 +320,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (!tmpl) return;
 
     setSelectedTemplateId(templateId);
+    setEditorTab('code');
     setSettings((prev) => ({
       ...prev,
       ...tmpl.defaults
@@ -287,33 +328,17 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     setErrorLog(null);
 
     const { width, height } = computeTargetDimensions('720p', exportAspect);
+    const nextCode =
+      tmpl.category === 'canvas'
+        ? tmpl.code
+        : buildCompositeHtml(tmpl.html, tmpl.css, tmpl.js);
 
-    if (tmpl.category === 'canvas') {
-      setEditorMode('canvas');
-      setCodeCanvas(tmpl.code);
-      if (liveIframeRef.current) {
-        liveIframeRef.current.srcdoc = buildSandboxHtml(tmpl.code, 'live', {
-          width,
-          height,
-          editorMode: 'canvas'
-        });
-      }
-    } else {
-      setEditorMode('hybrid');
-      setHybridTab('all');
-      setCodeHtml(tmpl.html || '');
-      setCodeCss(tmpl.css || '');
-      setCodeJs(tmpl.js || '');
-
-      const comp = buildCompositeHtml(tmpl.html, tmpl.css, tmpl.js);
-      setCodeAll(comp);
-      if (liveIframeRef.current) {
-        liveIframeRef.current.srcdoc = buildSandboxHtml(comp, 'live', {
-          width,
-          height,
-          editorMode: 'hybrid'
-        });
-      }
+    setUniversalCode(nextCode);
+    if (liveIframeRef.current) {
+      liveIframeRef.current.srcdoc = compileUniversalCode(nextCode, 'live', {
+        width,
+        height
+      });
     }
 
     startTimeRef.current = performance.now();
@@ -362,17 +387,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   // Salin Kode
   const handleCopyCode = async () => {
     try {
-      const activeCode =
-        editorMode === 'canvas'
-          ? codeCanvas
-          : hybridTab === 'all'
-          ? codeAll
-          : hybridTab === 'html'
-          ? codeHtml
-          : hybridTab === 'css'
-          ? codeCss
-          : codeJs;
-      await navigator.clipboard.writeText(activeCode);
+      await navigator.clipboard.writeText(getActiveSourceCode());
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
       onShowToast?.('Kode berhasil disalin.', 'success');
@@ -381,23 +396,48 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Reset Kode
+  // Reset Kode / Teks
   const handleResetCode = () => {
     if (!confirmReset) {
       setConfirmReset(true);
       setTimeout(() => setConfirmReset(false), 3000);
       return;
     }
-    const currentTmpl = CODE_TEMPLATES.find((t) => t.id === selectedTemplateId) || CODE_TEMPLATES[0];
-    handleSelectTemplate(currentTmpl.id);
+    if (editorTab === 'text') {
+      setTextConfig({
+        brand: 'KURO STUDIO',
+        headline: 'PROMO KILAT HARI INI',
+        subtitle: 'Kualitas studio sinematik 60 FPS langsung dari browser tanpa ribet.',
+        points: 'Render WebCodecs HD MP4\nTanpa Watermark & Gratis\nResponsif Mobile & Desktop',
+        cta: 'COBA SEKARANG →',
+        styleId: 'kinetic-slam',
+        presetId: 'obsidian-gold',
+        bgColor: '#0b0b0f',
+        accentColor: '#facc15'
+      });
+      onShowToast?.('Editor Teks dikembalikan ke bawaan.', 'info');
+    } else {
+      const currentTmpl = CODE_TEMPLATES.find((t) => t.id === selectedTemplateId) || CODE_TEMPLATES[0];
+      handleSelectTemplate(currentTmpl.id);
+      onShowToast?.('Kode direset ke bawaan template.', 'info');
+    }
     setConfirmReset(false);
-    onShowToast?.('Kode direset ke bawaan template.', 'info');
   };
 
   // Ekspor File Kode
   const handleExportCodeFile = () => {
-    const activeCode = editorMode === 'canvas' ? codeCanvas : codeAll;
-    const ext = editorMode === 'canvas' ? 'js' : 'html';
+    const activeCode = getActiveSourceCode();
+    const { category } = detectCodeLanguage(activeCode);
+    const ext =
+      category === 'pure-js-standalone' || category === 'pure-js-draw'
+        ? 'js'
+        : category === 'pure-css'
+        ? 'css'
+        : category === 'pure-svg'
+        ? 'svg'
+        : category === 'glsl-shader'
+        ? 'glsl'
+        : 'html';
     const blob = new Blob([activeCode], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -417,35 +457,15 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     reader.onload = (event) => {
       const content = event.target?.result;
       if (typeof content === 'string') {
-        const trimmed = content.trim();
         const { width, height } = computeTargetDimensions('720p', exportAspect);
-
-        if (
-          trimmed.includes('<!DOCTYPE') ||
-          trimmed.includes('<html') ||
-          trimmed.includes('<body') ||
-          trimmed.includes('<div')
-        ) {
-          setEditorMode('hybrid');
-          setHybridTab('all');
-          setCodeAll(content);
-          if (liveIframeRef.current) {
-            liveIframeRef.current.srcdoc = buildSandboxHtml(content, 'live', {
-              width,
-              height,
-              editorMode: 'hybrid'
-            });
-          }
-        } else {
-          setEditorMode('canvas');
-          setCodeCanvas(content);
-          if (liveIframeRef.current) {
-            liveIframeRef.current.srcdoc = buildSandboxHtml(content, 'live', {
-              width,
-              height,
-              editorMode: 'canvas'
-            });
-          }
+        setEditorTab('code');
+        setUniversalCode(content);
+        setErrorLog(null);
+        if (liveIframeRef.current) {
+          liveIframeRef.current.srcdoc = compileUniversalCode(content, 'live', {
+            width,
+            height
+          });
         }
         startTimeRef.current = performance.now();
         setIsPlaying(true);
@@ -532,25 +552,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
-    let targetCode = '';
-    if (editorMode === 'canvas') {
-      targetCode = codeCanvas;
-    } else {
-      if (hybridTab === 'all') {
-        targetCode = codeAll;
-      } else {
-        targetCode = buildCompositeHtml(codeHtml, codeCss, codeJs);
-      }
-    }
-    targetCode = targetCode.replace(/<style[^>]*>\s*-\s*\{/gi, '<style>\n* {');
-
+    const targetCode = getActiveSourceCode();
     const finalDuration = Math.max(1, Math.min(Number(exportDuration) || 10, 60));
 
     try {
       const result = await exportVideo({
         compositor: compositorRef.current,
         code: targetCode,
-        editorMode,
         settings: settingsRef.current,
         resolution: exportRes,
         aspectRatio: exportAspect,
@@ -622,50 +630,50 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     activeCodeSetter = setCodeJs;
   }
 
-  const lineCount = activeCodeText.split('\n').length;
+  const lineCount = universalCode.split('\n').length;
   const lineNumbers = Array.from({ length: lineCount }, (_, i) => i + 1);
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-28">
+    <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6 pb-28 overflow-x-hidden box-border">
       
       {/* ─── 1. TOP HEADER & TEMPLATE SELECTOR ─── */}
-      <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4 min-w-0">
+        <div className="flex items-start sm:items-center gap-3 min-w-0">
           <button
             onClick={onBack}
-            className="p-2 sm:p-2.5 bg-[#fafafa] hover:bg-neutral-200 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer"
+            className="p-2 sm:p-2.5 bg-[#fafafa] hover:bg-neutral-200 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer shrink-0"
             title="Kembali ke Beranda"
           >
             <ArrowLeft className="w-5 h-5 text-black" />
           </button>
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl sm:text-2xl font-black uppercase tracking-tight text-black flex items-center gap-2">
-                <Clapperboard className="w-6 h-6 text-black fill-yellow-400" />
-                Code to Video Studio
+              <h1 className="text-base sm:text-2xl font-black uppercase tracking-tight text-black flex items-center gap-2 truncate">
+                <Clapperboard className="w-5 h-5 sm:w-6 sm:h-6 text-black fill-yellow-400 shrink-0" />
+                <span className="truncate">Code to Video Studio</span>
               </h1>
-              <span className="px-2.5 py-0.5 bg-yellow-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000]">
-                DIRECT GPU PREVIEW
+              <span className="px-2 py-0.5 bg-yellow-300 text-black border-2 border-black text-[10px] sm:text-xs font-black shadow-[1.5px_1.5px_0px_#000]">
+                DIRECT GPU
               </span>
-              <span className="px-2.5 py-0.5 bg-cyan-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000] hidden sm:inline-block">
-                DETERMINISTIC 60 FPS
+              <span className="px-2 py-0.5 bg-cyan-300 text-black border-2 border-black text-xs font-black shadow-[1.5px_1.5px_0px_#000] hidden sm:inline-block">
+                60 FPS DETERMINISTIC
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-neutral-600 font-semibold mt-0.5">
-              Live preview GPU native secepat kilat & render video frame-exact WebCodecs (MP4 & WebM).
+            <p className="hidden sm:block text-xs sm:text-sm text-neutral-600 font-semibold mt-0.5">
+              Auto-detect semua format kode (HTML/CSS/JS/SVG/GLSL) atau buat video langsung dari Editor Teks.
             </p>
           </div>
         </div>
 
         {/* Template Selector */}
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          <span className="text-xs font-black uppercase text-neutral-500 whitespace-nowrap">
+        <div className="flex items-center gap-2 w-full md:w-72 min-w-0">
+          <span className="text-[11px] sm:text-xs font-black uppercase text-neutral-600 whitespace-nowrap shrink-0">
             Template:
           </span>
           <select
             value={selectedTemplateId}
             onChange={(e) => handleSelectTemplate(e.target.value)}
-            className="flex-1 md:w-64 bg-white border-2 border-black p-2 font-bold text-xs sm:text-sm shadow-[2px_2px_0px_#000] focus:outline-none focus:ring-2 focus:ring-black cursor-pointer"
+            className="flex-1 min-w-0 w-full bg-white border-2 border-black p-2 font-bold text-xs sm:text-sm shadow-[2px_2px_0px_#000] focus:outline-none focus:ring-2 focus:ring-black cursor-pointer truncate"
           >
             {CODE_TEMPLATES.map((tmpl) => (
               <option key={tmpl.id} value={tmpl.id}>
@@ -677,234 +685,364 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       </div>
 
       {/* ─── MOBILE SECTION SWITCHER ─── */}
-      <div className="flex lg:hidden bg-white border-2 border-black shadow-[3px_3px_0px_#000] p-1 gap-1">
+      <div className="grid grid-cols-3 lg:hidden bg-white border-2 border-black shadow-[3px_3px_0px_#000] p-1 gap-1 w-full">
         <button
           onClick={() => setMobileSection('preview')}
-          className={`flex-1 py-2 text-xs font-black uppercase text-center transition-colors ${
+          className={`py-2 px-1 text-[11px] font-black uppercase text-center transition-colors truncate ${
             mobileSection === 'preview' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
-          Studio & Efek
+          Preview
         </button>
         <button
           onClick={() => setMobileSection('editor')}
-          className={`flex-1 py-2 text-xs font-black uppercase text-center transition-colors ${
+          className={`py-2 px-1 text-[11px] font-black uppercase text-center transition-colors truncate ${
             mobileSection === 'editor' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
-          Editor Kode
+          Editor
         </button>
         <button
           onClick={() => setMobileSection('export')}
-          className={`flex-1 py-2 text-xs font-black uppercase text-center transition-colors ${
+          className={`py-2 px-1 text-[11px] font-black uppercase text-center transition-colors truncate ${
             mobileSection === 'export' ? 'bg-black text-white' : 'hover:bg-neutral-100 text-black'
           }`}
         >
-          Render Video
+          Render
         </button>
       </div>
 
       {/* ─── 2. MAIN 2-COLUMN WORKSPACE ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-start">
         
-        {/* ─── KOLOM KIRI: EDITOR KODE ─── */}
+        {/* ─── KOLOM KIRI: EDITOR KODE UNIVERSAL & EDITOR TEKS ─── */}
         <div
-          className={`lg:col-span-6 bg-white border-2 border-black shadow-[4px_4px_0px_#000] flex flex-col overflow-hidden ${
-            mobileSection === 'editor' ? 'block' : 'hidden lg:flex'
+          className={`min-w-0 w-full lg:col-span-6 bg-white border-2 border-black shadow-[4px_4px_0px_#000] flex flex-col overflow-hidden ${
+            mobileSection === 'editor' ? 'flex' : 'hidden lg:flex'
           }`}
         >
-          {/* Header Editor: Mode Switcher & Sub-Tabs */}
+          {/* Header Editor: Tab Editor Kode | Editor Teks + Pil Auto-Detect Pasif */}
           <div className="p-3 bg-neutral-100 border-b-2 border-black space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-black uppercase text-black flex items-center gap-1">
-                  <Code2 className="w-4 h-4 text-black" />
-                  Mode:
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="grid grid-cols-2 border-2 border-black bg-white shadow-[2px_2px_0px_#000]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditorTab('code');
+                    setErrorLog(null);
+                    const { width, height } = computeTargetDimensions('720p', exportAspect);
+                    if (liveIframeRef.current) {
+                      liveIframeRef.current.srcdoc = compileUniversalCode(universalCode, 'live', { width, height });
+                    }
+                    startTimeRef.current = performance.now();
+                    setIsPlaying(true);
+                  }}
+                  className={`px-3 py-1.5 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    editorTab === 'code' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100 text-neutral-700'
+                  }`}
+                >
+                  <Code2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Editor Kode</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditorTab('text');
+                    setErrorLog(null);
+                  }}
+                  className={`px-3 py-1.5 text-xs font-black border-l-2 border-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    editorTab === 'text' ? 'bg-cyan-300 text-black' : 'hover:bg-neutral-100 text-neutral-700'
+                  }`}
+                >
+                  <Type className="w-3.5 h-3.5 shrink-0" />
+                  <span>Editor Teks</span>
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between sm:justify-end gap-2">
+                <span className="px-2 py-1 bg-white border border-black text-[11px] font-bold text-neutral-800 truncate">
+                  {editorTab === 'text' ? 'Mode: Teks ke Video' : `Auto-Detect: ${detectedLanguage.label}`}
                 </span>
-                <div className="flex border-2 border-black bg-white">
-                  <button
-                    onClick={() => {
-                      setEditorMode('hybrid');
-                      const { width, height } = computeTargetDimensions('720p', exportAspect);
-                      if (liveIframeRef.current) {
-                        liveIframeRef.current.srcdoc = buildSandboxHtml(codeAll, 'live', { width, height, editorMode: 'hybrid' });
-                      }
-                    }}
-                    className={`px-2.5 py-1 text-xs font-black cursor-pointer ${
-                      editorMode === 'hybrid' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
-                    }`}
-                  >
-                    Gabungan (HTML+CSS+JS)
-                  </button>
-                  <button
-                    onClick={() => {
-                      setEditorMode('canvas');
-                      const { width, height } = computeTargetDimensions('720p', exportAspect);
-                      if (liveIframeRef.current) {
-                        liveIframeRef.current.srcdoc = buildSandboxHtml(codeCanvas, 'live', { width, height, editorMode: 'canvas' });
-                      }
-                    }}
-                    className={`px-2.5 py-1 text-xs font-black border-l-2 border-black cursor-pointer ${
-                      editorMode === 'canvas' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100'
-                    }`}
-                  >
-                    Pure JS Canvas
-                  </button>
+                <span className="hidden sm:inline-block text-[10px] bg-neutral-200 border border-black px-1.5 py-0.5 font-mono font-bold shrink-0">
+                  Ctrl+Enter: Run
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Isi Panel Kiri: Editor Kode Tunggal ATAU Editor Teks */}
+          {editorTab === 'code' ? (
+            <div className="relative flex bg-[#121218] text-white font-mono text-xs sm:text-sm h-[320px] sm:h-[440px] lg:h-[480px] overflow-hidden min-w-0">
+              <div className="w-8 sm:w-11 bg-[#09090d] text-neutral-500 py-3 select-none text-right pr-2 sm:pr-3 font-mono text-[11px] sm:text-xs border-r border-neutral-800 overflow-hidden leading-relaxed shrink-0">
+                {lineNumbers.map((num) => (
+                  <div key={num}>{num}</div>
+                ))}
+              </div>
+
+              <textarea
+                ref={textareaRef}
+                value={universalCode}
+                onChange={(e) => setUniversalCode(e.target.value)}
+                onKeyDown={(e) => handleKeyDown(e, setUniversalCode, universalCode)}
+                spellCheck="false"
+                className="flex-1 min-w-0 p-2.5 sm:p-3 bg-transparent text-emerald-400 font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none overflow-x-auto overflow-y-auto whitespace-pre selection:bg-neutral-700 selection:text-white"
+                placeholder="// Tempel kode HTML, CSS keyframes, SVG, GLSL Shader, Three.js, atau Pure JS Canvas di sini..."
+              />
+            </div>
+          ) : (
+            <div className="p-3.5 sm:p-4 bg-white space-y-3.5 max-h-[540px] overflow-y-auto text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-black uppercase text-[11px] text-neutral-700">Label / Merek</label>
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={textConfig.brand}
+                    onChange={(e) => setTextConfig((t) => ({ ...t, brand: e.target.value }))}
+                    placeholder="Contoh: KURO STUDIO"
+                    className="w-full min-w-0 px-3 py-2 bg-neutral-50 border-2 border-black font-bold text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-black uppercase text-[11px] text-neutral-700">Tombol CTA / Kontak</label>
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={textConfig.cta}
+                    onChange={(e) => setTextConfig((t) => ({ ...t, cta: e.target.value }))}
+                    placeholder="Contoh: ORDER SEKARANG →"
+                    className="w-full min-w-0 px-3 py-2 bg-neutral-50 border-2 border-black font-bold text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
+                  />
                 </div>
               </div>
 
-              <span className="text-[10px] bg-neutral-200 border border-black px-1.5 py-0.5 font-mono font-bold">
-                Ctrl+Enter: Run
-              </span>
-            </div>
-
-            {/* Sub-tab untuk Mode Gabungan */}
-            {editorMode === 'hybrid' && (
-              <div className="flex gap-1 border-t border-neutral-300 pt-2 overflow-x-auto scrollbar-none">
-                {[
-                  { id: 'all', label: 'Semua (Single File)' },
-                  { id: 'html', label: 'HTML / SVG' },
-                  { id: 'css', label: 'CSS' },
-                  { id: 'js', label: 'JavaScript' }
-                ].map((st) => (
-                  <button
-                    key={st.id}
-                    onClick={() => setHybridTab(st.id)}
-                    className={`px-2.5 py-1 text-xs font-bold border border-black transition-colors cursor-pointer whitespace-nowrap ${
-                      hybridTab === st.id ? 'bg-black text-white' : 'bg-white text-neutral-800 hover:bg-neutral-200'
-                    }`}
-                  >
-                    {st.label}
-                  </button>
-                ))}
+              <div className="space-y-1">
+                <label className="font-black uppercase text-[11px] text-neutral-700">Judul Utama (Hook)</label>
+                <input
+                  type="text"
+                  maxLength={90}
+                  value={textConfig.headline}
+                  onChange={(e) => setTextConfig((t) => ({ ...t, headline: e.target.value }))}
+                  placeholder="Contoh: DISKON KILAT KHUSUS HARI INI"
+                  className="w-full min-w-0 px-3 py-2 bg-neutral-50 border-2 border-black font-black text-xs sm:text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
+                />
               </div>
-            )}
-          </div>
 
-          {/* Area Editor Teks */}
-          <div className="relative flex bg-[#121218] text-white font-mono text-xs sm:text-sm min-h-[440px] max-h-[560px] overflow-hidden">
-            <div className="w-12 bg-[#09090d] text-neutral-500 py-3 select-none text-right pr-3 font-mono text-xs border-r border-neutral-800 overflow-hidden leading-relaxed">
-              {lineNumbers.map((num) => (
-                <div key={num}>{num}</div>
-              ))}
+              <div className="space-y-1">
+                <label className="font-black uppercase text-[11px] text-neutral-700">Subjudul Pendek</label>
+                <textarea
+                  rows={2}
+                  maxLength={140}
+                  value={textConfig.subtitle}
+                  onChange={(e) => setTextConfig((t) => ({ ...t, subtitle: e.target.value }))}
+                  placeholder="Penjelasan singkat penawaran atau pesan utama..."
+                  className="w-full min-w-0 px-3 py-2 bg-neutral-50 border-2 border-black font-semibold text-xs resize-none focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-black uppercase text-[11px] text-neutral-700">
+                  Poin Utama (1 Baris = 1 Kartu Animasi, maks. 5 baris)
+                </label>
+                <textarea
+                  rows={3}
+                  value={textConfig.points}
+                  onChange={(e) => setTextConfig((t) => ({ ...t, points: e.target.value }))}
+                  placeholder={'Poin keunggulan 1\nPoin keunggulan 2\nPoin keunggulan 3'}
+                  className="w-full min-w-0 px-3 py-2 bg-neutral-50 border-2 border-black font-semibold text-xs resize-none focus:bg-white focus:outline-none focus:ring-2 focus:ring-black"
+                />
+              </div>
+
+              <div className="space-y-1.5 pt-1 border-t border-neutral-200">
+                <label className="font-black uppercase text-[11px] text-neutral-700 block">Gaya Animasi Teks</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {TEXT_ANIMATION_STYLES.map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => setTextConfig((t) => ({ ...t, styleId: st.id }))}
+                      className={`p-2 border-2 border-black text-left transition-all cursor-pointer ${
+                        textConfig.styleId === st.id
+                          ? 'bg-yellow-300 text-black shadow-[2px_2px_0px_#000]'
+                          : 'bg-white hover:bg-neutral-100 text-neutral-800'
+                      }`}
+                    >
+                      <div className="font-black text-[11px]">{st.name}</div>
+                      <div className="text-[10px] text-neutral-600 leading-tight">{st.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2 pt-1 border-t border-neutral-200">
+                <label className="font-black uppercase text-[11px] text-neutral-700 flex items-center gap-1">
+                  <Palette className="w-3.5 h-3.5" />
+                  Palet Warna &amp; Kustomisasi
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {TEXT_COLOR_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() =>
+                        setTextConfig((t) => ({
+                          ...t,
+                          presetId: preset.id,
+                          bgColor: preset.bgColor,
+                          accentColor: preset.accentColor
+                        }))
+                      }
+                      className={`px-2.5 py-1.5 border-2 border-black text-[11px] font-bold flex items-center gap-1.5 cursor-pointer ${
+                        textConfig.presetId === preset.id
+                          ? 'bg-black text-white shadow-[1.5px_1.5px_0px_#000]'
+                          : 'bg-white hover:bg-neutral-100 text-black'
+                      }`}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-full border border-black inline-block shrink-0"
+                        style={{ background: preset.accentColor }}
+                      />
+                      <span>{preset.name}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <label className="flex items-center justify-between gap-2 p-2 border-2 border-black bg-neutral-50 cursor-pointer">
+                    <span className="font-bold text-[11px]">Warna Latar</span>
+                    <input
+                      type="color"
+                      value={textConfig.bgColor}
+                      onChange={(e) => setTextConfig((t) => ({ ...t, bgColor: e.target.value }))}
+                      className="w-8 h-6 border border-black cursor-pointer bg-transparent"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-2 p-2 border-2 border-black bg-neutral-50 cursor-pointer">
+                    <span className="font-bold text-[11px]">Warna Aksen</span>
+                    <input
+                      type="color"
+                      value={textConfig.accentColor}
+                      onChange={(e) => setTextConfig((t) => ({ ...t, accentColor: e.target.value }))}
+                      className="w-8 h-6 border border-black cursor-pointer bg-transparent"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleOpenTextInCodeEditor}
+                  className="w-full py-2.5 px-3 bg-neutral-900 hover:bg-neutral-800 text-white border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Code2 className="w-4 h-4 text-cyan-300" />
+                  Buka Hasil Animasi Teks di Editor Kode
+                </button>
+              </div>
             </div>
-
-            <textarea
-              ref={textareaRef}
-              value={activeCodeText}
-              onChange={(e) => activeCodeSetter(e.target.value)}
-              onKeyDown={(e) => handleKeyDown(e, activeCodeSetter, activeCodeText)}
-              spellCheck="false"
-              className="flex-1 p-3 bg-transparent text-emerald-400 font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none overflow-y-auto whitespace-pre selection:bg-neutral-700 selection:text-white"
-              placeholder="// Tulis kode animasi di sini..."
-            />
-          </div>
+          )}
 
           {/* Error Console */}
           {errorLog && (
             <div className="p-3 bg-red-100 border-t-2 border-black text-red-900 font-mono text-xs flex items-start gap-2">
               <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
-              <div>
+              <div className="min-w-0 break-words">
                 <span className="font-bold">Error Console:</span> {errorLog}
               </div>
             </div>
           )}
 
-          {/* Action Bar di Bawah Editor */}
-          <div className="p-3 bg-neutral-100 border-t-2 border-black flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleApplyCode}
-                className="px-4 py-2 bg-green-400 hover:bg-green-300 text-black border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center gap-1.5 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[38px]"
-                title="Terapkan Kode ke Pratinjau (Ctrl+Enter)"
-              >
-                <Play className="w-4 h-4 fill-black" />
-                Jalankan / Update
-              </button>
+          {/* Action Bar di Bawah Editor (Mobile-Safe 2-col Grid & Desktop Flex) */}
+          <div className="p-3 bg-neutral-100 border-t-2 border-black grid grid-cols-2 sm:flex sm:flex-wrap items-center justify-between gap-2">
+            <button
+              onClick={handleApplyCode}
+              className="col-span-2 sm:col-span-1 px-4 py-2 bg-green-400 hover:bg-green-300 text-black border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[42px]"
+              title="Terapkan Kode ke Pratinjau (Ctrl+Enter)"
+            >
+              <Play className="w-4 h-4 fill-black" />
+              <span>Jalankan / Update</span>
+            </button>
 
-              <button
-                onClick={handleResetCode}
-                className={`px-3 py-2 border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center gap-1 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[38px] ${
-                  confirmReset ? 'bg-red-500 text-white animate-pulse' : 'bg-white hover:bg-neutral-200 text-black'
-                }`}
-                title="Kembalikan ke Template Asli"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                {confirmReset ? 'Yakin Reset?' : 'Reset'}
-              </button>
-            </div>
+            <button
+              onClick={handleResetCode}
+              className={`px-3 py-2 border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center justify-center gap-1 active:translate-x-0.5 active:translate-y-0.5 transition-all cursor-pointer min-h-[42px] ${
+                confirmReset ? 'bg-red-500 text-white animate-pulse' : 'bg-white hover:bg-neutral-200 text-black'
+              }`}
+              title="Kembalikan ke Template Asli"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>{confirmReset ? 'Yakin Reset?' : 'Reset'}</span>
+            </button>
 
-            <div className="flex items-center gap-1.5">
-              <button
-                onClick={handleCopyCode}
-                className="px-3 py-2 bg-white hover:bg-neutral-200 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center gap-1 min-h-[38px] cursor-pointer"
-                title="Salin Kode"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-green-700" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? 'Tersalin' : 'Salin'}
-              </button>
+            <button
+              onClick={handleCopyCode}
+              className="px-3 py-2 bg-white hover:bg-neutral-200 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center justify-center gap-1 min-h-[42px] cursor-pointer"
+              title="Salin Kode"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-green-700" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copied ? 'Tersalin' : 'Salin'}</span>
+            </button>
 
-              <button
-                onClick={handleExportCodeFile}
-                className="px-3 py-2 bg-white hover:bg-neutral-200 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center gap-1 min-h-[38px] cursor-pointer"
-                title="Unduh Berkas Kode"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Ekspor
-              </button>
+            <button
+              onClick={handleExportCodeFile}
+              className="px-3 py-2 bg-white hover:bg-neutral-200 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center justify-center gap-1 min-h-[42px] cursor-pointer"
+              title="Unduh Berkas Kode"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Ekspor</span>
+            </button>
 
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="px-3 py-2 bg-white hover:bg-neutral-200 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center gap-1 min-h-[38px] cursor-pointer"
-                title="Unggah Berkas Kode (.html, .js)"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                Impor
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".html,.htm,.js,.txt,.css"
-                onChange={handleImportFile}
-                className="hidden"
-              />
-            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-3 py-2 bg-white hover:bg-neutral-200 text-black border-2 border-black shadow-[1.5px_1.5px_0px_#000] font-bold text-xs flex items-center justify-center gap-1 min-h-[42px] cursor-pointer"
+              title="Unggah Berkas Kode (.html, .css, .js, .svg, .glsl)"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Impor</span>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".html,.htm,.js,.jsx,.txt,.css,.svg,.glsl,.frag"
+              onChange={handleImportFile}
+              className="hidden"
+            />
           </div>
         </div>
 
         {/* ─── KOLOM KANAN: PREVIEW & PENGATURAN STUDIO ─── */}
         <div
-          className={`lg:col-span-6 space-y-4 ${
+          className={`min-w-0 w-full lg:col-span-6 space-y-4 ${
             mobileSection === 'preview' ? 'block' : 'hidden lg:block'
           }`}
         >
           {/* Quick Preset Action Bar */}
-          <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-2.5 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-black uppercase text-neutral-600 flex items-center gap-1.5">
+          <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <span className="text-xs font-black uppercase text-neutral-600 flex items-center gap-1.5 shrink-0">
               <SlidersHorizontal className="w-4 h-4 text-black" />
               Preset Komposisi:
             </span>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5 w-full sm:w-auto">
               <button
                 onClick={() => handleQuickPreset('clean-full')}
-                className="px-2.5 py-1 bg-yellow-300 hover:bg-yellow-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                className="px-2 py-1.5 bg-yellow-300 hover:bg-yellow-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer text-center truncate"
                 title="100% Layar Penuh Tanpa Efek Tambahan"
               >
-                Fullscreen Murni
+                Fullscreen
               </button>
               <button
                 onClick={() => handleQuickPreset('cinematic-full')}
-                className="px-2.5 py-1 bg-cyan-300 hover:bg-cyan-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                className="px-2 py-1.5 bg-cyan-300 hover:bg-cyan-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer text-center truncate"
                 title="Layar Penuh + Partikel + Vignette Sinematik"
               >
-                Sinematik HD
+                Sinematik
               </button>
               <button
                 onClick={() => handleQuickPreset('studio-3d')}
-                className="px-2.5 py-1 bg-pink-300 hover:bg-pink-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer"
+                className="px-2 py-1.5 bg-pink-300 hover:bg-pink-400 border border-black font-black text-[11px] shadow-[1.5px_1.5px_0px_#000] cursor-pointer text-center truncate"
                 title="Bingkai TV 3D + Orbit + Awan"
               >
-                Panggung 3D
+                3D TV
               </button>
             </div>
           </div>
@@ -912,10 +1050,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
           {/* Viewport Box (Canvas Output & Direct GPU Preview) */}
           <div
             ref={viewportRef}
-            className="bg-black border-2 border-black shadow-[4px_4px_0px_#000] p-2 relative flex flex-col items-center justify-center overflow-hidden"
+            className="bg-black border-2 border-black shadow-[4px_4px_0px_#000] p-2 relative flex flex-col items-center justify-center overflow-hidden min-w-0"
           >
             <div
-              className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden min-h-[220px]"
+              className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden min-h-[210px]"
               style={{
                 aspectRatio: exportAspect.replace(':', '/'),
                 maxHeight: '440px'
@@ -1020,36 +1158,36 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
           {/* 3 Tab Pengaturan Visual */}
           <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4">
             
-            {/* Header Tab */}
-            <div className="flex border-b-2 border-black mb-4 gap-2 overflow-x-auto pb-1 scrollbar-none">
+            {/* Header Tab (Grid 3 Kolom Anti-Terpotong Mobile) */}
+            <div className="grid grid-cols-3 border-b-2 border-black mb-4 gap-1 sm:gap-2 pb-1">
               <button
                 onClick={() => setActiveTab('camera')}
-                className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
+                className={`px-1.5 sm:px-3 py-2 text-[11px] sm:text-xs font-black uppercase flex items-center justify-center gap-1 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer truncate ${
                   activeTab === 'camera' ? 'bg-yellow-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
-                <Tv className="w-3.5 h-3.5" />
-                Panggung & 3D TV
+                <Tv className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Panggung 3D</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('fx')}
-                className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
+                className={`px-1.5 sm:px-3 py-2 text-[11px] sm:text-xs font-black uppercase flex items-center justify-center gap-1 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer truncate ${
                   activeTab === 'fx' ? 'bg-cyan-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
-                <Sparkles className="w-3.5 h-3.5" />
-                Awan & Partikel
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Awan &amp; Efek</span>
               </button>
 
               <button
                 onClick={() => setActiveTab('hud')}
-                className={`px-3 py-2 text-xs font-black uppercase flex items-center gap-1.5 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer whitespace-nowrap ${
+                className={`px-1.5 sm:px-3 py-2 text-[11px] sm:text-xs font-black uppercase flex items-center justify-center gap-1 border-t-2 border-l-2 border-r-2 border-black -mb-[2px] cursor-pointer truncate ${
                   activeTab === 'hud' ? 'bg-pink-300 text-black' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
                 }`}
               >
-                <Type className="w-3.5 h-3.5" />
-                Tipografi HUD
+                <Type className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Teks HUD</span>
               </button>
             </div>
 
@@ -1511,7 +1649,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
       {/* ─── 3. BOTTOM PANEL: EKSPOR VIDEO DETERMINISTIK 60 FPS ─── */}
       <div
-        className={`bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4 sm:p-6 space-y-5 ${
+        className={`min-w-0 w-full bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-4 sm:p-6 space-y-5 ${
           mobileSection === 'export' ? 'block' : 'hidden lg:block'
         }`}
       >

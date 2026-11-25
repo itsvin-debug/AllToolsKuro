@@ -176,6 +176,30 @@ function createCloudTexture() {
  * Script Bridge Deterministik untuk Render Iframe Baru
  * Menginjeksi jam virtual, WebGL preserveDrawingBuffer, rafMap batching, dan timer synchronization
  */
+export function findPrimaryCanvas(doc) {
+  if (!doc) return null;
+  const canvases = doc.querySelectorAll('canvas');
+  if (!canvases || canvases.length === 0) return null;
+
+  let best = null;
+  let maxScore = -1;
+  for (let i = 0; i < canvases.length; i++) {
+    const c = canvases[i];
+    if (!c) continue;
+    const style = doc.defaultView ? doc.defaultView.getComputedStyle(c) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) continue;
+    const cw = c.width || c.clientWidth || 0;
+    const ch = c.height || c.clientHeight || 0;
+    if (cw <= 0 || ch <= 0) continue;
+    const area = cw * ch;
+    if (area > maxScore) {
+      maxScore = area;
+      best = c;
+    }
+  }
+  return best;
+}
+
 export function buildRenderBridgeScript(width, height) {
   return `
   <script>
@@ -186,6 +210,7 @@ export function buildRenderBridgeScript(width, height) {
     var _rafIdCounter = 1;
     var _timerMap = new Map();
     var _timerIdCounter = 1;
+    var _domCaptureCanvas = null;
 
     // 1. Force WebGL preserveDrawingBuffer & antialias pada getContext
     var _origGetContext = HTMLCanvasElement.prototype.getContext;
@@ -250,25 +275,114 @@ export function buildRenderBridgeScript(width, height) {
       _timerMap.delete(id);
     };
 
-    // Helper pencari canvas utama
+    // Smart primary canvas selector
     function findCanvas() {
       var canvases = document.querySelectorAll('canvas');
       if (!canvases || canvases.length === 0) return null;
-      if (canvases.length === 1) return canvases[0];
-      var largest = null;
+      var best = null;
       var maxArea = -1;
       for (var i = 0; i < canvases.length; i++) {
         var c = canvases[i];
+        var st = window.getComputedStyle ? window.getComputedStyle(c) : null;
+        if (st && (st.display === 'none' || st.visibility === 'hidden')) continue;
         var area = (c.width || c.clientWidth || 0) * (c.height || c.clientHeight || 0);
-        if (area > maxArea) {
+        if (area > 0 && area > maxArea) {
           maxArea = area;
-          largest = c;
+          best = c;
         }
       }
-      return largest;
+      return best;
     }
 
-    // Tangkap error runtime di dalam render iframe
+    // Inline computed styles on cloned DOM tree so paused CSS/HTML/SVG frames serialize accurately
+    var INLINE_PROPS = [
+      'display', 'position', 'top', 'right', 'bottom', 'left', 'inset',
+      'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height',
+      'margin', 'padding', 'box-sizing', 'flex', 'flex-direction', 'flex-wrap',
+      'align-items', 'justify-content', 'gap', 'grid-template-columns', 'grid-template-rows',
+      'background', 'background-color', 'background-image', 'background-size', 'background-position',
+      'color', 'font-family', 'font-size', 'font-weight', 'font-style', 'line-height',
+      'letter-spacing', 'text-align', 'text-transform', 'text-shadow', 'white-space',
+      'border', 'border-radius', 'box-shadow', 'opacity', 'transform', 'transform-origin',
+      'filter', 'backdrop-filter', 'clip-path', 'mix-blend-mode', 'overflow', 'z-index',
+      'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-dashoffset'
+    ];
+
+    function cloneWithComputedStyles(srcNode, dstNode) {
+      if (!srcNode || !dstNode || srcNode.nodeType !== 1) return;
+      try {
+        var cs = window.getComputedStyle(srcNode);
+        if (cs) {
+          var styleStr = '';
+          for (var p = 0; p < INLINE_PROPS.length; p++) {
+            var prop = INLINE_PROPS[p];
+            var val = cs.getPropertyValue(prop);
+            if (val) styleStr += prop + ':' + val + ';';
+          }
+          if (styleStr) dstNode.setAttribute('style', styleStr);
+        }
+      } catch(e) {}
+      var srcChildren = srcNode.children;
+      var dstChildren = dstNode.children;
+      for (var i = 0; i < srcChildren.length && i < dstChildren.length; i++) {
+        cloneWithComputedStyles(srcChildren[i], dstChildren[i]);
+      }
+    }
+
+    async function captureDomToBitmap(targetW, targetH) {
+      try {
+        if (!document.body) return null;
+        if (!_domCaptureCanvas) {
+          _domCaptureCanvas = document.createElement('canvas');
+        }
+        if (_domCaptureCanvas.width !== targetW || _domCaptureCanvas.height !== targetH) {
+          _domCaptureCanvas.width = targetW;
+          _domCaptureCanvas.height = targetH;
+        }
+        var dctx = _domCaptureCanvas.getContext('2d');
+        var bodyStyle = window.getComputedStyle(document.body);
+        var htmlStyle = window.getComputedStyle(document.documentElement);
+        var bgCol = (bodyStyle && bodyStyle.backgroundColor && bodyStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && bodyStyle.backgroundColor !== 'transparent')
+          ? bodyStyle.backgroundColor
+          : ((htmlStyle && htmlStyle.backgroundColor && htmlStyle.backgroundColor !== 'rgba(0, 0, 0, 0)' && htmlStyle.backgroundColor !== 'transparent') ? htmlStyle.backgroundColor : '#09090b');
+
+        var cloneBody = document.body.cloneNode(true);
+        var scripts = cloneBody.querySelectorAll('script');
+        for (var s = scripts.length - 1; s >= 0; s--) {
+          if (scripts[s].parentNode) scripts[s].parentNode.removeChild(scripts[s]);
+        }
+        cloneWithComputedStyles(document.body, cloneBody);
+        cloneBody.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+        var bodyCssText = cloneBody.getAttribute('style') || '';
+        cloneBody.setAttribute('style', bodyCssText + ';margin:0;width:' + targetW + 'px;height:' + targetH + 'px;overflow:hidden;');
+
+        var serialized = new XMLSerializer().serializeToString(cloneBody);
+        var svgDoc = '<svg xmlns="http://www.w3.org/2000/svg" width="' + targetW + '" height="' + targetH + '">' +
+          '<foreignObject x="0" y="0" width="100%" height="100%">' + serialized + '</foreignObject></svg>';
+        var dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgDoc);
+
+        var img = new Image();
+        img.width = targetW;
+        img.height = targetH;
+        await new Promise(function(resolve) {
+          img.onload = resolve;
+          img.onerror = resolve;
+          img.src = dataUrl;
+          if (img.decode) img.decode().then(resolve).catch(resolve);
+        });
+
+        dctx.fillStyle = bgCol;
+        dctx.fillRect(0, 0, targetW, targetH);
+        if (img.complete && img.naturalWidth > 0) {
+          dctx.drawImage(img, 0, 0, targetW, targetH);
+        }
+        return window.createImageBitmap ? await window.createImageBitmap(_domCaptureCanvas) : null;
+      } catch(err) {
+        return null;
+      }
+    }
+
+    // Tangkap error runtime & promise rejection di dalam render iframe
     window.addEventListener('error', function(e) {
       try {
         window.parent.postMessage({
@@ -277,14 +391,41 @@ export function buildRenderBridgeScript(width, height) {
         }, '*');
       } catch(err) {}
     });
-
-    // Tunggu font & image siap
-    async function notifyReady() {
+    window.addEventListener('unhandledrejection', function(e) {
       try {
+        var msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason || 'Promise rejected');
+        window.parent.postMessage({
+          type: 'ctv-error',
+          error: 'Render Async: ' + msg
+        }, '*');
+      } catch(err) {}
+    });
+
+    // Tunggu window load, font, dan gambar eksternal hingga maksimal 6 detik
+    var _readySent = false;
+    async function notifyReady() {
+      if (_readySent) return;
+      _readySent = true;
+      try {
+        var waits = [];
         if (document.fonts && document.fonts.ready) {
+          waits.push(document.fonts.ready);
+        }
+        var imgs = Array.from(document.images || []);
+        for (var k = 0; k < imgs.length; k++) {
+          if (!imgs[k].complete) {
+            waits.push(new Promise(function(res) {
+              imgs[k].addEventListener('load', res, { once: true });
+              imgs[k].addEventListener('error', res, { once: true });
+            }));
+          } else if (imgs[k].decode) {
+            waits.push(imgs[k].decode().catch(function() {}));
+          }
+        }
+        if (waits.length > 0) {
           await Promise.race([
-            document.fonts.ready,
-            new Promise(function(r) { setTimeout(r, 2000); })
+            Promise.all(waits),
+            new Promise(function(r) { setTimeout(r, 5500); })
           ]);
         }
       } catch(e) {}
@@ -295,7 +436,7 @@ export function buildRenderBridgeScript(width, height) {
       notifyReady();
     } else {
       window.addEventListener('load', notifyReady);
-      setTimeout(notifyReady, 2500);
+      setTimeout(notifyReady, 5800);
     }
 
     // Listener message untuk frame stepping deterministik
@@ -350,7 +491,7 @@ export function buildRenderBridgeScript(width, height) {
         } catch(err) {}
       }
 
-      // 4. Jika ada window.__userDraw (mode pure JS canvas)
+      // 4. Jika ada window.__userDraw (mode pure JS canvas snippet)
       if (typeof window.__userDraw === 'function') {
         var targetC = findCanvas();
         if (targetC) {
@@ -374,7 +515,7 @@ export function buildRenderBridgeScript(width, height) {
 
       await new Promise(function(r) { setTimeout(r, 0); });
 
-      // Tangkap bitmap frame
+      // Tangkap bitmap frame: Canvas / WebGL utama atau DOM HTML/CSS/SVG fallback
       var bmp = null;
       if (finalCanvas && finalCanvas.width > 0 && finalCanvas.height > 0) {
         try {
@@ -382,6 +523,8 @@ export function buildRenderBridgeScript(width, height) {
             bmp = await window.createImageBitmap(finalCanvas);
           }
         } catch(err) {}
+      } else {
+        bmp = await captureDomToBitmap(data.width || ${width}, data.height || ${height});
       }
 
       window.parent.postMessage({
@@ -437,12 +580,21 @@ export function buildLiveBridgeScript() {
       return Math.floor(_origDateNow() + (performance.now() - _origPerfNow()));
     };
 
-    // 3. Tangkap runtime errors
+    // 3. Tangkap runtime errors & unhandled rejections
     window.addEventListener('error', function(e) {
       try {
         window.parent.postMessage({
           type: 'ctv-error',
           error: 'Live Runtime: ' + (e.message || 'Unknown error')
+        }, '*');
+      } catch(err) {}
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+      try {
+        var msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason || 'Promise rejected');
+        window.parent.postMessage({
+          type: 'ctv-error',
+          error: 'Live Async: ' + msg
         }, '*');
       } catch(err) {}
     });
@@ -476,32 +628,393 @@ export function buildLiveBridgeScript() {
 }
 
 /**
- * Membangun HTML Sandbox baik untuk Live Preview maupun Deterministic Render
+ * Menghapus pembungkus Markdown fence & typo CSS umum sebelum kompilasi
  */
-export function buildSandboxHtml(rawCode = '', mode = 'live', options = {}) {
-  const { width = 1280, height = 720, editorMode = 'hybrid' } = options;
+function sanitizeUniversalSource(rawCode = '') {
+  let code = String(rawCode || '').trim();
+  const fencedMatch = code.match(/^```(?:[a-zA-Z0-9_+-]+)?\s*\r?\n([\s\S]*?)\r?\n?```$/);
+  if (fencedMatch && fencedMatch[1]) {
+    code = fencedMatch[1].trim();
+  }
+  // Hilangkan typo minus sebelum kurung kurawal CSS (misal `- { margin: 0; }`)
+  code = code.replace(/(^|\n|>)\s*-\s*\{/g, '$1 * {');
+  return code;
+}
+
+/**
+ * Mendeteksi jenis bahasa/kode secara otomatis tanpa tombol pemilih mode
+ */
+export function detectCodeLanguage(rawInput = '') {
+  const code = sanitizeUniversalSource(rawInput);
+  if (!code) {
+    return { category: 'empty', label: 'Siap Menerima Kode' };
+  }
+
+  const lower = code.toLowerCase();
+  const hasHtmlDoc =
+    /^<!doctype\s+html/i.test(code) ||
+    lower.includes('<html') ||
+    (lower.includes('<head') && lower.includes('<body'));
+  if (hasHtmlDoc) {
+    return { category: 'full-html', label: 'HTML5 + CSS + JS' };
+  }
+
+  // SVG murni (tanpa wrapper HTML lengkap)
+  if (/^<\s*svg\b/i.test(code) && !lower.includes('<script') && !lower.includes('<div')) {
+    return { category: 'pure-svg', label: 'SVG Vector' };
+  }
+
+  // Potongan tag HTML / Canvas / Style / Script
+  if (/<\/?(?:div|span|canvas|section|main|header|footer|h[1-6]|p|ul|li|img|svg|style|script|link)\b/i.test(code)) {
+    return { category: 'html-fragment', label: 'HTML / CSS / JS' };
+  }
+
+  // GLSL Shader (Shadertoy mainImage atau standar WebGL void main)
+  const looksGlsl =
+    /\bgl_FragColor\b/.test(code) ||
+    /\bmainImage\s*\(\s*out\s+vec4\b/.test(code) ||
+    /\bprecision\s+(?:lowp|mediump|highp)\s+float\b/.test(code) ||
+    (/\bvoid\s+main\s*\(\s*(?:void)?\s*\)/.test(code) && /\b(?:vec[234]|mat[234]|uniform\s+float|fragColor)\b/.test(code));
+  if (looksGlsl) {
+    return { category: 'glsl-shader', label: 'GLSL Shader GPU' };
+  }
+
+  // Pure CSS tanpa tag markup maupun statement JS
+  const looksJs =
+    /\b(?:function\s*[a-zA-Z0-9_$]*\s*\(|const\s+|let\s+|var\s+|import\s+|document\.|window\.|requestAnimationFrame|new\s+THREE\.|ctx\s*\.)/.test(code) ||
+    /=>\s*[{(]/.test(code);
+  const looksCss =
+    !looksJs &&
+    (/@keyframes\b/.test(code) ||
+      /(?:^|\n|\})\s*(?:[.#]?[a-zA-Z*_-][a-zA-Z0-9_.*#,:()\s>-]*)\s*\{[^}]*:[^}]+;/.test(code));
+  if (looksCss) {
+    return { category: 'pure-css', label: 'Pure CSS Motion' };
+  }
+
+  // Pure JS: bedakan Standalone Script vs Frame Draw Snippet
+  const isStandaloneJs =
+    /\b(?:document\.|window\.|requestAnimationFrame|setInterval|new\s+THREE\.|getContext\s*\(|addEventListener|import\s+)/.test(code);
+  if (isStandaloneJs) {
+    return { category: 'pure-js-standalone', label: 'Pure JS / Three.js' };
+  }
+
+  return { category: 'pure-js-draw', label: 'JS Canvas Draw' };
+}
+
+function buildImportMapIfNeeded(jsCode) {
+  if (!/\bimport\s+[\s\S]*?\bfrom\s+['"][^'"]+['"]/.test(jsCode)) {
+    return { isModule: false, importMapTag: '' };
+  }
+  const importMapTag = `<script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>`;
+  return { isModule: true, importMapTag };
+}
+
+function buildCssPreviewMarkup(cssCode) {
+  const nodes = [];
+  const seen = new Set();
+  const selectorRegex = /(?:^|\n|\})\s*([.#][a-zA-Z_-][a-zA-Z0-9_-]*)\b/g;
+  let match;
+  while ((match = selectorRegex.exec(cssCode)) !== null && nodes.length < 6) {
+    const sel = match[1];
+    if (seen.has(sel)) continue;
+    seen.add(sel);
+    if (sel.startsWith('#')) {
+      nodes.push(`<div id="${sel.slice(1)}"></div>`);
+    } else {
+      nodes.push(`<div class="${sel.slice(1)}"></div>`);
+    }
+  }
+  if (nodes.length === 0) {
+    return '<div class="kuro-css-stage"><div class="kuro-css-box"></div></div>';
+  }
+  return nodes.join('\n  ');
+}
+
+function buildGlslSandboxDocument(glslSource, width, height, bridgeScript) {
+  const isShadertoy = /\bmainImage\s*\(/.test(glslSource);
+  const safeGlsl = JSON.stringify(glslSource);
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+  ${bridgeScript}
+</head>
+<body>
+  <canvas id="shaderCanvas" width="${width}" height="${height}"></canvas>
+  <script>
+  (function() {
+    var canvas = document.getElementById('shaderCanvas');
+    canvas.width = window.innerWidth || ${width};
+    canvas.height = window.innerHeight || ${height};
+    window.addEventListener('resize', function() {
+      canvas.width = window.innerWidth || ${width};
+      canvas.height = window.innerHeight || ${height};
+    });
+
+    var isShadertoy = ${isShadertoy ? 'true' : 'false'};
+    var gl = isShadertoy
+      ? (canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: true }) || canvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: true }))
+      : (canvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: true }) || canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: true }));
+
+    if (!gl) {
+      window.parent.postMessage({ type: 'ctv-error', error: 'WebGL tidak didukung browser untuk menjalankan Shader.' }, '*');
+      return;
+    }
+
+    var isWebGL2 = (typeof WebGL2RenderingContext !== 'undefined') && (gl instanceof WebGL2RenderingContext);
+    var userSrc = ${safeGlsl};
+
+    var vertSrc = isWebGL2
+      ? '#version 300 es\\nin vec2 a_pos;\\nvoid main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
+      : 'attribute vec2 a_pos;\\nvoid main() { gl_Position = vec4(a_pos, 0.0, 1.0); }';
+
+    var fragSrc = '';
+    if (isShadertoy) {
+      if (isWebGL2) {
+        fragSrc = '#version 300 es\\nprecision highp float;\\n' +
+          'uniform vec3 iResolution;\\nuniform float iTime;\\nuniform int iFrame;\\nuniform vec4 iMouse;\\n' +
+          'uniform vec2 u_resolution;\\nuniform float u_time;\\n' +
+          'out vec4 _outColor;\\n' +
+          userSrc + '\\n' +
+          'void main() { vec4 c = vec4(0.0, 0.0, 0.0, 1.0); mainImage(c, gl_FragCoord.xy); _outColor = vec4(c.rgb, 1.0); }';
+      } else {
+        fragSrc = 'precision highp float;\\n' +
+          'uniform vec3 iResolution;\\nuniform float iTime;\\nuniform int iFrame;\\nuniform vec4 iMouse;\\n' +
+          'uniform vec2 u_resolution;\\nuniform float u_time;\\n' +
+          userSrc + '\\n' +
+          'void main() { vec4 c = vec4(0.0, 0.0, 0.0, 1.0); mainImage(c, gl_FragCoord.xy); gl_FragColor = vec4(c.rgb, 1.0); }';
+      }
+    } else {
+      var hasPrecision = /precision\\s+(lowp|mediump|highp)\\s+float/.test(userSrc);
+      var header = hasPrecision ? '' : 'precision highp float;\\n';
+      var extraUniforms = '';
+      if (!/uniform\\s+float\\s+u_time\\b/.test(userSrc)) extraUniforms += 'uniform float u_time;\\n';
+      if (!/uniform\\s+float\\s+uTime\\b/.test(userSrc)) extraUniforms += 'uniform float uTime;\\n';
+      if (!/uniform\\s+float\\s+time\\b/.test(userSrc)) extraUniforms += 'uniform float time;\\n';
+      if (!/uniform\\s+float\\s+iTime\\b/.test(userSrc)) extraUniforms += 'uniform float iTime;\\n';
+      if (!/uniform\\s+vec2\\s+u_resolution\\b/.test(userSrc)) extraUniforms += 'uniform vec2 u_resolution;\\n';
+      if (!/uniform\\s+vec2\\s+uResolution\\b/.test(userSrc)) extraUniforms += 'uniform vec2 uResolution;\\n';
+      if (!/uniform\\s+vec2\\s+resolution\\b/.test(userSrc)) extraUniforms += 'uniform vec2 resolution;\\n';
+      if (!/uniform\\s+vec3\\s+iResolution\\b/.test(userSrc)) extraUniforms += 'uniform vec3 iResolution;\\n';
+      fragSrc = header + extraUniforms + userSrc;
+    }
+
+    function compile(type, source) {
+      var s = gl.createShader(type);
+      gl.shaderSource(s, source);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        var info = gl.getShaderInfoLog(s) || 'Shader compile failed';
+        window.parent.postMessage({ type: 'ctv-error', error: 'GLSL Error: ' + info }, '*');
+        return null;
+      }
+      return s;
+    }
+
+    var vs = compile(gl.VERTEX_SHADER, vertSrc);
+    var fs = compile(gl.FRAGMENT_SHADER, fragSrc);
+    if (!vs || !fs) return;
+
+    var prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      window.parent.postMessage({ type: 'ctv-error', error: 'GLSL Link: ' + gl.getProgramInfoLog(prog) }, '*');
+      return;
+    }
+
+    var buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    var posLoc = gl.getAttribLocation(prog, 'a_pos');
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.useProgram(prog);
+
+    var frameCount = 0;
+    function render(nowMs) {
+      var t = (nowMs || performance.now()) * 0.001;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      var set1f = function(name, val) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform1f(l, val); };
+      var set2f = function(name, a, b) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform2f(l, a, b); };
+      var set3f = function(name, a, b, c) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform3f(l, a, b, c); };
+      var set1i = function(name, a) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform1i(l, a); };
+
+      set1f('u_time', t); set1f('uTime', t); set1f('time', t); set1f('iTime', t);
+      set2f('u_resolution', canvas.width, canvas.height);
+      set2f('uResolution', canvas.width, canvas.height);
+      set2f('resolution', canvas.width, canvas.height);
+      set3f('iResolution', canvas.width, canvas.height, 1.0);
+      set1i('iFrame', frameCount++);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      requestAnimationFrame(render);
+    }
+    requestAnimationFrame(render);
+  })();
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Compiler Universal Otomatis untuk Live Preview & Render Deterministik
+ * Mendukung Full HTML, Pure SVG, HTML Fragment, GLSL Shader, Pure CSS, Pure JS Standalone, & Frame Draw Snippet.
+ */
+export function compileUniversalCode(rawInput = '', mode = 'live', options = {}) {
+  const { width = 1280, height = 720 } = options;
   const bridgeScript = mode === 'render'
     ? buildRenderBridgeScript(width, height)
     : buildLiveBridgeScript();
 
-  // Bersihkan typo umum CSS seperti style yang diawali tanda minus
-  let cleanCode = (rawCode || '').trim();
-  cleanCode = cleanCode.replace(/<style[^>]*>\s*-\s*\{/gi, '<style>\n* {');
+  const cleanCode = sanitizeUniversalSource(rawInput);
+  const { category } = detectCodeLanguage(cleanCode);
 
-  const isHtml =
-    editorMode === 'hybrid' ||
-    cleanCode.startsWith('<!DOCTYPE') ||
-    cleanCode.startsWith('<html') ||
-    cleanCode.includes('<style>') ||
-    cleanCode.includes('<body>') ||
-    cleanCode.includes('<canvas');
+  if (category === 'empty') {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">${bridgeScript}<style>html,body{margin:0;width:100%;height:100%;background:#09090b;color:#71717a;display:flex;align-items:center;justify-content:center;font-family:sans-serif;font-size:14px;}</style></head><body>Tempel kode animasi di editor untuk memulai preview...</body></html>`;
+  }
 
-  if (!isHtml) {
-    // Mode Pure JS Canvas: generate HTML dengan kanvas penuh
+  // A. Full HTML Document
+  if (category === 'full-html') {
+    if (cleanCode.includes('<head>')) {
+      return cleanCode.replace('<head>', `<head>${bridgeScript}`);
+    } else if (/<head\b[^>]*>/i.test(cleanCode)) {
+      return cleanCode.replace(/<head\b([^>]*)>/i, `<head$1>${bridgeScript}`);
+    } else if (/<html\b[^>]*>/i.test(cleanCode)) {
+      return cleanCode.replace(/<html\b([^>]*)>/i, `<html$1><head>${bridgeScript}</head>`);
+    }
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">${bridgeScript}</head><body>${cleanCode}</body></html>`;
+  }
+
+  // B. Pure SVG Vector
+  if (category === 'pure-svg') {
     return `<!DOCTYPE html>
-<html>
+<html lang="id">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #09090b; display: flex; align-items: center; justify-content: center; }
+    svg { width: 100%; height: 100%; max-width: 100vw; max-height: 100vh; }
+  </style>
+  ${bridgeScript}
+</head>
+<body>
+  ${cleanCode}
+</body>
+</html>`;
+  }
+
+  // C. HTML Fragment (HTML / Style / Script campuran tanpa wrapper dokumen)
+  if (category === 'html-fragment') {
+    return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #09090b; color: #f8fafc; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+  ${bridgeScript}
+</head>
+<body>
+  ${cleanCode}
+</body>
+</html>`;
+  }
+
+  // D. GLSL Fragment Shader
+  if (category === 'glsl-shader') {
+    return buildGlslSandboxDocument(cleanCode, width, height, bridgeScript);
+  }
+
+  // E. Pure CSS Keyframe / Styling Motion
+  if (category === 'pure-css') {
+    const stageMarkup = buildCssPreviewMarkup(cleanCode);
+    return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: #09090b; color: #f8fafc;
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    }
+    ${cleanCode}
+  </style>
+  ${bridgeScript}
+</head>
+<body>
+  ${stageMarkup}
+</body>
+</html>`;
+  }
+
+  // F1. Pure JS Standalone (Three.js / Canvas DOM / rAF mandiri)
+  if (category === 'pure-js-standalone') {
+    const { isModule, importMapTag } = buildImportMapIfNeeded(cleanCode);
+    const safeScriptTag = isModule ? '<script type="module">' : '<script>';
+    // Escape penutup script agar kode user aman disuntikkan ke HTML
+    const escapedJs = cleanCode.replace(/<\/script>/gi, '<\\/script>');
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+  ${importMapTag}
+  ${bridgeScript}
+</head>
+<body>
+  <canvas id="canvas" width="${width}" height="${height}"></canvas>
+  <script>
+    (function() {
+      var defaultCanvas = document.getElementById('canvas');
+      if (defaultCanvas) {
+        defaultCanvas.width = window.innerWidth || ${width};
+        defaultCanvas.height = window.innerHeight || ${height};
+      }
+      var _origGetById = document.getElementById.bind(document);
+      document.getElementById = function(id) {
+        var el = _origGetById(id);
+        if (!el && defaultCanvas) return defaultCanvas;
+        return el;
+      };
+    })();
+  </script>
+  ${safeScriptTag}
+    ${escapedJs}
+  </script>
+</body>
+</html>`;
+  }
+
+  // F2. Pure JS Canvas Draw Snippet (menggunakan ctx, canvas, width, height, time, t, dt, frame)
+  const escapedDraw = cleanCode.replace(/<\/script>/gi, '<\\/script>');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -524,7 +1037,9 @@ export function buildSandboxHtml(rawCode = '', mode = 'live', options = {}) {
 
       function userDraw(ctx, canvas, width, height, time, t, dt, frame) {
         var c = canvas;
-        ${cleanCode}
+        var W = width;
+        var H = height;
+        ${escapedDraw}
       }
       window.__userDraw = userDraw;
 
@@ -534,7 +1049,11 @@ export function buildSandboxHtml(rawCode = '', mode = 'live', options = {}) {
         var dt = Math.max(0.001, (now - lastTime) * 0.001);
         lastTime = now;
         var frame = Math.round(t * 60);
-        userDraw(ctx, canvas, canvas.width, canvas.height, t, t, dt, frame);
+        try {
+          userDraw(ctx, canvas, canvas.width, canvas.height, t, t, dt, frame);
+        } catch (err) {
+          window.parent.postMessage({ type: 'ctv-error', error: 'JS Runtime: ' + (err && err.message ? err.message : String(err)) }, '*');
+        }
         requestAnimationFrame(loop);
       }
       requestAnimationFrame(loop);
@@ -542,16 +1061,13 @@ export function buildSandboxHtml(rawCode = '', mode = 'live', options = {}) {
   </script>
 </body>
 </html>`;
-  }
+}
 
-  // Mode Hybrid / HTML Lengkap
-  if (cleanCode.includes('<head>')) {
-    return cleanCode.replace('<head>', `<head>${bridgeScript}`);
-  } else if (cleanCode.includes('<html>')) {
-    return cleanCode.replace('<html>', `<html><head>${bridgeScript}</head>`);
-  } else {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${bridgeScript}</head><body>${cleanCode}</body></html>`;
-  }
+/**
+ * Membangun HTML Sandbox (alias universal untuk Live Preview maupun Deterministic Render)
+ */
+export function buildSandboxHtml(rawCode = '', mode = 'live', options = {}) {
+  return compileUniversalCode(rawCode, mode, options);
 }
 
 /**
@@ -1319,7 +1835,7 @@ export async function exportVideo({
   document.body.appendChild(renderIframe);
 
   try {
-    // Suntikkan kode & tunggu aset siap (ctv-render-ready)
+    // Suntikkan kode & tunggu aset/CDN/font/image siap hingga maksimal 6 detik
     const readyPromise = new Promise((resolve) => {
       const handler = (e) => {
         if (e.data && e.data.type === 'ctv-render-ready') {
@@ -1328,10 +1844,10 @@ export async function exportVideo({
         }
       };
       window.addEventListener('message', handler);
-      setTimeout(resolve, 2500); // Batas tunggu maksimal 2.5 detik
+      setTimeout(resolve, 6000);
     });
 
-    renderIframe.srcdoc = buildSandboxHtml(code, 'render', { width, height, editorMode });
+    renderIframe.srcdoc = compileUniversalCode(code, 'render', { width, height });
     await readyPromise;
 
     // ── 2. JALUR UTAMA: DETERMINISTIC WEBCODECS (MP4-MUXER / WEBM-MUXER) ──
@@ -1403,10 +1919,10 @@ export async function exportVideo({
         const simTime = (i / fps) * spd;
         const timeMs = simTime * 1000;
 
-        // Step render iframe dengan 3-detik watchdog
+        // Step render iframe: frame awal diberi timeout 5s untuk inisialisasi berat
         let frameBitmap = null;
         try {
-          frameBitmap = await stepRenderIframe(renderIframe, i, timeMs, dtSec, width, height, 3000);
+          frameBitmap = await stepRenderIframe(renderIframe, i, timeMs, dtSec, width, height, i === 0 ? 5000 : 3000);
         } catch {
           // Frame transien
         }

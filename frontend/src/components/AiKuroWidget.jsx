@@ -174,27 +174,32 @@ const KURO_TOOLS_CATALOG = [
 ];
 
 const POSITION_STORAGE_KEY = 'kuro_bot_floating_pos';
+const MOBILE_POSITION_STORAGE_KEY = 'kuro_bot_floating_pos_mobile';
 const DEVICE_CHAT_STORAGE_KEY = 'kuro_device_ai_chat_history';
+
+function getPosStorageKey(screenW = typeof window !== 'undefined' ? window.innerWidth : 1024) {
+  return screenW < 768 ? MOBILE_POSITION_STORAGE_KEY : POSITION_STORAGE_KEY;
+}
 
 // Hitung koordinat default yang aman menempel ke tepi kiri atau kanan
 function computeDefaultPosition(isPopup, dockSide = 'right') {
   if (typeof window === 'undefined') return { x: 12, y: 100, dockSide: 'right' };
   const screenW = window.innerWidth;
   const screenH = window.innerHeight;
-  const isMobile = screenW < 640;
+  const isMobile = screenW < 768;
 
   if (isPopup) {
     const w = isMobile ? Math.floor(screenW * 0.92) : 385;
     const h = Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560);
     const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
-    const y = isMobile ? Math.max(16, screenH - h - 100) : Math.max(16, screenH - h - 24);
+    const y = isMobile ? Math.max(16, screenH - h - 96) : Math.max(16, screenH - h - 24);
     return { x, y, dockSide };
   }
 
   const w = isMobile ? 48 : 175;
   const h = isMobile ? 48 : 56;
   const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
-  const y = isMobile ? Math.max(16, screenH - h - 100) : Math.max(16, screenH - h - 24);
+  const y = isMobile ? Math.max(16, screenH - h - 96) : Math.max(16, screenH - h - 24);
   return { x, y, dockSide };
 }
 
@@ -202,15 +207,19 @@ function computeDefaultPosition(isPopup, dockSide = 'right') {
 function getInitialPosition() {
   if (typeof window === 'undefined') return { x: 12, y: 100, dockSide: 'right' };
   try {
-    const raw = localStorage.getItem(POSITION_STORAGE_KEY);
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+    const isMobile = screenW < 768;
+    const raw = localStorage.getItem(getPosStorageKey(screenW));
     if (raw) {
       const parsed = JSON.parse(raw);
       if (typeof parsed.y === 'number' && !isNaN(parsed.y)) {
         const dockSide = parsed.dockSide === 'left' ? 'left' : 'right';
-        const isMobile = window.innerWidth < 640;
         const w = isMobile ? 48 : 175;
-        const x = dockSide === 'left' ? 12 : Math.max(12, window.innerWidth - w - 12);
-        const y = Math.max(16, Math.min(parsed.y, window.innerHeight - 80));
+        const h = isMobile ? 48 : 56;
+        const bottomClearance = isMobile ? 96 : 16;
+        const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
+        const y = Math.max(16, Math.min(parsed.y, screenH - h - bottomClearance));
         return { x, y, dockSide };
       }
     }
@@ -274,7 +283,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     if (typeof window === 'undefined') return targetPos;
     const screenW = window.innerWidth;
     const screenH = window.innerHeight;
-    const isMobile = screenW < 640;
+    const isMobile = screenW < 768;
 
     const el = widgetRef.current;
     const rect = el ? el.getBoundingClientRect() : null;
@@ -282,7 +291,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const widgetWidth = rect?.width || (openState ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 175));
     const widgetHeight = rect?.height || (openState ? (isMobile ? 520 : 560) : (isMobile ? 48 : 56));
 
-    const bottomClearance = isMobile ? 88 : 16;
+    const bottomClearance = isMobile ? 96 : 16;
     const topClearance = 16;
 
     // Tentukan dockSide berdasarkan targetPos atau center X
@@ -298,13 +307,20 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   }, []);
 
   // Strict Viewport Clamping otomatis saat resize layar
+  const lastBreakpointRef = useRef(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   useEffect(() => {
     const handleViewportCheck = () => {
+      const nowMobile = window.innerWidth < 768;
+      if (nowMobile !== lastBreakpointRef.current) {
+        lastBreakpointRef.current = nowMobile;
+        setPos(clampPosition(getInitialPosition(), isOpen));
+        return;
+      }
       setPos(prev => {
         const clamped = clampPosition(prev, isOpen);
         if (clamped.x !== prev.x || clamped.y !== prev.y || clamped.dockSide !== prev.dockSide) {
           try {
-            localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(clamped));
+            localStorage.setItem(getPosStorageKey(window.innerWidth), JSON.stringify(clamped));
           } catch (_) {}
           return clamped;
         }
@@ -573,11 +589,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
   const cycleQuadrantPosition = () => {
     const screenW = window.innerWidth;
     const screenH = window.innerHeight;
-    const isMobile = screenW < 640;
+    const isMobile = screenW < 768;
 
     const w = isOpen ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 175);
     const h = isOpen ? Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560) : (isMobile ? 48 : 56);
-    const bottomClearance = isMobile ? 88 : 16;
+    const bottomClearance = isMobile ? 96 : 16;
 
     const corners = [
       { x: screenW - w - 12, y: screenH - h - bottomClearance, dockSide: 'right' }, // Kanan-Bawah
@@ -600,7 +616,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const clamped = clampPosition(nextCorner, isOpen);
     setPos(clamped);
     try {
-      localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(clamped));
+      localStorage.setItem(getPosStorageKey(screenW), JSON.stringify(clamped));
     } catch (_) {}
   };
 
@@ -860,12 +876,12 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
     const screenW = window.innerWidth;
     const screenH = window.innerHeight;
-    const isMobile = screenW < 640;
+    const isMobile = screenW < 768;
     const el = widgetRef.current;
     const rect = el ? el.getBoundingClientRect() : null;
     const widgetW = rect?.width || (isMobile ? 48 : 175);
     const widgetH = rect?.height || (isMobile ? 48 : 56);
-    const bottomClearance = isMobile ? 88 : 16;
+    const bottomClearance = isMobile ? 96 : 16;
     const topClearance = 16;
 
     const centerX = rawNewX + widgetW / 2;
@@ -876,7 +892,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const nextPos = { x: Math.round(snappedX), y: Math.round(clampedY), dockSide: newDockSide };
     setPos(nextPos);
     try {
-      localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(nextPos));
+      localStorage.setItem(getPosStorageKey(screenW), JSON.stringify(nextPos));
     } catch (_) {}
   };
 
@@ -966,7 +982,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       const nextPos = { x: Math.round(clampedX), y: Math.round(clampedY), dockSide };
       setPos(nextPos);
       try {
-        localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(nextPos));
+        localStorage.setItem(getPosStorageKey(screenW), JSON.stringify(nextPos));
       } catch (_) {}
     }
   };

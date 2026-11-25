@@ -1,8 +1,10 @@
 // Helper IndexedDB lokal untuk menyimpan media & pesan WA Vault (View Once, Ghost Reader, Anti-Delete, Status)
 
 const DB_NAME = 'AllToolsKuro_WaVault';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_NAME = 'view_once_media';
+const DEVICE_AUTH_STORE = 'wa_device_auth';
+const CONTACTS_STORE = 'wa_contacts';
 
 function openWaDB() {
   return new Promise((resolve, reject) => {
@@ -42,6 +44,13 @@ function openWaDB() {
       }
       if (!store.indexNames.contains('isEdited')) {
         store.createIndex('isEdited', 'isEdited', { unique: false });
+      }
+
+      if (!db.objectStoreNames.contains(DEVICE_AUTH_STORE)) {
+        db.createObjectStore(DEVICE_AUTH_STORE, { keyPath: 'deviceId' });
+      }
+      if (!db.objectStoreNames.contains(CONTACTS_STORE)) {
+        db.createObjectStore(CONTACTS_STORE, { keyPath: 'key' });
       }
     };
 
@@ -85,6 +94,7 @@ export async function saveMediaItem(item) {
           id: itemId,
           category: item.category === 'status' ? 'status' : 'chat',
           senderNumber: String(item.senderNumber || existing?.senderNumber || ''),
+          senderLid: String(item.senderLid || existing?.senderLid || ''),
           senderName: String(item.senderName || existing?.senderName || ''),
           mediaType: String(item.mediaType || existing?.mediaType || 'text'),
           mimeType: String(item.mimeType || existing?.mimeType || ''),
@@ -316,4 +326,167 @@ export async function pruneExpiredStatuses(maxAgeMs = 24 * 60 * 60 * 1000) {
       reject(err);
     }
   });
+}
+
+// =========================================================================
+// STORE KHUSUS: wa_device_auth (Identitas & Snapshot Auth Terikat Perangkat)
+// =========================================================================
+
+export async function getDeviceAuthRecord(deviceId) {
+  if (!deviceId) return null;
+  try {
+    const db = await openWaDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(DEVICE_AUTH_STORE, 'readonly');
+      const req = tx.objectStore(DEVICE_AUTH_STORE).get(String(deviceId));
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function getAnyDeviceAuthRecord() {
+  try {
+    const db = await openWaDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(DEVICE_AUTH_STORE, 'readonly');
+      const req = tx.objectStore(DEVICE_AUTH_STORE).getAll();
+      req.onsuccess = () => {
+        const list = req.result || [];
+        resolve(list[0] || null);
+      };
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function saveDeviceAuthRecord({ deviceId, deviceToken, snapshot = undefined, updatedAt = Date.now() }) {
+  if (!deviceId) return null;
+  try {
+    const db = await openWaDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(DEVICE_AUTH_STORE, 'readwrite');
+      const store = tx.objectStore(DEVICE_AUTH_STORE);
+      const getReq = store.get(String(deviceId));
+      getReq.onsuccess = () => {
+        const existing = getReq.result || {};
+        const record = {
+          deviceId: String(deviceId),
+          deviceToken: String(deviceToken || existing.deviceToken || ''),
+          snapshot: snapshot !== undefined ? snapshot : (existing.snapshot || null),
+          updatedAt: Number(updatedAt || Date.now())
+        };
+        const putReq = store.put(record);
+        putReq.onsuccess = () => resolve(record);
+        putReq.onerror = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  } catch (err) {
+    console.warn('Gagal menyimpan auth record ke IndexedDB:', err);
+    return null;
+  }
+}
+
+export async function saveDeviceAuthSnapshot(deviceId, snapshot, updatedAt = Date.now()) {
+  if (!deviceId || !snapshot) return null;
+  return saveDeviceAuthRecord({ deviceId, snapshot, updatedAt });
+}
+
+export async function clearAuthSnapshotOnly(deviceId) {
+  if (!deviceId) return true;
+  try {
+    const db = await openWaDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(DEVICE_AUTH_STORE, 'readwrite');
+      const store = tx.objectStore(DEVICE_AUTH_STORE);
+      const getReq = store.get(String(deviceId));
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) {
+          resolve(true);
+          return;
+        }
+        store.put({
+          ...existing,
+          snapshot: null,
+          updatedAt: Date.now()
+        });
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      };
+      getReq.onerror = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
+}
+
+// =========================================================================
+// STORE KHUSUS: wa_contacts (Peta Nama Kontak Asli Disimpan User di WA)
+// =========================================================================
+
+export async function saveContactsMap(contactsObj) {
+  if (!contactsObj || typeof contactsObj !== 'object') return 0;
+  try {
+    const entries = Object.entries(contactsObj).filter(([k, v]) => k && v);
+    if (entries.length === 0) return 0;
+    const db = await openWaDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(CONTACTS_STORE, 'readwrite');
+      const store = tx.objectStore(CONTACTS_STORE);
+      for (const [key, val] of entries) {
+        if (typeof val === 'string') {
+          store.put({ key: String(key), savedName: val });
+        } else if (val && typeof val === 'object') {
+          store.put({ key: String(key), ...val });
+        }
+      }
+      tx.oncomplete = () => resolve(entries.length);
+      tx.onerror = () => resolve(0);
+    });
+  } catch {
+    return 0;
+  }
+}
+
+export async function getContactsMap() {
+  try {
+    const db = await openWaDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(CONTACTS_STORE, 'readonly');
+      const req = tx.objectStore(CONTACTS_STORE).getAll();
+      req.onsuccess = () => {
+        const list = req.result || [];
+        const map = {};
+        for (const entry of list) {
+          if (entry?.key && entry?.savedName) {
+            map[entry.key] = entry.savedName;
+          }
+        }
+        resolve(map);
+      };
+      req.onerror = () => resolve({});
+    });
+  } catch {
+    return {};
+  }
+}
+
+export async function clearContactsMap() {
+  try {
+    const db = await openWaDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(CONTACTS_STORE, 'readwrite');
+      tx.objectStore(CONTACTS_STORE).clear();
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch {
+    return false;
+  }
 }
