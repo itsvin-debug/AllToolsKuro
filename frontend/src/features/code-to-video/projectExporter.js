@@ -208,6 +208,7 @@ export async function renderTransparentTextLayerPngs(sceneGraph, width = 1280, h
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
+    if (!ctx) continue;
     ctx.clearRect(0, 0, width, height);
 
     const fontPx = Math.max(20, Math.round((layer.fontSize || 34) * (Math.min(width, height) / 720)));
