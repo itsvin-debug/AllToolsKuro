@@ -194,15 +194,19 @@ export function buildProceduralSceneDocument(sceneGraph, cleanBgOnly = false) {
     return chosenLines.length * step;
   }
 
-  // Word-by-word animated headline mask reveal
+  // Word-by-word animated headline reveal synced with vertical settle
   function drawKineticHeadline(text, x, y, maxW, maxH, baseFontSize, localT, pal, align) {
     var words = String(text || '').trim().split(/\\s+/);
     if (!words.length || !words[0]) return 0;
-    var revealedCount = Math.max(1, Math.ceil((clamp01(localT / 0.75)) * words.length));
+    var revealProg = clamp01(localT / 0.72);
+    var revealedCount = Math.max(1, Math.ceil(revealProg * words.length));
     var visibleText = words.slice(0, revealedCount).join(' ');
+    var settle = easeVal(clamp01(localT / 0.52), 'smooth');
+    var liftY = (1 - settle) * 14;
     ctx.save();
+    ctx.globalAlpha = ctx.globalAlpha * clamp01(localT / 0.22);
     ctx.fillStyle = pal.text;
-    var h = drawSmartWrappedText(visibleText, x, y, maxW, maxH, baseFontSize, '900', align);
+    var h = drawSmartWrappedText(visibleText, x, y + liftY, maxW, maxH, baseFontSize, '900', align);
     ctx.restore();
     return h;
   }
@@ -721,15 +725,21 @@ export function buildProceduralSceneDocument(sceneGraph, cleanBgOnly = false) {
 
       for (var mi = 0; mi < mets.length; mi++) {
         var met = mets[mi];
+        var mDelay = 0.08 + mi * 0.14;
+        var mAnim = easeVal((localT - mDelay) / 0.45);
+        if (mAnim <= 0.01) continue;
+
         var mx = padX + (mi % mCols) * (mW + mGap);
-        var myRow = mY + Math.floor(mi / mCols) * (mH + 14);
-        drawStyledCard(mx, myRow, mW, mH, 14, cardStyle, pal, sweepProg, pal.accent);
+        var myRow = mY + Math.floor(mi / mCols) * (mH + 14) + (1 - clamp01(mAnim)) * 20;
+        ctx.save();
+        ctx.globalAlpha = ctx.globalAlpha * clamp01(mAnim);
+        drawStyledCard(mx, myRow, mW, mH, 14, cardStyle, pal, sweepProg - mi * 0.14, pal.accent);
 
         var numMatch = String(met.value).match(/^(\d+(?:\.\d+)?)(.*)$/);
         var displayVal = met.value;
         if (numMatch && CFG.opts.showMetricCounters) {
           var targetNum = parseFloat(numMatch[1]);
-          var progN = clamp01(localT / 0.85);
+          var progN = easeVal(clamp01((localT - mDelay) / 0.85), 'smooth');
           var curNum = Math.round(targetNum * progN);
           displayVal = curNum + (numMatch[2] || '');
         }
@@ -737,6 +747,7 @@ export function buildProceduralSceneDocument(sceneGraph, cleanBgOnly = false) {
         drawSmartWrappedText(displayVal, mx + mW * 0.5, myRow + mH * 0.2, mW - 24, mH * 0.45, Math.min(48, mH * 0.34), '900', 'center');
         ctx.fillStyle = pal.muted;
         drawSmartWrappedText(met.label, mx + mW * 0.5, myRow + mH * 0.64, mW - 24, mH * 0.28, 18, '700', 'center');
+        ctx.restore();
       }
       return;
     }
@@ -804,15 +815,22 @@ export function buildProceduralSceneDocument(sceneGraph, cleanBgOnly = false) {
 
     // StoryNarrativeScene: Tipografi kinetik lapang multi-baris untuk narasi & quotes
     var sY = H * 0.18;
-    sY += renderBrandBadge(scene.badge, anchorX, sY, safeW, align, pal, 1);
+    var badgeSc = Math.max(0.05, easeVal(localT / 0.36));
+    sY += renderBrandBadge(scene.badge, anchorX, sY, safeW, align, pal, badgeSc);
+    var barProg = easeVal((localT - 0.1) / 0.42, 'smooth');
     ctx.fillStyle = pal.accent;
-    ctx.fillRect(align === 'center' ? W * 0.5 - 36 : padX, sY + 4, 72, 5);
+    ctx.fillRect(align === 'center' ? W * 0.5 - 36 * barProg : padX, sY + 4, 72 * barProg, 5);
     sY += 22;
 
     var mainHUsed = drawKineticHeadline(scene.title, anchorX, sY, safeW, H * 0.38, isPortrait ? W * 0.062 : H * 0.068, localT, pal, align);
     if (scene.subtitle) {
+      var subAlphaSt = clamp01((localT - 0.32) / 0.42);
+      var subLift = (1 - easeVal(subAlphaSt, 'smooth')) * 12;
+      ctx.save();
+      ctx.globalAlpha = ctx.globalAlpha * subAlphaSt;
       ctx.fillStyle = pal.muted;
-      drawSmartWrappedText(scene.subtitle, anchorX, sY + mainHUsed + 16, safeW, safeBottom - (sY + mainHUsed + 24), isPortrait ? W * 0.036 : H * 0.036, '600', align);
+      drawSmartWrappedText(scene.subtitle, anchorX, sY + mainHUsed + 16 + subLift, safeW, safeBottom - (sY + mainHUsed + 24), isPortrait ? W * 0.036 : H * 0.036, '600', align);
+      ctx.restore();
     }
   }
 

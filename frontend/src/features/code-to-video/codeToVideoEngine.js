@@ -7,6 +7,10 @@
 import * as THREE from 'three';
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
+import {
+  detectCodeLanguage as _detectCodeLanguage,
+  compileUniversalCode as _compileUniversalCode
+} from './universalCodeCompiler';
 
 /**
  * Menghitung dimensi video (w & h) genap kelipatan 2 untuk kompatibilitas encoder
@@ -402,19 +406,22 @@ export function findPrimaryCanvas(doc) {
   return best;
 }
 
-export function buildRenderBridgeScript(width, height) {
+function getSandboxSharedHelpersCode() {
   return `
-  <script>
-  (function() {
-    var _virtualMs = 0;
-    var _baseEpoch = Date.now();
-    var _rafMap = new Map();
-    var _rafIdCounter = 1;
-    var _timerMap = new Map();
-    var _timerIdCounter = 1;
-    var _domCaptureCanvas = null;
+    // Polifill aman localStorage/sessionStorage untuk iframe sandbox terisolasi
+    try { void window.localStorage; } catch(e) {
+      var _memStore = {};
+      var _mockStore = {
+        getItem: function(k) { return Object.prototype.hasOwnProperty.call(_memStore, k) ? _memStore[k] : null; },
+        setItem: function(k, v) { _memStore[k] = String(v); },
+        removeItem: function(k) { delete _memStore[k]; },
+        clear: function() { _memStore = {}; }
+      };
+      try { Object.defineProperty(window, 'localStorage', { value: _mockStore, configurable: true }); } catch(_) {}
+      try { Object.defineProperty(window, 'sessionStorage', { value: _mockStore, configurable: true }); } catch(_) {}
+    }
 
-    // 1. Force WebGL preserveDrawingBuffer & antialias pada getContext
+    // Pastikan konteks WebGL selalu mengaktifkan preserveDrawingBuffer & antialias
     var _origGetContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type, attributes) {
       if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
@@ -426,58 +433,6 @@ export function buildRenderBridgeScript(width, height) {
       return _origGetContext.call(this, type, attributes);
     };
 
-    // 2. Override Performance & Date Clock secara monoton
-    performance.now = function() {
-      return _virtualMs;
-    };
-    Date.now = function() {
-      return Math.floor(_baseEpoch + _virtualMs);
-    };
-
-    // 3. Override requestAnimationFrame & cancelAnimationFrame
-    window.requestAnimationFrame = function(cb) {
-      var id = _rafIdCounter++;
-      _rafMap.set(id, cb);
-      return id;
-    };
-    window.cancelAnimationFrame = function(id) {
-      _rafMap.delete(id);
-    };
-
-    // 4. Override setTimeout & setInterval berbasis Virtual Clock
-    window.setTimeout = function(cb, delay) {
-      var args = Array.prototype.slice.call(arguments, 2);
-      var id = _timerIdCounter++;
-      _timerMap.set(id, {
-        cb: cb,
-        triggerAt: _virtualMs + Math.max(0, delay || 0),
-        isInterval: false,
-        delay: 0,
-        args: args
-      });
-      return id;
-    };
-    window.setInterval = function(cb, delay) {
-      var args = Array.prototype.slice.call(arguments, 2);
-      var id = _timerIdCounter++;
-      var interval = Math.max(1, delay || 0);
-      _timerMap.set(id, {
-        cb: cb,
-        triggerAt: _virtualMs + interval,
-        isInterval: true,
-        delay: interval,
-        args: args
-      });
-      return id;
-    };
-    window.clearTimeout = function(id) {
-      _timerMap.delete(id);
-    };
-    window.clearInterval = function(id) {
-      _timerMap.delete(id);
-    };
-
-    // Smart primary canvas selector
     function findCanvas() {
       var canvases = document.querySelectorAll('canvas');
       if (!canvases || canvases.length === 0) return null;
@@ -496,7 +451,6 @@ export function buildRenderBridgeScript(width, height) {
       return best;
     }
 
-    // Inline computed styles on cloned DOM tree so paused CSS/HTML/SVG frames serialize accurately
     var INLINE_PROPS = [
       'display', 'position', 'top', 'right', 'bottom', 'left', 'inset',
       'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height',
@@ -531,12 +485,11 @@ export function buildRenderBridgeScript(width, height) {
       }
     }
 
+    var _domCaptureCanvas = null;
     async function captureDomToBitmap(targetW, targetH) {
       try {
         if (!document.body) return null;
-        if (!_domCaptureCanvas) {
-          _domCaptureCanvas = document.createElement('canvas');
-        }
+        if (!_domCaptureCanvas) _domCaptureCanvas = document.createElement('canvas');
         if (_domCaptureCanvas.width !== targetW || _domCaptureCanvas.height !== targetH) {
           _domCaptureCanvas.width = targetW;
           _domCaptureCanvas.height = targetH;
@@ -558,8 +511,16 @@ export function buildRenderBridgeScript(width, height) {
         var bodyCssText = cloneBody.getAttribute('style') || '';
         cloneBody.setAttribute('style', bodyCssText + ';margin:0;width:' + targetW + 'px;height:' + targetH + 'px;overflow:hidden;');
 
+        var headStyles = '';
+        var styleEls = document.querySelectorAll('style');
+        for (var stIdx = 0; stIdx < styleEls.length; stIdx++) {
+          headStyles += styleEls[stIdx].textContent || '';
+        }
+        var styleDef = headStyles ? ('<style>' + headStyles.replace(/<\\/style>/gi, '') + '</style>') : '';
+
         var serialized = new XMLSerializer().serializeToString(cloneBody);
         var svgDoc = '<svg xmlns="http://www.w3.org/2000/svg" width="' + targetW + '" height="' + targetH + '">' +
+          '<defs>' + styleDef + '</defs>' +
           '<foreignObject x="0" y="0" width="100%" height="100%">' + serialized + '</foreignObject></svg>';
         var dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgDoc);
 
@@ -583,13 +544,79 @@ export function buildRenderBridgeScript(width, height) {
         return null;
       }
     }
+  `;
+}
 
-    // Tangkap error runtime & promise rejection di dalam render iframe
+export function buildRenderBridgeScript(width, height) {
+  return `
+  <script>
+  (function() {
+    var _virtualMs = 0;
+    var _baseEpoch = Date.now();
+    var _rafMap = new Map();
+    var _rafIdCounter = 1;
+    var _timerMap = new Map();
+    var _timerIdCounter = 1;
+
+    ${getSandboxSharedHelpersCode()}
+
+    // Override Performance & Date Clock secara monoton
+    performance.now = function() {
+      return _virtualMs;
+    };
+    Date.now = function() {
+      return Math.floor(_baseEpoch + _virtualMs);
+    };
+
+    // Override requestAnimationFrame & cancelAnimationFrame
+    window.requestAnimationFrame = function(cb) {
+      var id = _rafIdCounter++;
+      _rafMap.set(id, cb);
+      return id;
+    };
+    window.cancelAnimationFrame = function(id) {
+      _rafMap.delete(id);
+    };
+
+    // Override setTimeout & setInterval berbasis Virtual Clock
+    window.setTimeout = function(cb, delay) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      var id = _timerIdCounter++;
+      _timerMap.set(id, {
+        cb: cb,
+        triggerAt: _virtualMs + Math.max(0, delay || 0),
+        isInterval: false,
+        delay: 0,
+        args: args
+      });
+      return id;
+    };
+    window.setInterval = function(cb, delay) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      var id = _timerIdCounter++;
+      var interval = Math.max(1, delay || 0);
+      _timerMap.set(id, {
+        cb: cb,
+        triggerAt: _virtualMs + interval,
+        isInterval: true,
+        delay: interval,
+        args: args
+      });
+      return id;
+    };
+    window.clearTimeout = function(id) {
+      _timerMap.delete(id);
+    };
+    window.clearInterval = function(id) {
+      _timerMap.delete(id);
+    };
+
     window.addEventListener('error', function(e) {
       try {
+        var loc = e.lineno ? (' (baris ' + e.lineno + ')') : '';
         window.parent.postMessage({
           type: 'ctv-error',
-          error: 'Render Runtime: ' + (e.message || 'Unknown error')
+          error: 'Render Runtime' + loc + ': ' + (e.message || 'Unknown error')
         }, '*');
       } catch(err) {}
     });
@@ -651,7 +678,6 @@ export function buildRenderBridgeScript(width, height) {
       var timeSec = _virtualMs / 1000;
       var frame = data.frame || 0;
 
-      // 1. Sinkronisasi CSS Animations & Transitions
       if (document.getAnimations) {
         try {
           document.getAnimations().forEach(function(anim) {
@@ -663,7 +689,6 @@ export function buildRenderBridgeScript(width, height) {
         } catch(e) {}
       }
 
-      // 2. Eksekusi Timers yang jatuh tempo
       var timerEntries = Array.from(_timerMap.entries());
       for (var i = 0; i < timerEntries.length; i++) {
         var tid = timerEntries[i][0];
@@ -684,7 +709,6 @@ export function buildRenderBridgeScript(width, height) {
         }
       }
 
-      // 3. Salin dan kosongkan rafMap SEBELUM memanggil callbacks
       var currentBatch = Array.from(_rafMap.entries());
       _rafMap.clear();
       for (var j = 0; j < currentBatch.length; j++) {
@@ -693,7 +717,6 @@ export function buildRenderBridgeScript(width, height) {
         } catch(err) {}
       }
 
-      // 4. Jika ada window.__userDraw (mode pure JS canvas snippet)
       if (typeof window.__userDraw === 'function') {
         var targetC = findCanvas();
         if (targetC) {
@@ -704,7 +727,6 @@ export function buildRenderBridgeScript(width, height) {
         }
       }
 
-      // Tunggu 1 microtask dan pastikan WebGL finish
       var finalCanvas = findCanvas();
       if (finalCanvas) {
         try {
@@ -717,7 +739,6 @@ export function buildRenderBridgeScript(width, height) {
 
       await new Promise(function(r) { setTimeout(r, 0); });
 
-      // Tangkap bitmap frame: Canvas / WebGL utama atau DOM HTML/CSS/SVG fallback
       var bmp = null;
       if (finalCanvas && finalCanvas.width > 0 && finalCanvas.height > 0) {
         try {
@@ -742,7 +763,7 @@ export function buildRenderBridgeScript(width, height) {
 
 /**
  * Script Bridge Ringan untuk Live Preview Iframe (Direct GPU)
- * Menjaga frame rate 60–144 FPS dan menerima sinyal pause/speed/restart instan tanpa reload
+ * Override rAF dengan timestamp monoton positif & splice(0) sebelum callback agar animasi selalu mulus.
  */
 export function buildLiveBridgeScript() {
   return `
@@ -750,44 +771,85 @@ export function buildLiveBridgeScript() {
   (function() {
     var _speedMultiplier = 1.0;
     var _isPaused = false;
-    var _pauseStartTime = 0;
-    var _totalPausedMs = 0;
-    var _restartOffset = 0;
+    var _liveVirtualMs = 16.67;
 
     var _origPerfNow = performance.now.bind(performance);
     var _origDateNow = Date.now.bind(Date);
+    var _origRaf = window.requestAnimationFrame.bind(window);
+    var _lastPumpRealMs = _origPerfNow();
 
-    // 1. Force WebGL preserveDrawingBuffer
-    var _origGetContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function(type, attributes) {
-      if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
-        attributes = Object.assign({}, attributes, {
-          preserveDrawingBuffer: true,
-          antialias: true
-        });
-      }
-      return _origGetContext.call(this, type, attributes);
-    };
+    ${getSandboxSharedHelpersCode()}
 
-    // 2. Wrap clock untuk kecepatan gerak dan pause/resume
     performance.now = function() {
-      if (_isPaused) {
-        return (_pauseStartTime - _totalPausedMs - _restartOffset) * _speedMultiplier;
-      }
-      var now = _origPerfNow();
-      return (now - _totalPausedMs - _restartOffset) * _speedMultiplier;
+      return _liveVirtualMs;
     };
-
     Date.now = function() {
-      return Math.floor(_origDateNow() + (performance.now() - _origPerfNow()));
+      return Math.floor(_origDateNow() + (_liveVirtualMs - _origPerfNow()));
     };
 
-    // 3. Tangkap runtime errors & unhandled rejections
+    var _liveRafQueue = [];
+    var _liveRafCanceled = new Set();
+    var _liveRafId = 1;
+    var _livePumpScheduled = false;
+
+    function pumpLiveRaf() {
+      _livePumpScheduled = false;
+      var realNow = _origPerfNow();
+      var realDelta = Math.max(0, Math.min(100, realNow - _lastPumpRealMs));
+      _lastPumpRealMs = realNow;
+
+      if (!_isPaused) {
+        _liveVirtualMs = Math.max(0.016, _liveVirtualMs + realDelta * _speedMultiplier);
+      }
+
+      if (_liveRafQueue.length > 0) {
+        var batch = _liveRafQueue.splice(0, _liveRafQueue.length);
+        for (var i = 0; i < batch.length; i++) {
+          var entry = batch[i];
+          if (_liveRafCanceled.has(entry.id)) {
+            _liveRafCanceled.delete(entry.id);
+            continue;
+          }
+          try {
+            entry.cb(_liveVirtualMs);
+          } catch(err) {
+            try {
+              window.parent.postMessage({
+                type: 'ctv-error',
+                error: 'Live Runtime: ' + (err && err.message ? err.message : String(err))
+              }, '*');
+            } catch(_) {}
+          }
+        }
+      }
+
+      if (_liveRafQueue.length > 0 && !_livePumpScheduled) {
+        _livePumpScheduled = true;
+        _origRaf(pumpLiveRaf);
+      }
+    }
+
+    window.requestAnimationFrame = function(cb) {
+      var id = _liveRafId++;
+      if (typeof cb === 'function') {
+        _liveRafQueue.push({ id: id, cb: cb });
+        if (!_livePumpScheduled) {
+          _livePumpScheduled = true;
+          _origRaf(pumpLiveRaf);
+        }
+      }
+      return id;
+    };
+    window.cancelAnimationFrame = function(id) {
+      _liveRafCanceled.add(id);
+    };
+
     window.addEventListener('error', function(e) {
       try {
+        var loc = e.lineno ? (' (baris ' + e.lineno + ')') : '';
         window.parent.postMessage({
           type: 'ctv-error',
-          error: 'Live Runtime: ' + (e.message || 'Unknown error')
+          error: 'Live Runtime' + loc + ': ' + (e.message || 'Unknown error')
         }, '*');
       } catch(err) {}
     });
@@ -801,27 +863,41 @@ export function buildLiveBridgeScript() {
       } catch(err) {}
     });
 
-    // 4. Tangkap kontrol pesan live
-    window.addEventListener('message', function(e) {
+    window.addEventListener('message', async function(e) {
       var data = e.data;
       if (!data || !data.type) return;
 
       if (data.type === 'ctv-live-speed') {
         _speedMultiplier = Number(data.speedMultiplier) || 1.0;
+        if (document.getAnimations) {
+          try {
+            document.getAnimations().forEach(function(a) { a.playbackRate = _speedMultiplier; });
+          } catch(_) {}
+        }
       } else if (data.type === 'ctv-live-pause') {
-        if (!_isPaused) {
-          _isPaused = true;
-          _pauseStartTime = _origPerfNow();
+        _isPaused = true;
+        if (document.getAnimations) {
+          try {
+            document.getAnimations().forEach(function(a) { a.pause(); });
+          } catch(_) {}
         }
       } else if (data.type === 'ctv-live-resume') {
-        if (_isPaused) {
-          _isPaused = false;
-          _totalPausedMs += (_origPerfNow() - _pauseStartTime);
+        _isPaused = false;
+        _lastPumpRealMs = _origPerfNow();
+        if (document.getAnimations) {
+          try {
+            document.getAnimations().forEach(function(a) { a.play(); });
+          } catch(_) {}
         }
       } else if (data.type === 'ctv-live-restart') {
-        _restartOffset = _origPerfNow();
-        _totalPausedMs = 0;
+        _liveVirtualMs = 0.016;
+        _lastPumpRealMs = _origPerfNow();
         _isPaused = false;
+        if (document.getAnimations) {
+          try {
+            document.getAnimations().forEach(function(a) { a.currentTime = 0; a.play(); });
+          } catch(_) {}
+        }
       } else if (data.type === 'ctv-live-font') {
         var styleId = 'ctv-font-override';
         var existingStyle = document.getElementById(styleId);
@@ -836,6 +912,17 @@ export function buildLiveBridgeScript() {
           }
           existingStyle.textContent = 'html,body,h1,h2,h3,h4,p,span,div,button,a{font-family:' + cleanFont + ' !important;}';
         }
+      } else if (data.type === 'ctv-live-capture') {
+        var targetC = findCanvas();
+        var bmp = null;
+        if (targetC && targetC.width > 0 && targetC.height > 0 && window.createImageBitmap) {
+          try {
+            bmp = await window.createImageBitmap(targetC);
+          } catch(_) {}
+        } else {
+          bmp = await captureDomToBitmap(data.width || 1280, data.height || 720);
+        }
+        window.parent.postMessage({ type: 'ctv-live-frame', bitmap: bmp }, '*', bmp ? [bmp] : []);
       }
     });
   })();
@@ -843,453 +930,18 @@ export function buildLiveBridgeScript() {
   `;
 }
 
-/**
- * Menghapus pembungkus Markdown fence & typo CSS umum sebelum kompilasi
- */
-function sanitizeUniversalSource(rawCode = '') {
-  let code = String(rawCode || '').trim();
-  const fencedMatch = code.match(/^```(?:[a-zA-Z0-9_+-]+)?\s*\r?\n([\s\S]*?)\r?\n?```$/);
-  if (fencedMatch && fencedMatch[1]) {
-    code = fencedMatch[1].trim();
-  }
-  // Hilangkan typo minus sebelum kurung kurawal CSS (misal `- { margin: 0; }`)
-  code = code.replace(/(^|\n|>)\s*-\s*\{/g, '$1 * {');
-  return code;
-}
-
-/**
- * Mendeteksi jenis bahasa/kode secara otomatis tanpa tombol pemilih mode
- */
 export function detectCodeLanguage(rawInput = '') {
-  const code = sanitizeUniversalSource(rawInput);
-  if (!code) {
-    return { category: 'empty', label: 'Siap Menerima Kode' };
-  }
-
-  const lower = code.toLowerCase();
-  const hasHtmlDoc =
-    /^<!doctype\s+html/i.test(code) ||
-    lower.includes('<html') ||
-    (lower.includes('<head') && lower.includes('<body'));
-  if (hasHtmlDoc) {
-    return { category: 'full-html', label: 'HTML5 + CSS + JS' };
-  }
-
-  // SVG murni (tanpa wrapper HTML lengkap)
-  if (/^<\s*svg\b/i.test(code) && !lower.includes('<script') && !lower.includes('<div')) {
-    return { category: 'pure-svg', label: 'SVG Vector' };
-  }
-
-  // Potongan tag HTML / Canvas / Style / Script
-  if (/<\/?(?:div|span|canvas|section|main|header|footer|h[1-6]|p|ul|li|img|svg|style|script|link)\b/i.test(code)) {
-    return { category: 'html-fragment', label: 'HTML / CSS / JS' };
-  }
-
-  // GLSL Shader (Shadertoy mainImage atau standar WebGL void main)
-  const looksGlsl =
-    /\bgl_FragColor\b/.test(code) ||
-    /\bmainImage\s*\(\s*out\s+vec4\b/.test(code) ||
-    /\bprecision\s+(?:lowp|mediump|highp)\s+float\b/.test(code) ||
-    (/\bvoid\s+main\s*\(\s*(?:void)?\s*\)/.test(code) && /\b(?:vec[234]|mat[234]|uniform\s+float|fragColor)\b/.test(code));
-  if (looksGlsl) {
-    return { category: 'glsl-shader', label: 'GLSL Shader GPU' };
-  }
-
-  // Pure CSS tanpa tag markup maupun statement JS
-  const looksJs =
-    /\b(?:function\s*[a-zA-Z0-9_$]*\s*\(|const\s+|let\s+|var\s+|import\s+|document\.|window\.|requestAnimationFrame|new\s+THREE\.|ctx\s*\.)/.test(code) ||
-    /=>\s*[{(]/.test(code);
-  const looksCss =
-    !looksJs &&
-    (/@keyframes\b/.test(code) ||
-      /(?:^|\n|\})\s*(?:[.#]?[a-zA-Z*_-][a-zA-Z0-9_.*#,:()\s>-]*)\s*\{[^}]*:[^}]+;/.test(code));
-  if (looksCss) {
-    return { category: 'pure-css', label: 'Pure CSS Motion' };
-  }
-
-  // Pure JS: bedakan Standalone Script vs Frame Draw Snippet
-  const isStandaloneJs =
-    /\b(?:document\.|window\.|requestAnimationFrame|setInterval|new\s+THREE\.|getContext\s*\(|addEventListener|import\s+)/.test(code);
-  if (isStandaloneJs) {
-    return { category: 'pure-js-standalone', label: 'Pure JS / Three.js' };
-  }
-
-  return { category: 'pure-js-draw', label: 'JS Canvas Draw' };
+  return _detectCodeLanguage(rawInput);
 }
 
-function buildImportMapIfNeeded(jsCode) {
-  if (!/\bimport\s+[\s\S]*?\bfrom\s+['"][^'"]+['"]/.test(jsCode)) {
-    return { isModule: false, importMapTag: '' };
-  }
-  const importMapTag = `<script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-    }
-  }
-  </script>`;
-  return { isModule: true, importMapTag };
-}
-
-function buildCssPreviewMarkup(cssCode) {
-  const nodes = [];
-  const seen = new Set();
-  const selectorRegex = /(?:^|\n|\})\s*([.#][a-zA-Z_-][a-zA-Z0-9_-]*)\b/g;
-  let match;
-  while ((match = selectorRegex.exec(cssCode)) !== null && nodes.length < 6) {
-    const sel = match[1];
-    if (seen.has(sel)) continue;
-    seen.add(sel);
-    if (sel.startsWith('#')) {
-      nodes.push(`<div id="${sel.slice(1)}"></div>`);
-    } else {
-      nodes.push(`<div class="${sel.slice(1)}"></div>`);
-    }
-  }
-  if (nodes.length === 0) {
-    return '<div class="kuro-css-stage"><div class="kuro-css-box"></div></div>';
-  }
-  return nodes.join('\n  ');
-}
-
-function buildGlslSandboxDocument(glslSource, width, height, bridgeScript) {
-  const isShadertoy = /\bmainImage\s*\(/.test(glslSource);
-  const safeGlsl = JSON.stringify(glslSource);
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-    canvas { display: block; width: 100%; height: 100%; }
-  </style>
-  ${bridgeScript}
-</head>
-<body>
-  <canvas id="shaderCanvas" width="${width}" height="${height}"></canvas>
-  <script>
-  (function() {
-    var canvas = document.getElementById('shaderCanvas');
-    canvas.width = window.innerWidth || ${width};
-    canvas.height = window.innerHeight || ${height};
-    window.addEventListener('resize', function() {
-      canvas.width = window.innerWidth || ${width};
-      canvas.height = window.innerHeight || ${height};
-    });
-
-    var isShadertoy = ${isShadertoy ? 'true' : 'false'};
-    var gl = isShadertoy
-      ? (canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: true }) || canvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: true }))
-      : (canvas.getContext('webgl', { preserveDrawingBuffer: true, antialias: true }) || canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: true }));
-
-    if (!gl) {
-      window.parent.postMessage({ type: 'ctv-error', error: 'WebGL tidak didukung browser untuk menjalankan Shader.' }, '*');
-      return;
-    }
-
-    var isWebGL2 = (typeof WebGL2RenderingContext !== 'undefined') && (gl instanceof WebGL2RenderingContext);
-    var userSrc = ${safeGlsl};
-
-    var vertSrc = isWebGL2
-      ? '#version 300 es\\nin vec2 a_pos;\\nvoid main() { gl_Position = vec4(a_pos, 0.0, 1.0); }'
-      : 'attribute vec2 a_pos;\\nvoid main() { gl_Position = vec4(a_pos, 0.0, 1.0); }';
-
-    var fragSrc = '';
-    if (isShadertoy) {
-      if (isWebGL2) {
-        fragSrc = '#version 300 es\\nprecision highp float;\\n' +
-          'uniform vec3 iResolution;\\nuniform float iTime;\\nuniform int iFrame;\\nuniform vec4 iMouse;\\n' +
-          'uniform vec2 u_resolution;\\nuniform float u_time;\\n' +
-          'out vec4 _outColor;\\n' +
-          userSrc + '\\n' +
-          'void main() { vec4 c = vec4(0.0, 0.0, 0.0, 1.0); mainImage(c, gl_FragCoord.xy); _outColor = vec4(c.rgb, 1.0); }';
-      } else {
-        fragSrc = 'precision highp float;\\n' +
-          'uniform vec3 iResolution;\\nuniform float iTime;\\nuniform int iFrame;\\nuniform vec4 iMouse;\\n' +
-          'uniform vec2 u_resolution;\\nuniform float u_time;\\n' +
-          userSrc + '\\n' +
-          'void main() { vec4 c = vec4(0.0, 0.0, 0.0, 1.0); mainImage(c, gl_FragCoord.xy); gl_FragColor = vec4(c.rgb, 1.0); }';
-      }
-    } else {
-      var hasPrecision = /precision\\s+(lowp|mediump|highp)\\s+float/.test(userSrc);
-      var header = hasPrecision ? '' : 'precision highp float;\\n';
-      var extraUniforms = '';
-      if (!/uniform\\s+float\\s+u_time\\b/.test(userSrc)) extraUniforms += 'uniform float u_time;\\n';
-      if (!/uniform\\s+float\\s+uTime\\b/.test(userSrc)) extraUniforms += 'uniform float uTime;\\n';
-      if (!/uniform\\s+float\\s+time\\b/.test(userSrc)) extraUniforms += 'uniform float time;\\n';
-      if (!/uniform\\s+float\\s+iTime\\b/.test(userSrc)) extraUniforms += 'uniform float iTime;\\n';
-      if (!/uniform\\s+vec2\\s+u_resolution\\b/.test(userSrc)) extraUniforms += 'uniform vec2 u_resolution;\\n';
-      if (!/uniform\\s+vec2\\s+uResolution\\b/.test(userSrc)) extraUniforms += 'uniform vec2 uResolution;\\n';
-      if (!/uniform\\s+vec2\\s+resolution\\b/.test(userSrc)) extraUniforms += 'uniform vec2 resolution;\\n';
-      if (!/uniform\\s+vec3\\s+iResolution\\b/.test(userSrc)) extraUniforms += 'uniform vec3 iResolution;\\n';
-      fragSrc = header + extraUniforms + userSrc;
-    }
-
-    function compile(type, source) {
-      var s = gl.createShader(type);
-      gl.shaderSource(s, source);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        var info = gl.getShaderInfoLog(s) || 'Shader compile failed';
-        window.parent.postMessage({ type: 'ctv-error', error: 'GLSL Error: ' + info }, '*');
-        return null;
-      }
-      return s;
-    }
-
-    var vs = compile(gl.VERTEX_SHADER, vertSrc);
-    var fs = compile(gl.FRAGMENT_SHADER, fragSrc);
-    if (!vs || !fs) return;
-
-    var prog = gl.createProgram();
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      window.parent.postMessage({ type: 'ctv-error', error: 'GLSL Link: ' + gl.getProgramInfoLog(prog) }, '*');
-      return;
-    }
-
-    var buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    var posLoc = gl.getAttribLocation(prog, 'a_pos');
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-    gl.useProgram(prog);
-
-    var frameCount = 0;
-    function render(nowMs) {
-      var t = (nowMs || performance.now()) * 0.001;
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      var set1f = function(name, val) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform1f(l, val); };
-      var set2f = function(name, a, b) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform2f(l, a, b); };
-      var set3f = function(name, a, b, c) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform3f(l, a, b, c); };
-      var set1i = function(name, a) { var l = gl.getUniformLocation(prog, name); if (l !== null) gl.uniform1i(l, a); };
-
-      set1f('u_time', t); set1f('uTime', t); set1f('time', t); set1f('iTime', t);
-      set2f('u_resolution', canvas.width, canvas.height);
-      set2f('uResolution', canvas.width, canvas.height);
-      set2f('resolution', canvas.width, canvas.height);
-      set3f('iResolution', canvas.width, canvas.height, 1.0);
-      set1i('iFrame', frameCount++);
-
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      requestAnimationFrame(render);
-    }
-    requestAnimationFrame(render);
-  })();
-  </script>
-</body>
-</html>`;
-}
-
-/**
- * Compiler Universal Otomatis untuk Live Preview & Render Deterministik
- * Mendukung Full HTML, Pure SVG, HTML Fragment, GLSL Shader, Pure CSS, Pure JS Standalone, & Frame Draw Snippet.
- */
 export function compileUniversalCode(rawInput = '', mode = 'live', options = {}) {
-  const { width = 1280, height = 720, cleanBg = false, fontCss = '' } = options;
-  const baseBridgeScript = mode === 'render'
-    ? buildRenderBridgeScript(width, height)
-    : buildLiveBridgeScript();
-  const safeFontCss = fontCss ? String(fontCss).replace(/[<>{}]/g, '') : '';
-  const fontHook = safeFontCss
-    ? `<style id="ctv-font-override">html,body,h1,h2,h3,h4,p,span,div,button,a{font-family:${safeFontCss} !important;}</style>`
-    : '';
-  const cleanBgHook = cleanBg
-    ? '<style>h1,h2,h3,h4,h5,h6,p,span,a,button,label,text,tspan{opacity:0!important;color:transparent!important;text-shadow:none!important;}</style><script>(function(){if(window.CanvasRenderingContext2D){var p=CanvasRenderingContext2D.prototype;p.fillText=function(){};p.strokeText=function(){};}})();</script>'
-    : '';
-  const bridgeScript = baseBridgeScript + fontHook + cleanBgHook;
-
-  const cleanCode = sanitizeUniversalSource(rawInput);
-  const { category } = detectCodeLanguage(cleanCode);
-
-  if (category === 'empty') {
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${bridgeScript}<style>html,body{margin:0;width:100%;height:100%;background:#09090b;color:#71717a;display:flex;align-items:center;justify-content:center;font-family:sans-serif;font-size:14px;}</style></head><body>Tempel kode animasi di editor untuk memulai preview...</body></html>`;
-  }
-
-  // A. Full HTML Document
-  if (category === 'full-html') {
-    if (cleanCode.includes('<head>')) {
-      return cleanCode.replace('<head>', `<head>${bridgeScript}`);
-    } else if (/<head\b[^>]*>/i.test(cleanCode)) {
-      return cleanCode.replace(/<head\b([^>]*)>/i, `<head$1>${bridgeScript}`);
-    } else if (/<html\b[^>]*>/i.test(cleanCode)) {
-      return cleanCode.replace(/<html\b([^>]*)>/i, `<html$1><head>${bridgeScript}</head>`);
-    }
-    return `<!DOCTYPE html><html><head><meta charset="utf-8">${bridgeScript}</head><body>${cleanCode}</body></html>`;
-  }
-
-  // B. Pure SVG Vector
-  if (category === 'pure-svg') {
-    return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="utf-8" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #09090b; display: flex; align-items: center; justify-content: center; }
-    svg { width: 100%; height: 100%; max-width: 100vw; max-height: 100vh; }
-  </style>
-  ${bridgeScript}
-</head>
-<body>
-  ${cleanCode}
-</body>
-</html>`;
-  }
-
-  // C. HTML Fragment (HTML / Style / Script campuran tanpa wrapper dokumen)
-  if (category === 'html-fragment') {
-    return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #09090b; color: #f8fafc; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
-  </style>
-  ${bridgeScript}
-</head>
-<body>
-  ${cleanCode}
-</body>
-</html>`;
-  }
-
-  // D. GLSL Fragment Shader
-  if (category === 'glsl-shader') {
-    return buildGlslSandboxDocument(cleanCode, width, height, bridgeScript);
-  }
-
-  // E. Pure CSS Keyframe / Styling Motion
-  if (category === 'pure-css') {
-    const stageMarkup = buildCssPreviewMarkup(cleanCode);
-    return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="utf-8" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body {
-      width: 100%; height: 100%; overflow: hidden;
-      background: #09090b; color: #f8fafc;
-      display: flex; align-items: center; justify-content: center;
-      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-    }
-    ${cleanCode}
-  </style>
-  ${bridgeScript}
-</head>
-<body>
-  ${stageMarkup}
-</body>
-</html>`;
-  }
-
-  // F1. Pure JS Standalone (Three.js / Canvas DOM / rAF mandiri)
-  if (category === 'pure-js-standalone') {
-    const { isModule, importMapTag } = buildImportMapIfNeeded(cleanCode);
-    const safeScriptTag = isModule ? '<script type="module">' : '<script>';
-    // Escape penutup script agar kode user aman disuntikkan ke HTML
-    const escapedJs = cleanCode.replace(/<\/script>/gi, '<\\/script>');
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-    canvas { display: block; width: 100%; height: 100%; }
-  </style>
-  ${importMapTag}
-  ${bridgeScript}
-</head>
-<body>
-  <canvas id="canvas" width="${width}" height="${height}"></canvas>
-  <script>
-    (function() {
-      var defaultCanvas = document.getElementById('canvas');
-      if (defaultCanvas) {
-        defaultCanvas.width = window.innerWidth || ${width};
-        defaultCanvas.height = window.innerHeight || ${height};
-      }
-      var _origGetById = document.getElementById.bind(document);
-      document.getElementById = function(id) {
-        var el = _origGetById(id);
-        if (!el && defaultCanvas) return defaultCanvas;
-        return el;
-      };
-    })();
-  </script>
-  ${safeScriptTag}
-    ${escapedJs}
-  </script>
-</body>
-</html>`;
-  }
-
-  // F2. Pure JS Canvas Draw Snippet (menggunakan ctx, canvas, width, height, time, t, dt, frame)
-  const escapedDraw = cleanCode.replace(/<\/script>/gi, '<\\/script>');
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
-    canvas { display: block; width: 100%; height: 100%; }
-  </style>
-  ${bridgeScript}
-</head>
-<body>
-  <canvas id="canvas" width="${width}" height="${height}"></canvas>
-  <script>
-    (function() {
-      var canvas = document.getElementById('canvas');
-      var ctx = canvas.getContext('2d');
-      function resize() {
-        canvas.width = window.innerWidth || ${width};
-        canvas.height = window.innerHeight || ${height};
-      }
-      resize();
-      window.addEventListener('resize', resize);
-
-      function userDraw(ctx, canvas, width, height, time, t, dt, frame) {
-        var c = canvas;
-        var W = width;
-        var H = height;
-        ${escapedDraw}
-      }
-      window.__userDraw = userDraw;
-
-      var lastTime = performance.now();
-      function loop(now) {
-        var t = now * 0.001;
-        var dt = Math.max(0.001, (now - lastTime) * 0.001);
-        lastTime = now;
-        var frame = Math.round(t * 60);
-        try {
-          userDraw(ctx, canvas, canvas.width, canvas.height, t, t, dt, frame);
-        } catch (err) {
-          window.parent.postMessage({ type: 'ctv-error', error: 'JS Runtime: ' + (err && err.message ? err.message : String(err)) }, '*');
-        }
-        requestAnimationFrame(loop);
-      }
-      requestAnimationFrame(loop);
-    })();
-  </script>
-</body>
-</html>`;
+  return _compileUniversalCode(rawInput, mode, {
+    ...options,
+    buildLiveBridge: buildLiveBridgeScript,
+    buildRenderBridge: buildRenderBridgeScript
+  });
 }
 
-/**
- * Membangun HTML Sandbox (alias universal untuk Live Preview maupun Deterministic Render)
- */
 export function buildSandboxHtml(rawCode = '', mode = 'live', options = {}) {
   return compileUniversalCode(rawCode, mode, options);
 }
@@ -2373,7 +2025,7 @@ export async function exportVideo({
   renderIframe.style.pointerEvents = 'none';
   renderIframe.style.border = '0';
   renderIframe.style.zIndex = '-20';
-  renderIframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+  renderIframe.setAttribute('sandbox', 'allow-scripts');
   document.body.appendChild(renderIframe);
 
   let lastGoodBitmap = null;
@@ -2401,7 +2053,9 @@ export async function exportVideo({
       width,
       height,
       cleanBg,
-      fontCss: renderFontCss
+      fontCss: renderFontCss,
+      studioSettings: effectiveSettings,
+      duration: safeDuration
     });
     await readyPromise;
 

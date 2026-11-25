@@ -43,7 +43,6 @@ import {
   exportVideo,
   compileUniversalCode,
   detectCodeLanguage,
-  findPrimaryCanvas,
   BITRATE_PRESETS,
   DEFAULT_STUDIO_SETTINGS,
   STUDIO_FONT_PRESETS,
@@ -145,6 +144,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   // Dimensi virtual HD tetap & faktor skala CSS agar Live Preview selalu tajam di HP & desktop
   const virtualDims = useMemo(() => getVirtualStageSize(exportAspect), [exportAspect]);
   const [stageScale, setStageScale] = useState(1);
+  const [iframeRunKey, setIframeRunKey] = useState(1);
 
   // Kompilasi SceneGraph & HTML animasi multi-adegan dari prompt Editor Teks
   const compiledPrompt = useMemo(() => {
@@ -164,6 +164,17 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     effectiveDurationRef.current = effectiveExportDuration;
   }, [effectiveExportDuration]);
 
+  const [compiledLiveHtml, setCompiledLiveHtml] = useState(() => {
+    const initDims = getVirtualStageSize('16:9');
+    return compileUniversalCode(universalCode, 'live', {
+      width: initDims.width,
+      height: initDims.height,
+      fontCss: settings?.pureBypassMode ? '' : (STUDIO_FONT_PRESETS[settings?.fontFamily] || ''),
+      studioSettings: settings,
+      duration: 12
+    });
+  });
+
   // --- REFS ---
   const liveIframeRef = useRef(null);
   const stageContentWrapRef = useRef(null);
@@ -178,6 +189,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const fileInputRef = useRef(null);
   const textareaRef = useRef(null);
   const lastRenderSignatureRef = useRef('');
+  const liveCaptureInFlightRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -203,17 +215,38 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     return STUDIO_FONT_PRESETS[cfg?.fontFamily] || '';
   }, []);
 
-  const detectedLanguage = useMemo(() => {
-    if (editorTab === 'text') {
-      return {
-        category: 'text-prompt',
-        label: `${compiledPrompt.summary.topicLabel} (${compiledPrompt.summary.sceneCount} Adegan)`
-      };
-    }
-    return detectCodeLanguage(universalCode);
-  }, [editorTab, compiledPrompt.summary.topicLabel, compiledPrompt.summary.sceneCount, universalCode]);
+  const triggerLiveRun = useCallback((sourceCode, {
+    aspect = exportAspect,
+    cfg = settingsRef.current,
+    dur = effectiveDurationRef.current,
+    switchMobilePreview = false
+  } = {}) => {
+    const dims = getVirtualStageSize(aspect);
+    const compiled = compileUniversalCode(sourceCode, 'live', {
+      width: dims.width,
+      height: dims.height,
+      fontCss: getActiveFontCss(cfg),
+      studioSettings: cfg,
+      duration: dur
+    });
+    setErrorLog(null);
+    liveCaptureInFlightRef.current = false;
+    setCompiledLiveHtml(compiled);
+    setIframeRunKey((k) => k + 1);
+    startTimeRef.current = performance.now();
+    setIsPlaying(true);
 
-  // ResizeObserver agar panggung virtual HD terskala presisi ke lebar kontainer HP maupun desktop
+    if (switchMobilePreview && typeof window !== 'undefined' && window.innerWidth < 1024) {
+      setMobileSection('preview');
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          viewportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+      });
+    }
+  }, [exportAspect, getActiveFontCss]);
+
+  // ResizeObserver + double-rAF agar skala panggung HD tidak pernah 0 saat tab Preview sempat hidden di HP
   useEffect(() => {
     const outerEl = stageOuterRef.current;
     if (!outerEl) return undefined;
@@ -222,24 +255,33 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       const rect = outerEl.getBoundingClientRect();
       if (rect.width > 16 && rect.height > 16) {
         const nextScale = Math.min(rect.width / virtualDims.width, rect.height / virtualDims.height);
-        setStageScale(Math.max(0.1, Number(nextScale.toFixed(4))));
+        setStageScale(Math.max(0.18, Number(nextScale.toFixed(4))));
+      } else {
+        const fallbackW = Math.min(Math.max(window.innerWidth - 32, 260), 420);
+        const fallbackH = fallbackW * (virtualDims.height / Math.max(1, virtualDims.width));
+        const nextScale = Math.min(fallbackW / virtualDims.width, fallbackH / virtualDims.height);
+        setStageScale(Math.max(0.18, Number(nextScale.toFixed(4))));
       }
     };
 
     recalcScale();
-    const rafId = requestAnimationFrame(recalcScale);
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(recalcScale);
+    });
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(recalcScale) : null;
     if (ro) ro.observe(outerEl);
     window.addEventListener('resize', recalcScale);
 
     return () => {
-      cancelAnimationFrame(rafId);
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
       if (ro) ro.disconnect();
       window.removeEventListener('resize', recalcScale);
     };
-  }, [virtualDims.width, virtualDims.height, mobileSection, isFullscreen]);
+  }, [virtualDims.width, virtualDims.height, mobileSection, isFullscreen, iframeRunKey]);
 
-  // Inisialisasi Engine Compositor & Live Preview Iframe
+  // Inisialisasi Engine Compositor & Loop Direct GPU
   useEffect(() => {
     const initialDims = getVirtualStageSize(exportAspect);
     const comp = new CodeToVideoCompositor(canvasRef.current, initialDims.width, initialDims.height);
@@ -248,14 +290,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (overlayCanvasRef.current) {
       overlayCanvasRef.current.width = initialDims.width;
       overlayCanvasRef.current.height = initialDims.height;
-    }
-
-    if (liveIframeRef.current) {
-      liveIframeRef.current.srcdoc = compileUniversalCode(getActiveSourceCode(), 'live', {
-        width: initialDims.width,
-        height: initialDims.height,
-        fontCss: getActiveFontCss(settingsRef.current)
-      });
     }
 
     startTimeRef.current = performance.now();
@@ -309,17 +343,14 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, loopT, frameSettings);
           }
         } else {
-          try {
-            const doc = liveIframeRef.current?.contentDocument || liveIframeRef.current?.contentWindow?.document;
-            if (doc) {
-              const innerCanvas = findPrimaryCanvas(doc);
-              if (innerCanvas && innerCanvas.width > 0 && innerCanvas.height > 0) {
-                compositorRef.current.codeCtx.clearRect(0, 0, compositorRef.current.width, compositorRef.current.height);
-                compositorRef.current.codeCtx.drawImage(innerCanvas, 0, 0, compositorRef.current.width, compositorRef.current.height);
-                compositorRef.current.codeTexture.needsUpdate = true;
-              }
-            }
-          } catch {}
+          if (!liveCaptureInFlightRef.current && liveIframeRef.current?.contentWindow) {
+            liveCaptureInFlightRef.current = true;
+            liveIframeRef.current.contentWindow.postMessage({
+              type: 'ctv-live-capture',
+              width: compositorRef.current.width,
+              height: compositorRef.current.height
+            }, '*');
+          }
 
           compositorRef.current.renderFrame(loopT, frameSettings);
         }
@@ -352,11 +383,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
-  // Tangkap error runtime dari live preview iframe
+  // Tangkap error runtime & bitmap frame live preview dari iframe sandbox
   useEffect(() => {
     const handleMsg = (e) => {
       if (e.data?.type === 'ctv-error') {
         setErrorLog(e.data.error);
+      } else if (e.data?.type === 'ctv-live-frame') {
+        liveCaptureInFlightRef.current = false;
+        if (e.data.bitmap && compositorRef.current) {
+          compositorRef.current.updateBitmap(e.data.bitmap);
+        }
       }
     };
     window.addEventListener('message', handleMsg);
@@ -380,19 +416,15 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   useEffect(() => {
     if (editorTab !== 'text') return undefined;
     const timer = setTimeout(() => {
-      setErrorLog(null);
-      if (liveIframeRef.current) {
-        liveIframeRef.current.srcdoc = compileUniversalCode(compiledPrompt.generatedHtmlCode, 'live', {
-          width: virtualDims.width,
-          height: virtualDims.height,
-          fontCss: getActiveFontCss(settingsRef.current)
-        });
-      }
-      startTimeRef.current = performance.now();
-      setIsPlaying(true);
+      triggerLiveRun(compiledPrompt.generatedHtmlCode, {
+        aspect: exportAspect,
+        cfg: settingsRef.current,
+        dur: effectiveDurationRef.current,
+        switchMobilePreview: false
+      });
     }, 280);
     return () => clearTimeout(timer);
-  }, [editorTab, compiledPrompt.generatedHtmlCode, virtualDims.width, virtualDims.height, getActiveFontCss]);
+  }, [editorTab, compiledPrompt.generatedHtmlCode, exportAspect, triggerLiveRun]);
 
   const sendLiveSpeed = (spd) => {
     try {
@@ -441,40 +473,30 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     onShowToast?.('Seluruh pengaturan direset ke Mode Polos Murni.', 'info');
   }, [onShowToast]);
 
-  // Terapkan perubahan kode atau prompt teks ke Live Iframe
+  // Terapkan perubahan kode atau prompt teks ke Live Iframe (auto pindah ke Preview di HP)
   const handleApplyCode = useCallback(() => {
     const targetCode = getActiveSourceCode();
-    setErrorLog(null);
-
-    if (liveIframeRef.current) {
-      liveIframeRef.current.srcdoc = compileUniversalCode(targetCode, 'live', {
-        width: virtualDims.width,
-        height: virtualDims.height,
-        fontCss: getActiveFontCss(settingsRef.current)
-      });
-    }
-
-    startTimeRef.current = performance.now();
-    setIsPlaying(true);
+    triggerLiveRun(targetCode, {
+      aspect: exportAspect,
+      cfg: settingsRef.current,
+      dur: effectiveDurationRef.current,
+      switchMobilePreview: true
+    });
     onShowToast?.('Pratinjau visual berhasil diperbarui.', 'success');
-  }, [getActiveSourceCode, getActiveFontCss, virtualDims.width, virtualDims.height, onShowToast]);
+  }, [getActiveSourceCode, exportAspect, triggerLiveRun, onShowToast]);
 
   const handleGeneratePromptAnimation = () => {
-    setErrorLog(null);
     const dur = effectiveExportDuration;
     const fresh = compileTextPromptToSceneGraph(textPrompt, settings, dur);
     if (settings.autoDuration && fresh.summary.recommendedDuration) {
       setExportDuration(fresh.summary.recommendedDuration);
     }
-    if (liveIframeRef.current) {
-      liveIframeRef.current.srcdoc = compileUniversalCode(fresh.generatedHtmlCode, 'live', {
-        width: virtualDims.width,
-        height: virtualDims.height,
-        fontCss: getActiveFontCss(settings)
-      });
-    }
-    startTimeRef.current = performance.now();
-    setIsPlaying(true);
+    triggerLiveRun(fresh.generatedHtmlCode, {
+      aspect: exportAspect,
+      cfg: settings,
+      dur,
+      switchMobilePreview: true
+    });
     onShowToast?.(
       `Animasi dibuat: ${fresh.summary.topicLabel} (${fresh.summary.sceneCount} adegan • ${fresh.summary.colorName}).`,
       'success'
@@ -486,16 +508,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     const generatedHtml = compiledPrompt.generatedHtmlCode;
     setUniversalCode(generatedHtml);
     setEditorTab('code');
-    setErrorLog(null);
-    if (liveIframeRef.current) {
-      liveIframeRef.current.srcdoc = compileUniversalCode(generatedHtml, 'live', {
-        width: virtualDims.width,
-        height: virtualDims.height,
-        fontCss: getActiveFontCss(settingsRef.current)
-      });
-    }
-    startTimeRef.current = performance.now();
-    setIsPlaying(true);
+    triggerLiveRun(generatedHtml, {
+      aspect: exportAspect,
+      cfg: settingsRef.current,
+      dur: effectiveDurationRef.current,
+      switchMobilePreview: false
+    });
     onShowToast?.('Animasi teks dibuka ke Editor Kode.', 'success');
   };
 
@@ -506,7 +524,6 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
     setSelectedTemplateId(templateId);
     setEditorTab('code');
-    setErrorLog(null);
 
     const nextCode =
       tmpl.category === 'canvas'
@@ -514,16 +531,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         : buildCompositeHtml(tmpl.html, tmpl.css, tmpl.js);
 
     setUniversalCode(nextCode);
-    if (liveIframeRef.current) {
-      liveIframeRef.current.srcdoc = compileUniversalCode(nextCode, 'live', {
-        width: virtualDims.width,
-        height: virtualDims.height,
-        fontCss: getActiveFontCss(settingsRef.current)
-      });
-    }
-
-    startTimeRef.current = performance.now();
-    setIsPlaying(true);
+    triggerLiveRun(nextCode, {
+      aspect: exportAspect,
+      cfg: settingsRef.current,
+      dur: effectiveDurationRef.current,
+      switchMobilePreview: false
+    });
     onShowToast?.(`Template "${tmpl.name}" aktif.`, 'info');
   };
 
@@ -597,16 +610,20 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const handleExportCodeFile = () => {
     const activeCode = getActiveSourceCode();
     const { category } = detectCodeLanguage(activeCode);
-    const ext =
-      category === 'pure-js-standalone' || category === 'pure-js-draw'
-        ? 'js'
-        : category === 'pure-css'
-        ? 'css'
-        : category === 'pure-svg'
-        ? 'svg'
-        : category === 'glsl-shader'
-        ? 'glsl'
-        : 'html';
+    const extMap = {
+      'pure-js-standalone': 'js',
+      'pure-js-draw': 'js',
+      'p5-js': 'js',
+      typescript: 'ts',
+      'react-jsx': 'jsx',
+      'pure-css': 'css',
+      'pure-svg': 'svg',
+      'glsl-shader': 'glsl',
+      'processing-java': 'pde',
+      'foreign-anim': 'py',
+      'text-prompt': 'txt'
+    };
+    const ext = extMap[category] || 'html';
     try {
       const dl = downloadText(activeCode, `kuro_studio_${selectedTemplateId}.${ext}`, 'text/plain;charset=utf-8');
       onShowToast?.(`Berkas ${dl.filename} diunduh.`, 'success');
@@ -650,19 +667,15 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
           const durRestore = Number(restored.exportOptions?.duration) || Number(exportDuration) || 12;
           const aspectRestore = restored.exportOptions?.aspect || exportAspect;
-          const vDims = getVirtualStageSize(aspectRestore);
           const nextHtml = restored.editorTab === 'text'
             ? compileTextPromptToSceneGraph(restored.promptInput || textPrompt, mergedSettings, durRestore).generatedHtmlCode
             : restored.universalCode || universalCode;
-          if (liveIframeRef.current) {
-            liveIframeRef.current.srcdoc = compileUniversalCode(nextHtml, 'live', {
-              width: vDims.width,
-              height: vDims.height,
-              fontCss: getActiveFontCss(mergedSettings)
-            });
-          }
-          startTimeRef.current = performance.now();
-          setIsPlaying(true);
+          triggerLiveRun(nextHtml, {
+            aspect: aspectRestore,
+            cfg: mergedSettings,
+            dur: durRestore,
+            switchMobilePreview: false
+          });
           onShowToast?.(`Proyek "${file.name}" berhasil dipulihkan.`, 'success');
         } catch (err) {
           onShowToast?.(err.message || 'Gagal membaca file proyek JSON.', 'error');
@@ -672,16 +685,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
       setEditorTab('code');
       setUniversalCode(content);
-      setErrorLog(null);
-      if (liveIframeRef.current) {
-        liveIframeRef.current.srcdoc = compileUniversalCode(content, 'live', {
-          width: virtualDims.width,
-          height: virtualDims.height,
-          fontCss: getActiveFontCss(settingsRef.current)
-        });
-      }
-      startTimeRef.current = performance.now();
-      setIsPlaying(true);
+      triggerLiveRun(content, {
+        aspect: exportAspect,
+        cfg: settingsRef.current,
+        dur: effectiveDurationRef.current,
+        switchMobilePreview: false
+      });
       onShowToast?.(`Berkas "${file.name}" berhasil diimpor.`, 'success');
     };
     reader.readAsText(file);
@@ -1142,7 +1151,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             mobileSection === 'editor' ? 'flex' : 'hidden lg:flex'
           }`}
         >
-          {/* Header Editor: Tab Editor Kode | Editor Teks + Pil Auto-Detect Pasif */}
+          {/* Header Editor: Tab Editor Kode | Editor Teks */}
           <div className="p-3 bg-neutral-100 border-b-2 border-black space-y-2.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="grid grid-cols-2 border-2 border-black bg-white shadow-[2px_2px_0px_#000]">
@@ -1150,16 +1159,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                   type="button"
                   onClick={() => {
                     setEditorTab('code');
-                    setErrorLog(null);
-                    if (liveIframeRef.current) {
-                      liveIframeRef.current.srcdoc = compileUniversalCode(universalCode, 'live', {
-                        width: virtualDims.width,
-                        height: virtualDims.height,
-                        fontCss: getActiveFontCss(settingsRef.current)
-                      });
-                    }
-                    startTimeRef.current = performance.now();
-                    setIsPlaying(true);
+                    triggerLiveRun(universalCode, {
+                      aspect: exportAspect,
+                      cfg: settingsRef.current,
+                      dur: effectiveDurationRef.current,
+                      switchMobilePreview: false
+                    });
                   }}
                   className={`px-3 py-1.5 text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
                     editorTab === 'code' ? 'bg-yellow-300 text-black' : 'hover:bg-neutral-100 text-neutral-700'
@@ -1183,14 +1188,9 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 </button>
               </div>
 
-              <div className="flex items-center justify-between sm:justify-end gap-2 min-w-0">
-                <span className="px-2 py-1 bg-white border border-black text-[11px] font-bold text-neutral-800 truncate">
-                  {editorTab === 'text' ? detectedLanguage.label : `Auto-Detect: ${detectedLanguage.label}`}
-                </span>
-                <span className="hidden sm:inline-block text-[10px] bg-neutral-200 border border-black px-1.5 py-0.5 font-mono font-bold shrink-0">
-                  Ctrl+Enter: Run
-                </span>
-              </div>
+              <span className="hidden sm:inline-block text-[10px] bg-neutral-200 border border-black px-2 py-0.5 font-mono font-bold shrink-0">
+                Ctrl+Enter: Run
+              </span>
             </div>
           </div>
 
@@ -1210,7 +1210,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 onKeyDown={(e) => handleKeyDown(e, setUniversalCode, universalCode)}
                 spellCheck="false"
                 className="flex-1 min-w-0 p-2.5 sm:p-3 bg-transparent text-emerald-400 font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none overflow-x-auto overflow-y-auto whitespace-pre selection:bg-neutral-700 selection:text-white"
-                placeholder="// Tempel kode HTML, CSS keyframes, SVG, GLSL Shader, Three.js, atau Pure JS Canvas di sini..."
+                placeholder="// Tempel kode HTML, CSS, JS, Three.js, p5.js, GLSL, SVG, TypeScript, Python Manim, atau teks ide video di sini..."
               />
             </div>
           ) : (
@@ -1371,7 +1371,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".html,.htm,.js,.jsx,.txt,.css,.svg,.glsl,.frag,.json,.kurovid.json"
+              accept=".html,.htm,.js,.jsx,.ts,.tsx,.py,.pde,.lua,.txt,.css,.svg,.glsl,.frag,.json,.kurovid.json"
               onChange={handleImportFile}
               className="hidden"
             />
@@ -1468,8 +1468,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                       }}
                     >
                       <iframe
+                        key={`live-stage-${iframeRunKey}-2d`}
                         ref={liveIframeRef}
-                        sandbox="allow-scripts allow-same-origin"
+                        srcDoc={compiledLiveHtml}
+                        sandbox="allow-scripts"
+                        onLoad={() => {
+                          liveCaptureInFlightRef.current = false;
+                        }}
                         className="border-0"
                         style={{
                           position: 'absolute',
@@ -1493,8 +1498,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               ) : (
                 <>
                   <iframe
+                    key={`live-stage-${iframeRunKey}-3d`}
                     ref={liveIframeRef}
-                    sandbox="allow-scripts allow-same-origin"
+                    srcDoc={compiledLiveHtml}
+                    sandbox="allow-scripts"
+                    onLoad={() => {
+                      liveCaptureInFlightRef.current = false;
+                    }}
                     className="border-0"
                     style={{
                       position: 'fixed',
@@ -1632,7 +1642,18 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             <label className="font-black uppercase tracking-wider text-neutral-700">Rasio Aspek:</label>
             <select
               value={exportAspect}
-              onChange={(e) => setExportAspect(e.target.value)}
+              onChange={(e) => {
+                const nextAspect = e.target.value;
+                setExportAspect(nextAspect);
+                if (editorTab === 'code') {
+                  triggerLiveRun(universalCode, {
+                    aspect: nextAspect,
+                    cfg: settingsRef.current,
+                    dur: effectiveDurationRef.current,
+                    switchMobilePreview: false
+                  });
+                }
+              }}
               disabled={isRendering}
               className="w-full bg-white border-2 border-black p-2 font-bold shadow-[2px_2px_0px_#000] focus:outline-none min-h-[40px] cursor-pointer"
             >
