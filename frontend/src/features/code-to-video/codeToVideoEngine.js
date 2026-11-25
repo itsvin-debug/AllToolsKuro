@@ -1412,140 +1412,231 @@ export class CodeToVideoCompositor {
     const ctx = this.hudCtx;
     ctx.clearRect(0, 0, this.width, this.height);
 
-    if (!settings?.hudEnabled) return;
+    if (settings?.pureBypassMode) return;
+    if (!settings?.hudEnabled && !settings?.watermarkEnabled) return;
 
-    const scaleFactor = Math.min(this.width / 1280, this.height / 720);
-    const titleText = (settings.hudTitle || 'UNTITLED MOTION').toUpperCase();
-    const subText = (settings.hudSubtitle || 'KURO STUDIO DETERMINISTIC').toUpperCase();
-    const pos = settings.hudPosition || 'bottom-left';
+    const baseScale = Math.min(this.width / 1280, this.height / 720);
+    const scaleFactor = baseScale * (Number(settings?.hudScale) || 1);
 
-    ctx.save();
+    if (settings?.hudEnabled) {
+      const titleText = (settings.hudTitle || 'UNTITLED MOTION').toUpperCase();
+      const subText = (settings.hudSubtitle || 'KURO STUDIO DETERMINISTIC').toUpperCase();
+      const pos = settings.hudPosition || 'bottom-left';
+      const hudStyle = settings.hudStyle || 'brutalist';
+      const accent = settings.hudAccentColor || '#ff0055';
 
-    const titleSize = Math.round(20 * scaleFactor);
-    const subSize = Math.round(11 * scaleFactor);
-    ctx.font = `900 ${titleSize}px monospace`;
-    const titleWidth = ctx.measureText(titleText).width;
-    ctx.font = `700 ${subSize}px monospace`;
-    const subWidth = ctx.measureText(subText).width;
+      ctx.save();
+      const titleSize = Math.round(20 * scaleFactor);
+      const subSize = Math.round(11 * scaleFactor);
+      ctx.font = `900 ${titleSize}px monospace`;
+      const titleWidth = ctx.measureText(titleText).width;
+      ctx.font = `700 ${subSize}px monospace`;
+      const subWidth = ctx.measureText(subText).width;
 
-    const boxWidth = Math.max(titleWidth, subWidth) + 48 * scaleFactor;
-    const boxHeight = 64 * scaleFactor;
-    const pad = 32 * scaleFactor;
+      const boxWidth = Math.min(this.width - 32 * baseScale, Math.max(titleWidth, subWidth) + 52 * scaleFactor);
+      const boxHeight = 64 * scaleFactor;
+      const pad = 28 * baseScale;
 
-    let x = pad;
-    let y = this.height - boxHeight - pad;
+      let x = pad;
+      let y = this.height - boxHeight - pad;
 
-    switch (pos) {
-      case 'bottom-center':
-        x = (this.width - boxWidth) / 2;
-        y = this.height - boxHeight - pad;
-        break;
-      case 'top-left':
-        x = pad;
-        y = pad;
-        break;
-      case 'top-center':
-        x = (this.width - boxWidth) / 2;
-        y = pad;
-        break;
-      default:
-        x = pad;
-        y = this.height - boxHeight - pad;
+      switch (pos) {
+        case 'bottom-center':
+          x = (this.width - boxWidth) / 2;
+          y = this.height - boxHeight - pad;
+          break;
+        case 'top-left':
+          x = pad;
+          y = pad;
+          break;
+        case 'top-center':
+          x = (this.width - boxWidth) / 2;
+          y = pad;
+          break;
+        default:
+          x = pad;
+          y = this.height - boxHeight - pad;
+      }
+
+      if (hudStyle === 'glass') {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+        ctx.fillRect(x, y, boxWidth, boxHeight);
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 2 * baseScale;
+        ctx.strokeRect(x, y, boxWidth, boxHeight);
+      } else if (hudStyle === 'minimal') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(x, y, boxWidth, boxHeight);
+        ctx.fillStyle = accent;
+        ctx.fillRect(x, y, 5 * scaleFactor, boxHeight);
+      } else {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x + 5 * scaleFactor, y + 5 * scaleFactor, boxWidth, boxHeight);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, boxWidth, boxHeight);
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2.5 * baseScale;
+        ctx.strokeRect(x, y, boxWidth, boxHeight);
+      }
+
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.arc(x + 16 * scaleFactor, y + 22 * scaleFactor, 5 * scaleFactor, 0, Math.PI * 2);
+      ctx.fill();
+
+      const textMain = hudStyle === 'brutalist' ? '#000000' : '#ffffff';
+      const textSub = hudStyle === 'brutalist' ? '#444444' : '#cbd5e1';
+
+      ctx.fillStyle = textMain;
+      ctx.font = `900 ${titleSize}px monospace`;
+      ctx.textAlign = 'left';
+      ctx.fillText(titleText, x + 28 * scaleFactor, y + 28 * scaleFactor, boxWidth - 36 * scaleFactor);
+
+      ctx.fillStyle = textSub;
+      ctx.font = `700 ${subSize}px monospace`;
+      ctx.fillText(subText, x + 28 * scaleFactor, y + 48 * scaleFactor, boxWidth - 36 * scaleFactor);
+
+      ctx.restore();
     }
 
-    // Shadow & Box Neobrutalist
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(x + 5 * scaleFactor, y + 5 * scaleFactor, boxWidth, boxHeight);
+    if (settings?.watermarkEnabled && (settings?.watermarkText || '').trim()) {
+      const wm = String(settings.watermarkText).trim();
+      const wmFont = Math.max(11, Math.round(13 * baseScale));
+      ctx.save();
+      ctx.font = `800 ${wmFont}px monospace`;
+      const wmW = ctx.measureText(wm).width + 20 * baseScale;
+      const wmH = wmFont * 1.9;
+      const wx = this.width - wmW - 22 * baseScale;
+      const wy = 20 * baseScale;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.58)';
+      ctx.fillRect(wx, wy, wmW, wmH);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(wx, wy, wmW, wmH);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(wm, wx + wmW * 0.5, wy + wmH * 0.52, wmW - 10);
+      ctx.restore();
+    }
+  }
 
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(x, y, boxWidth, boxHeight);
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2.5 * scaleFactor;
-    ctx.strokeRect(x, y, boxWidth, boxHeight);
+  applyPostEffects(targetCtx, width, height, t, settings = {}) {
+    if (!targetCtx || settings?.pureBypassMode) return;
 
-    ctx.fillStyle = '#ff0055';
-    ctx.beginPath();
-    ctx.arc(x + 16 * scaleFactor, y + 22 * scaleFactor, 5 * scaleFactor, 0, Math.PI * 2);
-    ctx.fill();
+    if (settings?.softBloom) {
+      targetCtx.save();
+      targetCtx.globalCompositeOperation = 'screen';
+      const bg = targetCtx.createRadialGradient(width * 0.5, height * 0.45, width * 0.05, width * 0.5, height * 0.45, Math.max(width, height) * 0.65);
+      bg.addColorStop(0, 'rgba(255, 255, 255, 0.14)');
+      bg.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      targetCtx.fillStyle = bg;
+      targetCtx.fillRect(0, 0, width, height);
+      targetCtx.restore();
+    }
 
-    ctx.fillStyle = '#000000';
-    ctx.font = `900 ${titleSize}px monospace`;
-    ctx.textAlign = 'left';
-    ctx.fillText(titleText, x + 28 * scaleFactor, y + 28 * scaleFactor);
+    if (settings?.vignette) {
+      const cx = width * 0.5;
+      const cy = height * 0.5;
+      const maxR = Math.max(width, height) * 0.65;
+      const vigGrad = targetCtx.createRadialGradient(cx, cy, maxR * 0.45, cx, cy, maxR);
+      vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
+      vigGrad.addColorStop(1, 'rgba(0,0,0,0.55)');
+      targetCtx.fillStyle = vigGrad;
+      targetCtx.fillRect(0, 0, width, height);
+    }
 
-    ctx.fillStyle = '#444444';
-    ctx.font = `700 ${subSize}px monospace`;
-    ctx.fillText(subText, x + 28 * scaleFactor, y + 48 * scaleFactor);
+    if (settings?.colorBoost || Number(settings?.contrastBoost) > 0) {
+      const cAlpha = 0.08 + Math.min(0.25, Math.max(0, Number(settings?.contrastBoost) || 0) * 0.5);
+      targetCtx.save();
+      targetCtx.globalCompositeOperation = 'soft-light';
+      targetCtx.fillStyle = `rgba(255, 255, 255, ${cAlpha.toFixed(2)})`;
+      targetCtx.fillRect(0, 0, width, height);
+      targetCtx.restore();
+    }
 
-    ctx.restore();
+    const bright = Number(settings?.brightnessBoost) || 0;
+    if (bright !== 0) {
+      targetCtx.save();
+      targetCtx.fillStyle = bright > 0
+        ? `rgba(255, 255, 255, ${Math.min(0.35, bright).toFixed(2)})`
+        : `rgba(0, 0, 0, ${Math.min(0.45, Math.abs(bright)).toFixed(2)})`;
+      targetCtx.fillRect(0, 0, width, height);
+      targetCtx.restore();
+    }
+
+    if (settings?.filmGrain) {
+      const grainAlpha = 0.05;
+      const shiftX = Math.floor((t * 37) % 19);
+      const shiftY = Math.floor((t * 53) % 19);
+      targetCtx.save();
+      targetCtx.fillStyle = `rgba(255,255,255,${grainAlpha})`;
+      const step = Math.max(24, Math.round(Math.min(width, height) * 0.04));
+      for (let gx = shiftX; gx < width; gx += step) {
+        for (let gy = shiftY; gy < height; gy += step) {
+          targetCtx.fillRect(gx, gy, 2, 2);
+        }
+      }
+      targetCtx.restore();
+    }
+
+    if (settings?.hudEnabled || settings?.watermarkEnabled) {
+      this.renderHud(settings);
+      targetCtx.drawImage(this.hudCanvas, 0, 0, width, height);
+    }
+
+    if (settings?.fadeInOut) {
+      const dur = Number(settings?.totalDuration) || 0;
+      let fadeAlpha = 0;
+      if (t < 0.45) fadeAlpha = 1 - Math.max(0, t) / 0.45;
+      else if (dur > 1.5 && t > dur - 0.45) fadeAlpha = Math.min(1, (t - (dur - 0.45)) / 0.45);
+      if (fadeAlpha > 0.01) {
+        targetCtx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha.toFixed(3)})`;
+        targetCtx.fillRect(0, 0, width, height);
+      }
+    }
   }
 
   /**
    * Render satu frame komprehensif ke masterCanvas
-   * Mendukung TRUE FULL-SCREEN CINEMATIC (stage3d: false) & OPTIONAL 3D TV STAGE (stage3d: true)
+   * Mendukung MODE POLOS MURNI (pureBypassMode), TRUE FULL-SCREEN CINEMATIC (stage3d: false) & 3D TV STAGE
    */
   renderFrame(t, settings = {}) {
-    const is3dStage = Boolean(settings?.stage3d);
+    const isBypass = Boolean(settings?.pureBypassMode);
+    const is3dStage = !isBypass && Boolean(settings?.stage3d);
     const source = this.latestBitmap || this.codeCanvas;
 
     if (!is3dStage) {
-      // --- MODE FULLSCREEN SINEMATIK (DEFAULT) ---
       this.masterCtx.clearRect(0, 0, this.width, this.height);
 
       if (source) {
         this.masterCtx.drawImage(source, 0, 0, this.width, this.height);
       }
 
-      // Efek Awan & Partikel (di-render via offscreenThreeCanvas)
-      if (settings?.clouds || settings?.particles) {
-        this.codeGroup.visible = false;
-        this.bgMesh.visible = false;
+      if (!isBypass) {
+        if (settings?.clouds || settings?.particles) {
+          this.codeGroup.visible = false;
+          this.bgMesh.visible = false;
 
-        this.updateScene(t, settings);
-        this.renderer.render(this.scene, this.camera);
+          this.updateScene(t, settings);
+          this.renderer.render(this.scene, this.camera);
 
-        this.masterCtx.save();
-        this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
-        this.masterCtx.restore();
+          this.masterCtx.save();
+          this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
+          this.masterCtx.restore();
 
-        this.codeGroup.visible = true;
-        this.bgMesh.visible = true;
+          this.codeGroup.visible = true;
+          this.bgMesh.visible = true;
+        }
+
+        this.applyPostEffects(this.masterCtx, this.width, this.height, t, settings);
       }
 
-      // Polesan Sinematik: Vignette
-      if (settings?.vignette) {
-        const cx = this.width * 0.5;
-        const cy = this.height * 0.5;
-        const maxR = Math.max(this.width, this.height) * 0.65;
-        const vigGrad = this.masterCtx.createRadialGradient(cx, cy, maxR * 0.45, cx, cy, maxR);
-        vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
-        vigGrad.addColorStop(1, 'rgba(0,0,0,0.55)');
-        this.masterCtx.fillStyle = vigGrad;
-        this.masterCtx.fillRect(0, 0, this.width, this.height);
-      }
-
-      // Polesan Sinematik: Color Boost
-      if (settings?.colorBoost) {
-        this.masterCtx.save();
-        this.masterCtx.globalCompositeOperation = 'soft-light';
-        this.masterCtx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-        this.masterCtx.fillRect(0, 0, this.width, this.height);
-        this.masterCtx.restore();
-      }
-
-      // Overlay Tipografi HUD
-      if (settings?.hudEnabled) {
-        this.renderHud(settings);
-        this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
-      }
-
-      // Blit ke DOM Preview Canvas jika tersedia
       if (this.previewCtx) {
         this.previewCtx.clearRect(0, 0, this.width, this.height);
         this.previewCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
       }
     } else {
-      // --- MODE BINGKAI TV / PANGGUNG 3D ---
       if (this.latestBitmap) {
         this.codeCtx.clearRect(0, 0, this.width, this.height);
         this.codeCtx.drawImage(this.latestBitmap, 0, 0, this.width, this.height);
@@ -1563,7 +1654,7 @@ export class CodeToVideoCompositor {
 
       this.masterCtx.clearRect(0, 0, this.width, this.height);
       this.masterCtx.drawImage(this.offscreenThreeCanvas, 0, 0, this.width, this.height);
-      if (settings.hudEnabled) {
+      if (settings.hudEnabled || settings.watermarkEnabled) {
         this.masterCtx.drawImage(this.hudCanvas, 0, 0, this.width, this.height);
       }
 
@@ -1575,24 +1666,30 @@ export class CodeToVideoCompositor {
   }
 
   /**
-   * Render HANYA efek overlay (Awan, Partikel, Vignette, Color Boost, HUD)
-   * Digunakan oleh Transparent Overlay Canvas di atas Live Iframe
+   * Render HANYA efek overlay (Awan, Partikel, Vignette, Color Boost, Bloom, Grain, HUD)
+   * Otomatis kosong bila Mode Polos Murni aktif.
    */
   renderOverlayOnly(overlayCtx, width, height, t, settings) {
     if (!overlayCtx) return;
 
     overlayCtx.clearRect(0, 0, width, height);
+    if (settings?.pureBypassMode) return;
 
     const hasAnyOverlay =
       settings?.clouds ||
       settings?.particles ||
       settings?.vignette ||
       settings?.colorBoost ||
-      settings?.hudEnabled;
+      settings?.softBloom ||
+      settings?.filmGrain ||
+      settings?.fadeInOut ||
+      Number(settings?.contrastBoost) > 0 ||
+      Number(settings?.brightnessBoost) !== 0 ||
+      settings?.hudEnabled ||
+      settings?.watermarkEnabled;
 
     if (!hasAnyOverlay) return;
 
-    // Awan & Partikel via Three.js
     if (settings?.clouds || settings?.particles) {
       this.codeGroup.visible = false;
       this.bgMesh.visible = false;
@@ -1606,32 +1703,7 @@ export class CodeToVideoCompositor {
       this.bgMesh.visible = true;
     }
 
-    // Vignette
-    if (settings?.vignette) {
-      const cx = width * 0.5;
-      const cy = height * 0.5;
-      const maxR = Math.max(width, height) * 0.65;
-      const vigGrad = overlayCtx.createRadialGradient(cx, cy, maxR * 0.45, cx, cy, maxR);
-      vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
-      vigGrad.addColorStop(1, 'rgba(0,0,0,0.55)');
-      overlayCtx.fillStyle = vigGrad;
-      overlayCtx.fillRect(0, 0, width, height);
-    }
-
-    // Color Boost
-    if (settings?.colorBoost) {
-      overlayCtx.save();
-      overlayCtx.globalCompositeOperation = 'soft-light';
-      overlayCtx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-      overlayCtx.fillRect(0, 0, width, height);
-      overlayCtx.restore();
-    }
-
-    // HUD
-    if (settings?.hudEnabled) {
-      this.renderHud(settings);
-      overlayCtx.drawImage(this.hudCanvas, 0, 0, width, height);
-    }
+    this.applyPostEffects(overlayCtx, width, height, t, settings);
   }
 
   dispose() {
@@ -1835,9 +1907,13 @@ export async function exportVideo({
   onProgress,
   signal
 }) {
+  const safeDuration = Math.max(1, Math.min(Number(duration) || 10, 300));
   const { width, height } = computeTargetDimensions(resolution, aspectRatio);
-  const totalFrames = Math.max(1, Math.round(duration * fps));
+  const totalFrames = Math.max(1, Math.round(safeDuration * fps));
   const bitrate = BITRATE_PRESETS[bitratePreset] || BITRATE_PRESETS.high;
+  const effectiveSettings = settings?.pureBypassMode
+    ? { pureBypassMode: true, stage3d: false, motionSpeed: 1, totalDuration: safeDuration }
+    : { ...settings, totalDuration: safeDuration };
 
   // Sesuaikan resolusi master compositor ke piksel eksak
   compositor.resize(width, height);
@@ -1859,6 +1935,8 @@ export async function exportVideo({
   renderIframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
   document.body.appendChild(renderIframe);
 
+  let lastGoodBitmap = null;
+
   try {
     // Suntikkan kode & tunggu aset/CDN/font/image siap hingga maksimal 6 detik
     const readyPromise = new Promise((resolve) => {
@@ -1869,7 +1947,10 @@ export async function exportVideo({
         }
       };
       window.addEventListener('message', handler);
-      setTimeout(resolve, 6000);
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        resolve();
+      }, 6000);
     });
 
     renderIframe.srcdoc = compileUniversalCode(code, 'render', { width, height, cleanBg });
@@ -1901,7 +1982,6 @@ export async function exportVideo({
 
       let encoderError = null;
 
-      // Sanitasi Metadata decoderConfig (kebal error colorSpace is null)
       const videoEncoder = new VideoEncoder({
         output: (chunk, meta) => {
           if (meta && meta.decoderConfig && typeof meta.decoderConfig === 'object') {
@@ -1927,13 +2007,12 @@ export async function exportVideo({
       videoEncoder.configure(encoderSpec.config);
 
       const startTime = performance.now();
-      const spd = settings.motionSpeed || 1.0;
+      const spd = effectiveSettings.motionSpeed || 1.0;
       const dtSec = (1 / fps) * spd;
-      let lastGoodBitmap = null;
 
       for (let i = 0; i < totalFrames; i++) {
         if (signal?.aborted) {
-          videoEncoder.close();
+          try { videoEncoder.close(); } catch {}
           throw new Error('Proses render dibatalkan oleh pengguna.');
         }
 
@@ -1944,7 +2023,6 @@ export async function exportVideo({
         const simTime = (i / fps) * spd;
         const timeMs = simTime * 1000;
 
-        // Step render iframe: frame awal diberi timeout 5s untuk inisialisasi berat
         let frameBitmap = null;
         try {
           frameBitmap = await stepRenderIframe(renderIframe, i, timeMs, dtSec, width, height, i === 0 ? 5000 : 3000);
@@ -1953,16 +2031,17 @@ export async function exportVideo({
         }
 
         if (frameBitmap) {
+          if (lastGoodBitmap && lastGoodBitmap !== frameBitmap) {
+            try { lastGoodBitmap.close(); } catch {}
+          }
           compositor.updateBitmap(frameBitmap);
           lastGoodBitmap = frameBitmap;
         } else if (lastGoodBitmap) {
           compositor.updateBitmap(lastGoodBitmap);
         }
 
-        // Komposisikan frame ke master canvas
-        compositor.renderFrame(simTime, settings);
+        compositor.renderFrame(simTime, effectiveSettings);
 
-        // Encode ke WebCodecs dengan timestamp eksak mikrodetik
         const timestampMicros = Math.round((i * 1_000_000) / fps);
         const frameDurationMicros = Math.round(1_000_000 / fps);
         const isKeyFrame = i % Math.max(1, Math.round(fps * 2)) === 0;
@@ -1972,19 +2051,22 @@ export async function exportVideo({
           duration: frameDurationMicros
         });
 
-        videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
-        videoFrame.close();
-
-        if (frameBitmap && frameBitmap !== lastGoodBitmap) {
-          try { frameBitmap.close(); } catch {}
+        try {
+          videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
+        } finally {
+          videoFrame.close();
         }
 
-        // Backpressure antrean encode
+        // Backpressure ketat agar RAM aman meski merender 10.000+ frame (hingga 5 menit)
         while (videoEncoder.encodeQueueSize >= 4) {
+          if (signal?.aborted) {
+            try { videoEncoder.close(); } catch {}
+            throw new Error('Proses render dibatalkan oleh pengguna.');
+          }
           await new Promise((r) => setTimeout(r, 4));
         }
 
-        // Yield ke UI tiap 2 frame agar progress bar mulus tanpa membekukan tab
+        // Yield ke UI tiap 2 frame agar tombol Batalkan Render & progress bar tetap responsif
         if (i % 2 === 0) {
           await new Promise((r) => setTimeout(r, 0));
         }
@@ -2000,7 +2082,9 @@ export async function exportVideo({
             frame: framesDone,
             totalFrames,
             percent,
-            timeRemainingSec
+            timeRemainingSec,
+            currentVideoTimeSec: Math.min(safeDuration, framesDone / fps),
+            totalVideoDurationSec: safeDuration
           });
         }
       }
@@ -2022,7 +2106,7 @@ export async function exportVideo({
         sizeMB,
         width,
         height,
-        duration,
+        duration: safeDuration,
         engineName: `WebCodecs Deterministik (${encoderSpec.format.toUpperCase()} • ${fps} FPS Exact)`
       };
     }
@@ -2079,8 +2163,8 @@ export async function exportVideo({
 
         const startTime = performance.now();
         const intervalMs = 1000 / fps;
-        const totalMs = duration * 1000;
-        const spd = settings.motionSpeed || 1.0;
+        const totalMs = safeDuration * 1000;
+        const spd = effectiveSettings.motionSpeed || 1.0;
 
         const timer = setInterval(() => {
           const elapsed = performance.now() - startTime;
@@ -2098,7 +2182,7 @@ export async function exportVideo({
           }
 
           const simTime = (elapsed / 1000) * spd;
-          compositor.renderFrame(simTime, settings);
+          compositor.renderFrame(simTime, effectiveSettings);
 
           if (onProgress) {
             const percent = Math.min(100, Math.round((elapsed / totalMs) * 100));
@@ -2107,7 +2191,9 @@ export async function exportVideo({
               frame: Math.round((elapsed / 1000) * fps),
               totalFrames,
               percent,
-              timeRemainingSec
+              timeRemainingSec,
+              currentVideoTimeSec: Math.min(safeDuration, elapsed / 1000),
+              totalVideoDurationSec: safeDuration
             });
           }
         }, intervalMs);
@@ -2116,7 +2202,10 @@ export async function exportVideo({
       }
     });
   } finally {
-    // Hapus render iframe baru dari DOM agar RAM selalu bersih
+    if (lastGoodBitmap) {
+      try { lastGoodBitmap.close(); } catch {}
+      lastGoodBitmap = null;
+    }
     if (renderIframe && renderIframe.parentNode) {
       renderIframe.parentNode.removeChild(renderIframe);
     }

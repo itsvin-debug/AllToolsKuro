@@ -541,10 +541,10 @@ export function parseKuroStudioProjectJson(rawText = '') {
     selectedTemplateId: typeof parsed.selectedTemplateId === 'string' ? parsed.selectedTemplateId : 'promo-ad',
     universalCode: typeof parsed.universalCode === 'string' ? parsed.universalCode : '',
     promptInput: typeof parsed.promptInput === 'string' ? parsed.promptInput : '',
-    promptOptions: {
-      visualStyle: parsed.promptOptions?.visualStyle || 'auto',
-      mood: parsed.promptOptions?.mood || 'auto'
-    },
+    promptOptions:
+      parsed.promptOptions && typeof parsed.promptOptions === 'object'
+        ? { ...parsed.promptOptions }
+        : {},
     settings: parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : null,
     exportOptions: parsed.exportOptions && typeof parsed.exportOptions === 'object' ? parsed.exportOptions : null
   };
