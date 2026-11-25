@@ -4,6 +4,8 @@
  * agar bekerja konsisten di Desktop (Chrome/Firefox/Safari), Mobile Browser, dan Android WebView.
  */
 
+import { getApiBaseUrl } from '../config/apiConfig.js';
+
 const REVOKE_DELAY_MS = 30000;
 
 const MIME_TO_EXT = {
@@ -216,4 +218,82 @@ export async function downloadFromUrl(fileUrl, filename = 'kuro_download') {
   link.remove();
 
   return { ok: true, filename: safeName, fallbackAnchor: true };
+}
+
+/**
+ * downloadMediaViaProxy — Unduh media dari URL eksternal (TikTok, IG, YT, dll.)
+ * melalui /api/proxy-download dengan validasi content-type anti-HTML,
+ * fallback ke wa-backend jika Vercel gagal, dan state loading untuk UI.
+ *
+ * @param {object} options
+ * @param {string} options.url            - URL CDN media target
+ * @param {string} [options.filename]     - Nama file tujuan (tanpa harus ada ekstensi)
+ * @param {function} [options.onLoading]  - Callback(true/false) untuk state loading tombol
+ * @param {function} [options.onError]    - Callback(message) untuk tampil toast error
+ * @returns {Promise<{ok:boolean, filename?:string, sizeBytes?:number}>}
+ */
+export async function downloadMediaViaProxy({ url, filename = 'kuro-media', onLoading, onError } = {}) {
+  if (!url || typeof url !== 'string' || !url.trim()) {
+    const msg = 'URL media tidak valid atau kosong.';
+    onError?.(msg);
+    throw new Error(msg);
+  }
+
+  const urlExtMatch = url.split('?')[0].split('#')[0].match(/\.([a-zA-Z0-9]{2,8})$/);
+  const fallbackExt = urlExtMatch ? urlExtMatch[1].toLowerCase() : 'mp4';
+  const safeName = sanitizeFilename(filename, fallbackExt);
+
+  onLoading?.(true);
+
+  const proxyEndpoints = [
+    `/api/proxy-download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(safeName)}`,
+  ];
+
+  // Fallback ke wa-backend jika tersedia (untuk video HD besar > 4.5MB yang melebihi limit Vercel)
+  try {
+    const backendBase = getApiBaseUrl();
+    if (backendBase && typeof window !== 'undefined' && backendBase !== window.location.origin) {
+      proxyEndpoints.push(
+        `${backendBase}/api/proxy-download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(safeName)}`
+      );
+    }
+  } catch {
+    // getApiBaseUrl tidak tersedia atau tidak ada backend tambahan — abaikan
+  }
+
+  let lastError = null;
+  for (const proxyUrl of proxyEndpoints) {
+    try {
+      const res = await fetch(proxyUrl);
+
+      // Tolak jika bukan respons sukses
+      if (!res.ok) {
+        lastError = `Server mengembalikan HTTP ${res.status}`;
+        continue;
+      }
+
+      // Tolak jika content-type adalah HTML (artinya halaman 404/error, bukan media)
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('text/html')) {
+        lastError = 'Server mengembalikan halaman HTML, bukan berkas media. Link mungkin kedaluwarsa.';
+        continue;
+      }
+
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) {
+        lastError = 'Berkas yang diterima kosong (0 byte).';
+        continue;
+      }
+
+      onLoading?.(false);
+      return downloadBlob(blob, safeName);
+    } catch (err) {
+      lastError = err?.message || 'Gagal terhubung ke server proxy.';
+    }
+  }
+
+  onLoading?.(false);
+  const finalMsg = lastError || 'Semua jalur unduhan gagal. Silakan coba lagi atau proses ulang link.';
+  onError?.(finalMsg);
+  throw new Error(finalMsg);
 }

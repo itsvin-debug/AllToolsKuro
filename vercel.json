@@ -73,28 +73,36 @@
       "destination": "/api/media?type=manhwa"
     },
     {
+      "source": "/api/proxy-download",
+      "destination": "/api/proxy-download"
+    },
+    {
       "source": "/api/proxy-stream",
-      "destination": "/api/media?__route=proxy-download&stream=true"
+      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/proxy-doc-image",
-      "destination": "/api/media?__route=proxy-download&stream=true"
+      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/tools/image-proxy",
-      "destination": "/api/media?__route=proxy-download&stream=true"
+      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/image-proxy",
-      "destination": "/api/media?__route=proxy-download&stream=true"
+      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/tools/tiktok-avatar",
-      "destination": "/api/media?__route=proxy-download&stream=true"
+      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/tiktok-avatar",
-      "destination": "/api/media?__route=proxy-download&stream=true"
+      "destination": "/api/proxy-download?stream=true"
+    },
+    {
+      "source": "/api/stalk/image-proxy",
+      "destination": "/api/proxy-download?stream=true"
     },
     {
       "source": "/api/jj/find",

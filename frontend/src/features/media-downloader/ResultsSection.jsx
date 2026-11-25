@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import CosmicBackButton from '../../shared/components/CosmicBackButton';
 import { addGalleryItem } from '../../shared/utils/storageService';
-import { downloadBlob, downloadFromUrl } from '../../shared/utils/fileDownload';
+import { downloadBlob, downloadFromUrl, downloadMediaViaProxy } from '../../shared/utils/fileDownload';
 import {
   Download,
   ChevronLeft,
@@ -445,12 +445,37 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
     });
   };
 
-  // Pemicu unduhan langsung menggunakan shared downloadFromUrl / downloadBlob agar aman lintas browser & WebView
-  const triggerNativeDownload = (url, filename) => {
-    downloadFromUrl(url, filename).catch((err) => {
-      console.warn('Gagal memicu unduhan media:', err);
-      window.open(url, '_blank', 'noopener,noreferrer');
-    });
+  // State error/toast untuk proxy download
+  const [proxyError, setProxyError] = useState('');
+
+  // Pemicu unduhan via /api/proxy-download dengan validasi content-type anti-HTML,
+  // fallback otomatis ke wa-backend jika Vercel gagal, dan state loading per tombol.
+  const triggerNativeDownload = async (url, filename, mediaId = null) => {
+    const id = mediaId || filename || 'dl';
+    setDownloadingId(id);
+    setProxyError('');
+    setDownloadProgress(prev => ({ ...prev, [id]: 20 }));
+
+    try {
+      await downloadMediaViaProxy({
+        url,
+        filename,
+        onLoading: () => setDownloadProgress(prev => ({ ...prev, [id]: 60 })),
+        onError: (msg) => setProxyError(msg),
+      });
+      setDownloadProgress(prev => ({ ...prev, [id]: 100 }));
+    } catch {
+      // onError sudah dipanggil di dalam downloadMediaViaProxy
+    } finally {
+      setTimeout(() => {
+        setDownloadingId(null);
+        setDownloadProgress(prev => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }, 700);
+    }
   };
 
   const downloadPhotoSlide = async (slideItem, index) => {
@@ -558,7 +583,7 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
 
     // Langsung picu unduhan native browser agar masuk ke memori/folder Downloads tanpa jeda timeout async
     setDownloadProgress(prev => ({ ...prev, [mediaId]: 70 }));
-    triggerNativeDownload(proxyUrl, filename);
+    triggerNativeDownload(proxyUrl, filename, mediaId);
 
     setDownloadProgress(prev => ({ ...prev, [mediaId]: 100 }));
     setTimeout(() => {
@@ -755,6 +780,22 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
 
   return (
     <div className="w-full flex flex-col gap-5 mt-2">
+
+      {/* Toast error proxy download */}
+      {proxyError && (
+        <div className="w-full border-2 border-red-600 bg-red-50 rounded-xl p-3 flex items-start gap-2 shadow-[2px_2px_0px_#dc2626]">
+          <span className="text-red-600 font-black text-base leading-none shrink-0 mt-0.5">!</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-red-700 leading-snug break-words">{proxyError}</p>
+            <p className="text-xs text-red-500 mt-0.5">Coba klik <strong>Proses Ulang</strong> untuk mendapatkan link unduhan baru.</p>
+          </div>
+          <button
+            onClick={() => setProxyError('')}
+            className="shrink-0 text-red-500 hover:text-red-700 font-black text-sm leading-none cursor-pointer"
+            aria-label="Tutup notifikasi"
+          >✕</button>
+        </div>
+      )}
 
       {/* ─── 1. MULTI-CONTENT SLIDE CAROUSEL (FOTO, VIDEO SLIDE, & LIVE WALLPAPER) ─── */}
       {(isMultiContentPost || isLiveWallpaperOnly) && activeSlideList.length > 0 && (
