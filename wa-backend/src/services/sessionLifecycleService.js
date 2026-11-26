@@ -20,6 +20,18 @@ function startLifecycleTimers(io) {
           const keys = Array.from(session.msgCache.keys()).slice(0, session.msgCache.size - 30);
           for (const k of keys) session.msgCache.delete(k);
         }
+        if (session.sentMessageStore) {
+          const nowTs = Date.now();
+          for (const [msgId, entry] of session.sentMessageStore.entries()) {
+            if (!entry || nowTs - (entry.storedAt || 0) > 15 * 60 * 1000) {
+              session.sentMessageStore.delete(msgId);
+            }
+          }
+          if (session.sentMessageStore.size > 20) {
+            const keys = Array.from(session.sentMessageStore.keys()).slice(0, session.sentMessageStore.size - 20);
+            for (const k of keys) session.sentMessageStore.delete(k);
+          }
+        }
         if (session.statusPointers) {
           const maxPointers = isIdleSession ? 40 : 100;
           if (session.statusPointers.size > maxPointers) {

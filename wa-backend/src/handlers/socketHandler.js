@@ -559,6 +559,7 @@ function registerSocketHandlers(io) {
           session.statusPointers?.clear();
           session.pendingMedia = [];
           session.msgCache?.clear();
+          session.sentMessageStore?.clear();
         }
 
         removeSessionDir(sessionId);

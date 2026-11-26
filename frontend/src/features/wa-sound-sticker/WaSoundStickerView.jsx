@@ -116,6 +116,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
   const [sendProgress, setSendProgress] = useState({ active: false, label: '', percent: 0 });
   const [lastSendResult, setLastSendResult] = useState(null);
+  const [deliveryStatus, setDeliveryStatus] = useState(null);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
   const [detectedSchema, setDetectedSchema] = useState(null);
   const [copiedSchema, setCopiedSchema] = useState(false);
@@ -271,11 +272,24 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       onShowToast?.('Skema stiker suara asli berhasil dideteksi!', 'success');
     });
 
+    sock.on('sound-sticker-delivery-update', (upd) => {
+      if (unmounted || !upd?.messageId) return;
+      setDeliveryStatus((prev) => {
+        if (prev?.messageId && prev.messageId !== upd.messageId) return prev;
+        return upd;
+      });
+    });
+
     sock.on('sound-sticker-result', (res) => {
       if (unmounted) return;
       setSendProgress({ active: false, label: '', percent: 0 });
       if (res?.ok) {
         setLastSendResult(res);
+        setDeliveryStatus((prev) =>
+          prev?.messageId === res.messageId
+            ? prev
+            : { messageId: res.messageId, status: 1, label: 'Terkirim via E2EE (menunggu ACK perangkat)' }
+        );
         setWaError(null);
         onShowToast?.('Stiker terkirim ke WA Anda via jalur native stickerMessage!', 'success');
       } else {
@@ -589,6 +603,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     setConnectedPhone('');
     setPairingCode('');
     setQrCodeDataUrl('');
+    setLastSendResult(null);
+    setDeliveryStatus(null);
     setConnectionStatus('disconnected');
   };
 
@@ -610,6 +626,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     setWaError(null);
     setLastSendResult(null);
+    setDeliveryStatus(null);
     setSendProgress({ active: true, label: 'Memvalidasi Visual 512×512...', percent: 15 });
 
     try {
@@ -1284,9 +1301,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
             {lastSendResult?.ok && (
               <div className="p-2.5 bg-emerald-100 border-2 border-black text-emerald-950 text-[11px] font-semibold space-y-1">
-                <div className="font-black flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                  <span>Stiker terkirim ke chat WA Anda sendiri!</span>
+                <div className="font-black flex items-center justify-between gap-1.5 flex-wrap">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>{deliveryStatus?.label || 'Stiker terkirim ke chat WA Anda sendiri!'}</span>
+                  </span>
+                  {lastSendResult.messageId && (
+                    <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white border border-black">
+                      #{String(lastSendResult.messageId).slice(-8)}
+                    </span>
+                  )}
                 </div>
                 {lastSendResult.waProtoSupportsAudio === false && (
                   <p className="text-[10px] text-neutral-800 leading-snug">

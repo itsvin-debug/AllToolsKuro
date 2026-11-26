@@ -1,10 +1,14 @@
 const baileysModule = require('@whiskeysockets/baileys');
 const { sessions } = require('../state/sessionStore');
 const { verifyDeviceOwner, emitToDevice } = require('../services/deviceAuthService');
+const { rememberSentMessage } = require('./whatsappSessionHandler');
 
 const {
+  proto,
   prepareWAMessageMedia,
   generateWAMessageFromContent,
+  generateMessageIDV2,
+  generateMessageID,
   downloadContentFromMessage,
   jidNormalizedUser: baileysJidNorm
 } = baileysModule;
@@ -20,8 +24,80 @@ const jidNormalizedUser =
 const MAX_STICKER_BYTES = 1.5 * 1024 * 1024;
 const RATE_LIMIT_MS = 4000;
 const CALIBRATION_WINDOW_MS = 120 * 1000;
+const DELIVERY_WATCH_MS = 15 * 1000;
 
 const lastStickerSendAt = new Map();
+
+function validateStickerWebpBuffer(buf) {
+  if (!buf || buf.length < 12) {
+    throw new Error('Berkas stiker WebP terlalu pendek atau rusak.');
+  }
+  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WEBP') {
+    throw new Error('Header stiker bukan WebP RIFF yang valid.');
+  }
+  let offset = 12;
+  let hasAnimChunk = false;
+  let hasImageFrame = false;
+  while (offset + 8 <= buf.length) {
+    const fourCC = buf.toString('ascii', offset, offset + 4);
+    const size = buf.readUInt32LE(offset + 4);
+    if (fourCC === 'ANIM' || fourCC === 'ANMF') {
+      hasAnimChunk = true;
+    }
+    if (fourCC === 'VP8 ' || fourCC === 'VP8L' || fourCC === 'ANMF') {
+      hasImageFrame = true;
+    }
+    offset += 8 + size + (size % 2);
+  }
+  if (!hasImageFrame) {
+    throw new Error('Stiker WebP tidak memiliki frame gambar yang valid.');
+  }
+  return { isAnimatedBitstream: hasAnimChunk };
+}
+
+function attachStickerDeliveryWatcher(io, sessionId, session, messageId) {
+  const sock = session?.sock;
+  if (!sock?.ev || !messageId) return;
+
+  const statusLabels = {
+    2: 'Terkirim ke server WhatsApp',
+    3: 'Terkirim ke perangkat WA Anda',
+    4: 'Dibaca di perangkat WA Anda'
+  };
+
+  let timer = null;
+  const onMessagesUpdate = (updates) => {
+    if (!Array.isArray(updates)) return;
+    for (const upd of updates) {
+      if (upd?.key?.id !== messageId) continue;
+      const st = Number(upd?.update?.status);
+      if (st >= 2) {
+        emitToDevice(io, sessionId, 'sound-sticker-delivery-update', {
+          messageId,
+          status: st,
+          label: statusLabels[st] || 'Terkirim'
+        });
+        if (st >= 3) {
+          cleanup();
+          break;
+        }
+      }
+    }
+  };
+
+  const cleanup = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    try {
+      sock.ev.off('messages.update', onMessagesUpdate);
+    } catch (_) {}
+  };
+
+  sock.ev.on('messages.update', onMessagesUpdate);
+  timer = setTimeout(cleanup, DELIVERY_WATCH_MS);
+}
 
 function decodeBoundedBase64(rawInput, maxBytes, label) {
   if (!rawInput || typeof rawInput !== 'string') {
@@ -221,7 +297,13 @@ function registerStickerSenderHandler(io, socket) {
       if (!tokenHash) return;
 
       const session = sessions.get(sessionId);
-      if (!session || session.status !== 'connected' || !session.sock || !session.sock.user?.id) {
+      if (
+        !session ||
+        session.status !== 'connected' ||
+        !session.sock ||
+        !session.sock.user?.id ||
+        !session.sock.authState?.creds?.registered
+      ) {
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
           error: 'Perangkat WhatsApp belum tertaut aktif. Tautkan WhatsApp Anda terlebih dahulu.'
@@ -247,15 +329,19 @@ function registerStickerSenderHandler(io, socket) {
       }
 
       stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_STICKER_BYTES, 'stiker WebP 512x512');
+      const { isAnimatedBitstream } = validateStickerWebpBuffer(stickerBuf);
+      const actualAnimated = Boolean(isAnimatedBitstream);
+      const safeWidth = Math.max(16, Math.min(1024, Number(width) || 512));
+      const safeHeight = Math.max(16, Math.min(1024, Number(height) || 512));
 
-      // Kirim murni melalui jalur native `stickerMessage` (prepareWAMessageMedia + generateWAMessageFromContent + relayMessage)
+      // Kirim murni melalui jalur native `stickerMessage` dengan validasi protobuf & retry store E2EE
       const mediaMsg = await prepareWAMessageMedia(
         {
           sticker: stickerBuf,
           mimetype: 'image/webp',
-          isAnimated: Boolean(isAnimated),
-          width: Number(width) || 512,
-          height: Number(height) || 512
+          isAnimated: actualAnimated,
+          width: safeWidth,
+          height: safeHeight
         },
         {
           upload: session.sock.waUploadToServer,
@@ -264,22 +350,51 @@ function registerStickerSenderHandler(io, socket) {
       );
       stickerBuf = null;
 
-      if (mediaMsg?.stickerMessage) {
-        mediaMsg.stickerMessage.isAnimated = Boolean(isAnimated);
-        mediaMsg.stickerMessage.width = Number(width) || 512;
-        mediaMsg.stickerMessage.height = Number(height) || 512;
-        mediaMsg.stickerMessage.stickerSentTs = Date.now();
+      if (!mediaMsg?.stickerMessage) {
+        throw new Error('Gagal mengunggah media stiker ke CDN WhatsApp.');
       }
 
-      const waMsg = generateWAMessageFromContent(selfJid, mediaMsg, { userJid: selfJid });
-      await session.sock.relayMessage(selfJid, waMsg.message, { messageId: waMsg.key.id });
+      mediaMsg.stickerMessage.mimetype = 'image/webp';
+      mediaMsg.stickerMessage.isAnimated = actualAnimated;
+      mediaMsg.stickerMessage.width = safeWidth;
+      mediaMsg.stickerMessage.height = safeHeight;
+      mediaMsg.stickerMessage.stickerSentTs = Date.now();
+
+      const userJid = session.sock.authState?.creds?.me?.id || selfJid;
+      const customMsgId =
+        typeof generateMessageIDV2 === 'function'
+          ? generateMessageIDV2(session.sock.user.id)
+          : typeof generateMessageID === 'function'
+            ? generateMessageID()
+            : undefined;
+
+      const waMsg = generateWAMessageFromContent(selfJid, mediaMsg, {
+        userJid,
+        ...(customMsgId ? { messageId: customMsgId } : {})
+      });
+
+      const verifyErr = proto?.Message?.verify?.(waMsg.message);
+      if (verifyErr) {
+        throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
+      }
+
+      // Wajib cache sebelum relayMessage agar Signal retry receipt tidak pernah jatuh ke payload kosong
+      rememberSentMessage(session, waMsg.key.id, waMsg.message);
+      attachStickerDeliveryWatcher(io, sessionId, session, waMsg.key.id);
+
+      await session.sock.relayMessage(selfJid, waMsg.message, {
+        messageId: waMsg.key.id,
+        useUserDevicesCache: false
+      });
 
       session.lastActive = Date.now();
       lastStickerSendAt.set(sessionId, Date.now());
 
       emitToDevice(io, sessionId, 'sound-sticker-result', {
         ok: true,
+        messageId: waMsg.key.id,
         protocol: 'native-stickerMessage',
+        isAnimated: actualAnimated,
         waProtoSupportsAudio: false,
         needsSchemaCalibration: true,
         selfJid,

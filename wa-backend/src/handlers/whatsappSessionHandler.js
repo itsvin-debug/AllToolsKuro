@@ -32,6 +32,56 @@ const {
   processIncomingStatusMessage
 } = require('../services/vaultService');
 
+const SENT_MSG_MAX_ENTRIES = 40;
+const SENT_MSG_TTL_MS = 15 * 60 * 1000;
+
+// Cache pesan keluar ringan di RAM untuk Signal retry receipt E2EE (maks 40 entri FIFO, TTL 15 menit)
+function pruneSentMessageStore(session, now = Date.now(), maxEntries = SENT_MSG_MAX_ENTRIES) {
+  const store = session?.sentMessageStore;
+  if (!store || store.size === 0) return;
+
+  for (const [id, entry] of store.entries()) {
+    if (!entry || !entry.message || now - (entry.storedAt || 0) > SENT_MSG_TTL_MS) {
+      store.delete(id);
+    }
+  }
+
+  while (store.size > maxEntries) {
+    const oldestKey = store.keys().next().value;
+    if (oldestKey === undefined) break;
+    store.delete(oldestKey);
+  }
+}
+
+function rememberSentMessage(session, messageId, protoMessage) {
+  if (!session || !messageId || !protoMessage || typeof protoMessage !== 'object') return false;
+  if (!session.sentMessageStore) {
+    session.sentMessageStore = new Map();
+  }
+
+  const normalized = proto?.Message?.fromObject ? proto.Message.fromObject(protoMessage) : protoMessage;
+  if (session.sentMessageStore.has(messageId)) {
+    session.sentMessageStore.delete(messageId);
+  }
+  pruneSentMessageStore(session, Date.now(), SENT_MSG_MAX_ENTRIES - 1);
+  session.sentMessageStore.set(messageId, {
+    message: normalized,
+    storedAt: Date.now()
+  });
+  return true;
+}
+
+function getSentMessage(session, messageId) {
+  if (!session?.sentMessageStore || !messageId) return undefined;
+  const entry = session.sentMessageStore.get(messageId);
+  if (!entry) return undefined;
+  if (Date.now() - (entry.storedAt || 0) > SENT_MSG_TTL_MS) {
+    session.sentMessageStore.delete(messageId);
+    return undefined;
+  }
+  return entry.message;
+}
+
 async function startBaileys(
   io,
   sessionId,
@@ -103,6 +153,7 @@ async function startBaileys(
       unmappedLidQueue: new Map(),
       pendingUnavailableIds: new Set(),
       msgCache: new Map(),
+      sentMessageStore: new Map(),
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
       statusPointers: new Map(),
       pendingMedia: [],
@@ -147,6 +198,7 @@ async function startBaileys(
     if (!session.unmappedLidQueue) session.unmappedLidQueue = new Map();
     if (!session.pendingUnavailableIds) session.pendingUnavailableIds = new Set();
     if (!session.msgCache) session.msgCache = new Map();
+    if (!session.sentMessageStore) session.sentMessageStore = new Map();
     if (!session.statusPointers) session.statusPointers = new Map();
     if (!session.msgRetryCounterCache) {
       session.msgRetryCounterCache = new NodeCache({ stdTTL: 600, useClones: false });
@@ -180,6 +232,7 @@ async function startBaileys(
       session.unmappedLidQueue?.clear();
       session.pendingUnavailableIds?.clear();
       session.msgCache?.clear();
+      session.sentMessageStore?.clear();
       session.statusPointers?.clear();
       session.pendingMedia = [];
       removeSessionDir(sessionId);
@@ -221,7 +274,7 @@ async function startBaileys(
       browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
       shouldIgnoreJid: (jid) => {
-        if (!jid) return true;
+        if (!jid) return false;
         return jid.endsWith('@g.us') || jid.endsWith('@newsletter');
       },
       shouldSyncHistoryMessage: (historyMsg) => {
@@ -239,9 +292,13 @@ async function startBaileys(
       logger: pinoSilent,
       printQRInTerminal: false,
       getMessage: async (key) => {
-        const cached = session.msgCache?.get(key?.id);
+        const id = key?.id;
+        if (!id) return undefined;
+        const sent = getSentMessage(session, id);
+        if (sent) return sent;
+        const cached = session.msgCache?.get(id);
         if (cached) return cached;
-        return proto?.Message?.fromObject ? proto.Message.fromObject({}) : undefined;
+        return undefined;
       }
     });
 
@@ -430,6 +487,7 @@ async function startBaileys(
           session.statusPointers?.clear();
           session.pendingMedia = [];
           session.msgCache?.clear();
+          session.sentMessageStore?.clear();
         }
         session.accountJid = accountJid;
         session.phone = phone;
@@ -480,6 +538,8 @@ async function startBaileys(
             clearTimeout(session.authSyncTimer);
             session.authSyncTimer = null;
           }
+          session.msgCache?.clear();
+          session.sentMessageStore?.clear();
           removeSessionDir(sessionId);
           sessions.delete(sessionId);
           emitToDevice(io, sessionId, 'session-status', {
@@ -824,5 +884,8 @@ async function startBaileys(
 }
 
 module.exports = {
-  startBaileys
+  startBaileys,
+  rememberSentMessage,
+  getSentMessage,
+  pruneSentMessageStore
 };
