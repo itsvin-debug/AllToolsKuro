@@ -48,7 +48,6 @@ import {
   getVaultStorageStats,
   pruneExpiredStatuses,
   getDeviceAuthRecord,
-  getAnyDeviceAuthRecord,
   saveDeviceAuthRecord,
   saveDeviceAuthSnapshot,
   loadDeviceAuthSnapshot,
@@ -110,6 +109,12 @@ function normalizePhone(raw) {
     digits = '62' + digits;
   }
   return digits;
+}
+
+function normalizeAccountKey(rawJid = '', phone = '') {
+  const raw = String(phone || rawJid || '').split('@')[0].split(':')[0];
+  const digits = normalizePhone(raw);
+  return digits ? `${digits}@s.whatsapp.net` : '';
 }
 
 // Format waktu pengiriman asli dari WhatsApp (23 Nov 2026 • 14:20 WIB)
@@ -249,6 +254,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const [confirmLogout, setConfirmLogout] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // disconnected | connecting | generating_qr | pairing_ready | qr_ready | connected | reconnecting
   const [connectedPhone, setConnectedPhone] = useState(null);
+  const [linkedAccountJid, setLinkedAccountJid] = useState('');
   const [backendError, setBackendError] = useState(null);
   const [vaultActivity, setVaultActivity] = useState(null);
   const [unmappedLidAlert, setUnmappedLidAlert] = useState(null);
@@ -290,6 +296,22 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
   const socketRef = useRef(null);
   const backendUrl = import.meta.env.VITE_WA_BACKEND_URL || 'http://localhost:4000';
 
+  // Otorisasi Zero-Trust & Scoping Ketat (deviceId::accountJid)
+  const normalizedAccount = useMemo(
+    () => normalizeAccountKey(linkedAccountJid, connectedPhone),
+    [linkedAccountJid, connectedPhone]
+  );
+  const activeOwnerScope = sessionId && normalizedAccount ? `${sessionId}::${normalizedAccount}` : '';
+  const isVaultUnlocked =
+    connectionStatus === 'connected' &&
+    Boolean(normalizedAccount) &&
+    Boolean(activeOwnerScope);
+
+  const activeOwnerScopeRef = useRef(activeOwnerScope);
+  useEffect(() => {
+    activeOwnerScopeRef.current = isVaultUnlocked ? activeOwnerScope : '';
+  }, [isVaultUnlocked, activeOwnerScope]);
+
   const startQrWatchdog = () => {
     if (qrWatchdogRef.current) clearTimeout(qrWatchdogRef.current);
     setQrGenerating(true);
@@ -323,26 +345,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     async function bootVault() {
       try {
-        let curId = deviceIdRef.current;
-        let curToken = deviceTokenRef.current;
+        const curId = deviceIdRef.current;
+        const curToken = deviceTokenRef.current;
         const existingRecord = await getDeviceAuthRecord(curId);
-        if (!existingRecord) {
-          const fallbackRecord = await getAnyDeviceAuthRecord();
-          if (fallbackRecord && fallbackRecord.deviceId && fallbackRecord.deviceToken) {
-            curId = fallbackRecord.deviceId;
-            curToken = fallbackRecord.deviceToken;
-            localStorage.setItem(STORAGE_SESSION_ID, curId);
-            localStorage.setItem(STORAGE_DEVICE_TOKEN, curToken);
-            deviceIdRef.current = curId;
-            deviceTokenRef.current = curToken;
-            if (mounted) {
-              setSessionId(curId);
-              setDeviceToken(curToken);
-            }
-          } else {
-            await saveDeviceAuthRecord({ deviceId: curId, deviceToken: curToken });
-          }
-        } else if (!existingRecord.deviceToken) {
+        if (!existingRecord || !existingRecord.deviceToken) {
           await saveDeviceAuthRecord({ deviceId: curId, deviceToken: curToken });
         }
 
@@ -351,15 +357,9 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           hasSavedAuthRef.current = true;
           setHasSavedAuth(true);
         }
-
-        const cachedContacts = await getContactsMap();
-        if (mounted && cachedContacts && Object.keys(cachedContacts).length > 0) {
-          savedContactsMapRef.current = cachedContacts;
-          setSavedContactsMap(cachedContacts);
-        }
       } catch (_) {}
 
-      await loadSavedMedia();
+      // Zero-Trust: DILARANG memuat histori SW/chat/kontak sebelum WhatsApp terhubung aktif
       if (mounted) {
         initSocketConnection();
       }
@@ -397,10 +397,49 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     };
   }, []);
 
-  // Update storage metrics saat mediaList berubah
+  // Sinkronisasi Zero-Trust Vault: Muat data HANYA saat tertaut aktif & bersihkan state saat terkunci
   useEffect(() => {
-    getVaultStorageStats().then(setVaultStats).catch(() => {});
-  }, [mediaList]);
+    let active = true;
+    if (!isVaultUnlocked || !activeOwnerScope) {
+      setMediaList([]);
+      savedContactsMapRef.current = {};
+      setSavedContactsMap({});
+      setPreviewMedia(null);
+      setStoryViewerIndex(null);
+      setSelectedStatusContact('all');
+      setSearchQuery('');
+      setConfirmClearTab(null);
+      setVaultStats({ totalItems: 0, statusCount: 0, estimatedMB: '0.00' });
+      return undefined;
+    }
+
+    async function hydrateScopedVault() {
+      try {
+        const [contacts, items] = await Promise.all([
+          getContactsMap(activeOwnerScope),
+          getAllMediaItems(activeOwnerScope)
+        ]);
+        if (!active) return;
+        savedContactsMapRef.current = contacts || {};
+        setSavedContactsMap(contacts || {});
+        setMediaList(items || []);
+      } catch (err) {
+        console.error('Gagal memuat data vault terisolasi:', err);
+      }
+    }
+
+    hydrateScopedVault();
+    return () => { active = false; };
+  }, [isVaultUnlocked, activeOwnerScope]);
+
+  // Update storage metrics saat mediaList berubah pada scope aktif
+  useEffect(() => {
+    if (!isVaultUnlocked || !activeOwnerScope) {
+      setVaultStats({ totalItems: 0, statusCount: 0, estimatedMB: '0.00' });
+      return;
+    }
+    getVaultStorageStats(activeOwnerScope).then(setVaultStats).catch(() => {});
+  }, [mediaList, isVaultUnlocked, activeOwnerScope]);
 
   // Smart Keep-Alive Ramah Render (Ping tiap 4 menit HANYA saat tab aktif & terhubung)
   useEffect(() => {
@@ -421,9 +460,13 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     return () => clearInterval(interval);
   }, [backendUrl, connectionStatus]);
 
-  async function loadSavedMedia() {
+  async function loadSavedMedia(scope = activeOwnerScopeRef.current) {
+    if (!scope) {
+      setMediaList([]);
+      return;
+    }
     try {
-      const items = await getAllMediaItems();
+      const items = await getAllMediaItems(scope);
       setMediaList(items || []);
     } catch (err) {
       console.error('Gagal membaca IndexedDB:', err);
@@ -499,17 +542,19 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
 
     socket.on('contacts-map-sync', async (payload) => {
+      const scope = activeOwnerScopeRef.current;
       const incoming = payload?.contacts;
-      if (!incoming || typeof incoming !== 'object') return;
+      if (!scope || !incoming || typeof incoming !== 'object') return;
       const merged = { ...savedContactsMapRef.current, ...incoming };
       savedContactsMapRef.current = merged;
       setSavedContactsMap(merged);
-      await saveContactsMap(incoming);
+      await saveContactsMap(incoming, scope);
     });
 
     socket.on('session-status', async (payload) => {
       const status = safeText(payload?.status) || 'connecting';
       const phone = safeText(payload?.phone);
+      const accountJid = safeText(payload?.accountJid);
       const reason = safeText(payload?.reason);
       const message = safeText(payload?.message);
       const targetNumber = safeText(payload?.targetNumber);
@@ -540,6 +585,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       } else if (status === 'pairing_ready') {
         clearQrWatchdog();
         setConnectedPhone(null);
+        setLinkedAccountJid('');
+        activeOwnerScopeRef.current = '';
       }
 
       if (targetNumber && !lockedTargetRef.current) {
@@ -556,13 +603,25 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         setConfirmLogout(false);
         hasSavedAuthRef.current = true;
         setHasSavedAuth(true);
+
+        const normAcct = normalizeAccountKey(accountJid, phone);
         if (phone) setConnectedPhone(phone);
+        if (normAcct) {
+          setLinkedAccountJid(normAcct);
+          activeOwnerScopeRef.current = `${deviceIdRef.current}::${normAcct}`;
+        }
         triggerToast('WhatsApp berhasil terhubung (Ghost Mode Aktif)!', 'success');
+      } else if (status === 'reconnecting') {
+        setConnectedPhone(null);
+        setLinkedAccountJid('');
+        activeOwnerScopeRef.current = '';
       } else if (status === 'disconnected') {
         clearQrWatchdog();
         setQrCodeDataUrl(null);
         setPairingCode('');
         setConnectedPhone(null);
+        setLinkedAccountJid('');
+        activeOwnerScopeRef.current = '';
 
         const isConfirmedLogout =
           reason === 'logged_out' ||
@@ -580,7 +639,6 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           hasSavedAuthRef.current = false;
           setHasSavedAuth(false);
         } else if (hasSavedAuthRef.current) {
-          // Jangan reset UI ke QR saat gangguan transien sementara snapshot perangkat tersimpan
           setConnectionStatus('reconnecting');
         } else if (message) {
           triggerToast(message, 'info');
@@ -596,6 +654,8 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       setQrCodeDataUrl(null);
       setPairingCode('');
       setConnectedPhone(null);
+      setLinkedAccountJid('');
+      activeOwnerScopeRef.current = '';
       setConnectionStatus('disconnected');
       await clearAuthSnapshotOnly(deviceIdRef.current);
       triggerToast(safeText(payload?.message) || 'Perangkat diputuskan dari WhatsApp.', 'info');
@@ -672,11 +732,15 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       }
     });
 
-    // PENERIMAAN ITEM VAULT 3-IN-1 REAL-TIME (Simpan ke IndexedDB & Tampilkan Teratas)
+    // PENERIMAAN ITEM VAULT 3-IN-1 REAL-TIME (Terisolasi ketat ke ownerScope terverifikasi)
     socket.on('vault-item', async (rawPayload) => {
       try {
+        const scope = activeOwnerScopeRef.current;
+        if (!scope) return;
+
         const item = {
           id: safeText(rawPayload?.id) || `vi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          ownerScope: scope,
           category: rawPayload?.category === 'status' ? 'status' : 'chat',
           senderNumber: safeText(rawPayload?.senderNumber),
           senderLid: safeText(rawPayload?.senderLid),
@@ -702,7 +766,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           needsOnDemandLoad: Boolean(rawPayload?.needsOnDemandLoad)
         };
 
-        await saveMediaItem(item);
+        await saveMediaItem(item, scope);
         setMediaList((prev) => [item, ...prev.filter((m) => m.id !== item.id)]);
 
         const displayName = getDisplaySenderName(item, savedContactsMapRef.current);
@@ -718,9 +782,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     // EVENT MEDIA STATUS SIAP (ON-DEMAND SELESAI DIDOWNLOAD DARI WA CDN)
     socket.on('vault-item-media-ready', async (payload) => {
+      const scope = activeOwnerScopeRef.current;
       const cleanId = safeText(payload?.id);
       const base64Data = typeof payload?.base64Data === 'string' ? payload.base64Data : '';
-      if (!cleanId || !base64Data) return;
+      if (!scope || !cleanId || !base64Data) return;
 
       setLoadingMediaIds((prev) => {
         const next = new Set(prev);
@@ -737,7 +802,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         needsOnDemandLoad: false,
         mimeType,
         fileSize
-      });
+      }, scope);
 
       setMediaList((prev) =>
         prev.map((m) =>
@@ -761,9 +826,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     // EVENT ANTI-DELETE: Pesan ditarik oleh pengirim
     socket.on('vault-item-revoked', async ({ id, deletedAt }) => {
       try {
+        const scope = activeOwnerScopeRef.current;
+        if (!scope) return;
         const cleanId = safeText(id);
         const delTime = Number(deletedAt) || Date.now();
-        await updateMediaItem(cleanId, { isDeleted: true, deletedAt: delTime });
+        await updateMediaItem(cleanId, { isDeleted: true, deletedAt: delTime }, scope);
         setMediaList((prev) =>
           prev.map((m) => (m.id === cleanId ? { ...m, isDeleted: true, deletedAt: delTime } : m))
         );
@@ -776,10 +843,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     // EVENT ANTI-EDIT: Pesan diedit oleh pengirim
     socket.on('vault-item-edited', async ({ id, editedText, editedAt }) => {
       try {
+        const scope = activeOwnerScopeRef.current;
+        if (!scope) return;
         const cleanId = safeText(id);
         const editTime = Number(editedAt) || Date.now();
         const text = safeText(editedText);
-        await updateMediaItem(cleanId, { isEdited: true, editedText: text, editedAt: editTime });
+        await updateMediaItem(cleanId, { isEdited: true, editedText: text, editedAt: editTime }, scope);
         setMediaList((prev) =>
           prev.map((m) =>
             m.id === cleanId ? { ...m, isEdited: true, editedText: text, editedAt: editTime } : m
@@ -862,20 +931,28 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
   const handleLogoutSession = async () => {
     clearQrWatchdog();
+    const prevScope = activeOwnerScopeRef.current;
     if (socketRef.current) {
       socketRef.current.emit('logout-session', withDeviceAuth());
     }
     hasSavedAuthRef.current = false;
     setHasSavedAuth(false);
     setConfirmLogout(false);
+    activeOwnerScopeRef.current = '';
+    setLinkedAccountJid('');
+    setConnectedPhone(null);
     await clearAuthSnapshotOnly(deviceIdRef.current);
-    await clearContactsMap();
+    if (prevScope) {
+      await clearContactsMap(prevScope);
+    }
     savedContactsMapRef.current = {};
     setSavedContactsMap({});
+    setMediaList([]);
+    setPreviewMedia(null);
+    setStoryViewerIndex(null);
     setConnectionStatus('disconnected');
     setQrCodeDataUrl(null);
     setPairingCode('');
-    setConnectedPhone(null);
     setBackendError(null);
     triggerToast('Sesi WhatsApp berhasil diputuskan.', 'info');
   };
@@ -943,12 +1020,14 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }, 25000);
   };
 
-  // Bersihkan SW kedaluwarsa > 24 jam
+  // Bersihkan SW kedaluwarsa > 24 jam hanya pada ownerScope aktif
   const handlePruneExpiredStatuses = async () => {
+    const scope = activeOwnerScopeRef.current;
+    if (!scope) return;
     try {
-      const pruned = await pruneExpiredStatuses();
+      const pruned = await pruneExpiredStatuses(24 * 60 * 60 * 1000, scope);
       if (pruned > 0) {
-        await loadSavedMedia();
+        await loadSavedMedia(scope);
         triggerToast(`Berhasil membersihkan ${pruned} Status WA yang > 24 jam!`, 'success');
       } else {
         triggerToast('Tidak ada status WA yang lebih dari 24 jam.', 'info');
@@ -1072,10 +1151,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     }
   };
 
-  // Hapus Satu Item
+  // Hapus Satu Item dalam ownerScope aktif
   const handleDeleteItem = async (id) => {
+    const scope = activeOwnerScopeRef.current;
+    if (!scope) return;
     try {
-      await deleteMediaById(id);
+      await deleteMediaById(id, scope);
       setMediaList((prev) => prev.filter((item) => item.id !== id));
       triggerToast('Item berhasil dihapus.', 'info');
     } catch (err) {
@@ -1173,16 +1254,18 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     return list;
   }, [mediaList, activeTab, subFilter, selectedStatusContact, searchQuery, savedContactsMap]);
 
-  // Eksekusi pembersihan item tab saat ini
+  // Eksekusi pembersihan item tab saat ini khusus pada ownerScope aktif
   const handleExecuteClearTab = async (tabKey) => {
+    const scope = activeOwnerScopeRef.current;
+    if (!scope) return;
     try {
       if (tabKey === 'all') {
-        await clearAllMedia();
+        await clearAllMedia(scope);
         setMediaList([]);
-        triggerToast('Seluruh data vault berhasil dibersihkan.', 'info');
+        triggerToast('Seluruh data vault akun ini berhasil dibersihkan.', 'info');
       } else {
         const idsToDelete = filteredItems.map((it) => it.id);
-        await deleteMediaByIds(idsToDelete);
+        await deleteMediaByIds(idsToDelete, scope);
         setMediaList((prev) => prev.filter((it) => !idsToDelete.includes(it.id)));
         triggerToast('Item pada tab ini berhasil dibersihkan.', 'info');
       }
@@ -1741,7 +1824,20 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
       </div>
 
-      {/* Kontainer Bawah: 3-in-1 Vault Tabs */}
+      {/* Kontainer Bawah: Zero-Trust Auth-Gate (0 Data sebelum Perangkat Tertaut Aktif) */}
+      {!isVaultUnlocked ? (
+        <div className="min-w-0 bg-white border-2 border-black rounded-xl p-6 sm:p-10 shadow-[4px_4px_0px_#000] text-center space-y-3">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-neutral-100 border-2 border-black flex items-center justify-center shadow-[2px_2px_0px_#000]">
+            <Lock className="w-6 h-6 text-black" />
+          </div>
+          <h3 className="font-black text-sm sm:text-base uppercase tracking-tight text-neutral-900">
+            Vault Terkunci &bull; Zero-Trust Per Perangkat
+          </h3>
+          <p className="text-xs text-neutral-600 max-w-lg mx-auto leading-relaxed">
+            Histori Silent Status (SW), Ghost Reader, Anti-Delete, maupun nama kontak disembunyikan sepenuhnya selama perangkat belum terhubung aktif dengan WhatsApp via Kode Pairing atau Scan QR Code di atas.
+          </p>
+        </div>
+      ) : (
       <div className="min-w-0 bg-white border-2 border-black rounded-xl p-3.5 sm:p-6 shadow-[4px_4px_0px_#000] space-y-4">
         
         {/* Header Tabs 3-in-1 Utama (Default: Silent Status SW) */}
@@ -2613,9 +2709,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         )}
 
       </div>
+      )}
 
       {/* Lightbox Modal Pratinjau Foto Penuh (Ghost Reader / Chat) */}
-      {previewMedia && (
+      {isVaultUnlocked && previewMedia && (
         <div
           className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm"
           onClick={() => setPreviewMedia(null)}
@@ -2660,7 +2757,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       )}
 
       {/* Fullscreen Story Viewer Modal (Lightbox Khusus Story WA dengan Navigasi Sebelumnya / Berikutnya) */}
-      {currentStoryItem && (
+      {isVaultUnlocked && currentStoryItem && (
         <div
           className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-3 sm:p-6 backdrop-blur-md"
           onClick={() => setStoryViewerIndex(null)}

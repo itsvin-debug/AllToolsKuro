@@ -66,10 +66,12 @@ function registerSocketHandlers(io) {
           session.lastActive = Date.now();
 
           if (session.status === 'connected') {
-            const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '';
+            const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || '');
+            const accountJid = session.accountJid || (phone ? `${phone}@s.whatsapp.net` : '');
             socket.emit('session-status', {
               status: 'connected',
               phone,
+              accountJid,
               monitorMode: session.monitorMode,
               swMode: session.swMode,
               targetNumber: session.targetNumber || ''
@@ -432,9 +434,12 @@ function registerSocketHandlers(io) {
           }
 
           if (session.status === 'connected') {
+            const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || '');
+            const accountJid = session.accountJid || (phone ? `${phone}@s.whatsapp.net` : '');
             socket.emit('session-status', {
               status: session.status,
-              phone: session.sock?.user?.id ? session.sock.user.id.split(':')[0] : '',
+              phone,
+              accountJid,
               monitorMode: session.monitorMode,
               swMode: session.swMode,
               targetNumber: session.targetNumber || ''
@@ -516,6 +521,14 @@ function registerSocketHandlers(io) {
             } catch (_) {}
           }
           session.sock = null;
+          session.accountJid = '';
+          session.phone = '';
+          session.savedContacts?.clear();
+          session.contactNames?.clear();
+          session.lidMap?.clear();
+          session.statusPointers?.clear();
+          session.pendingMedia = [];
+          session.msgCache?.clear();
         }
 
         removeSessionDir(sessionId);

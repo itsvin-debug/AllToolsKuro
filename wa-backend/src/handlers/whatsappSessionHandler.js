@@ -106,6 +106,8 @@ async function startBaileys(
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
       statusPointers: new Map(),
       pendingMedia: [],
+      accountJid: '',
+      phone: '',
       authKeys: null,
       authSyncTimer: null,
       contactsSyncTimer: null,
@@ -162,6 +164,17 @@ async function startBaileys(
     }
 
     if (cleanAuth) {
+      session.accountJid = '';
+      session.phone = '';
+      session.savedContacts?.clear();
+      session.contactNames?.clear();
+      session.lidMap?.clear();
+      session.confirmedTargetLids?.clear();
+      session.unmappedLidQueue?.clear();
+      session.pendingUnavailableIds?.clear();
+      session.msgCache?.clear();
+      session.statusPointers?.clear();
+      session.pendingMedia = [];
       removeSessionDir(sessionId);
     }
 
@@ -387,15 +400,28 @@ async function startBaileys(
           await resolveTargetIdentifiers(session);
         }
 
-        const phone = sock.user?.id ? sock.user.id.split(':')[0] : (sock.user?.id || '');
+        const phone = sock.user?.id ? sock.user.id.split(':')[0] : '';
+        const accountJid = phone ? `${phone}@s.whatsapp.net` : (sock.user?.id || '');
+        if (session.accountJid && accountJid && session.accountJid !== accountJid) {
+          session.savedContacts?.clear();
+          session.contactNames?.clear();
+          session.lidMap?.clear();
+          session.statusPointers?.clear();
+          session.pendingMedia = [];
+          session.msgCache?.clear();
+        }
+        session.accountJid = accountJid;
+        session.phone = phone;
+
         emitToDevice(io, sessionId, 'session-status', {
           status: 'connected',
           phone,
+          accountJid,
           monitorMode: session.monitorMode,
           swMode: session.swMode,
           targetNumber: session.targetNumber || ''
         });
-        emitToDevice(io, sessionId, 'status', { status: 'connected', phone });
+        emitToDevice(io, sessionId, 'status', { status: 'connected', phone, accountJid });
 
         // Sinkronkan snapshot auth SEGERA (0ms debounce) begitu sesi terhubung
         emitAuthSnapshotNow(io, sessionId, session);

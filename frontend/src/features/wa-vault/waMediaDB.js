@@ -1,10 +1,33 @@
 // Helper IndexedDB lokal untuk menyimpan media & pesan WA Vault (View Once, Ghost Reader, Anti-Delete, Status)
 
 const DB_NAME = 'AllToolsKuro_WaVault';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 const STORE_NAME = 'view_once_media';
 const DEVICE_AUTH_STORE = 'wa_device_auth';
 const CONTACTS_STORE = 'wa_contacts';
+
+function normalizeOwnerScope(ownerScope) {
+  if (!ownerScope || typeof ownerScope !== 'string') return '';
+  const clean = ownerScope.trim();
+  return clean.includes('::') && clean.length >= 12 ? clean : '';
+}
+
+function makeScopedKey(ownerScope, rawId) {
+  const scope = normalizeOwnerScope(ownerScope);
+  const id = String(rawId || '');
+  if (!scope || !id) return '';
+  if (id.startsWith(`${scope}::`)) return id;
+  return `${scope}::${id}`;
+}
+
+function stripScopePrefix(ownerScope, maybeScoped) {
+  const scope = normalizeOwnerScope(ownerScope);
+  const str = String(maybeScoped || '');
+  if (scope && str.startsWith(`${scope}::`)) {
+    return str.slice(scope.length + 2);
+  }
+  return str;
+}
 
 function openWaDB() {
   return new Promise((resolve, reject) => {
@@ -45,12 +68,21 @@ function openWaDB() {
       if (!store.indexNames.contains('isEdited')) {
         store.createIndex('isEdited', 'isEdited', { unique: false });
       }
+      if (!store.indexNames.contains('ownerScope')) {
+        store.createIndex('ownerScope', 'ownerScope', { unique: false });
+      }
 
       if (!db.objectStoreNames.contains(DEVICE_AUTH_STORE)) {
         db.createObjectStore(DEVICE_AUTH_STORE, { keyPath: 'deviceId' });
       }
+      let contactsStore;
       if (!db.objectStoreNames.contains(CONTACTS_STORE)) {
-        db.createObjectStore(CONTACTS_STORE, { keyPath: 'key' });
+        contactsStore = db.createObjectStore(CONTACTS_STORE, { keyPath: 'key' });
+      } else {
+        contactsStore = event.target.transaction.objectStore(CONTACTS_STORE);
+      }
+      if (!contactsStore.indexNames.contains('ownerScope')) {
+        contactsStore.createIndex('ownerScope', 'ownerScope', { unique: false });
       }
     };
 
@@ -59,22 +91,23 @@ function openWaDB() {
   });
 }
 
-// Simpan atau perbarui item ke IndexedDB dengan Smart Merge Anti-Timpa
-export async function saveMediaItem(item) {
-  if (!item || typeof item !== 'object') return null;
+// Simpan atau perbarui item ke IndexedDB terisolasi per ownerScope (deviceId::accountJid)
+export async function saveMediaItem(item, ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope || item?.ownerScope);
+  if (!item || typeof item !== 'object' || !scope) return null;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const itemId = String(item.id || Date.now());
+      const rawId = stripScopePrefix(scope, item.rawId || item.id || Date.now());
+      const scopedId = makeScopedKey(scope, rawId);
 
-      const getReq = store.get(itemId);
+      const getReq = store.get(scopedId);
 
       getReq.onsuccess = () => {
         const existing = getReq.result || null;
 
-        // Smart Merge: Jangan timpa base64Data HD yang sudah ada jika pointer baru membawa base64 kosong
         let finalBase64 = typeof item.base64Data === 'string' && item.base64Data.length > 0
           ? item.base64Data
           : (existing?.base64Data || '');
@@ -85,13 +118,15 @@ export async function saveMediaItem(item) {
 
         let needsLoad = Boolean(item.needsOnDemandLoad);
         if (finalBase64.length > 0) {
-          needsLoad = false; // Sudah ter-hydrate dengan HD
+          needsLoad = false;
         }
 
         const sanitizedItem = {
           ...existing,
           ...item,
-          id: itemId,
+          id: scopedId,
+          rawId,
+          ownerScope: scope,
           category: item.category === 'status' ? 'status' : 'chat',
           senderNumber: String(item.senderNumber || existing?.senderNumber || ''),
           senderLid: String(item.senderLid || existing?.senderLid || ''),
@@ -105,7 +140,7 @@ export async function saveMediaItem(item) {
           fileSize: Number(item.fileSize || existing?.fileSize || 0),
           durationSec: Number(item.durationSec || existing?.durationSec || 0),
           isVoiceNote: Boolean(item.isVoiceNote ?? existing?.isVoiceNote),
-          isViewOnce: Boolean(item.isViewOnce ?? existing?.isViewOnce),
+          isViewOnce: false,
           isDeleted: Boolean(item.isDeleted ?? existing?.isDeleted),
           deletedAt: item.deletedAt ? Number(item.deletedAt) : (existing?.deletedAt ? Number(existing.deletedAt) : null),
           isEdited: Boolean(item.isEdited ?? existing?.isEdited),
@@ -118,7 +153,7 @@ export async function saveMediaItem(item) {
         };
 
         const putReq = store.put(sanitizedItem);
-        putReq.onsuccess = () => resolve(sanitizedItem);
+        putReq.onsuccess = () => resolve({ ...sanitizedItem, id: rawId });
         putReq.onerror = (e) => {
           if (e?.target?.error?.name === 'QuotaExceededError') {
             console.warn('[IndexedDB] Kuota penyimpanan browser penuh! Hapus status lama untuk mengosongkan ruang.');
@@ -134,19 +169,22 @@ export async function saveMediaItem(item) {
   });
 }
 
-// Perbarui sebagian field item (misal status isDeleted atau isEdited, atau saat media on-demand selesai)
-export async function updateMediaItem(id, patch = {}) {
-  if (!id) return null;
+// Perbarui sebagian field item hanya dalam ownerScope terverifikasi
+export async function updateMediaItem(id, patch = {}, ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!id || !scope) return null;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const getReq = store.get(String(id));
+      const rawId = stripScopePrefix(scope, id);
+      const scopedId = makeScopedKey(scope, rawId);
+      const getReq = store.get(scopedId);
 
       getReq.onsuccess = () => {
         const existing = getReq.result;
-        if (!existing) {
+        if (!existing || existing.ownerScope !== scope) {
           resolve(null);
           return;
         }
@@ -154,7 +192,9 @@ export async function updateMediaItem(id, patch = {}) {
         const updated = {
           ...existing,
           ...patch,
-          id: existing.id
+          id: scopedId,
+          rawId,
+          ownerScope: scope
         };
 
         if (updated.base64Data && updated.base64Data.length > 0) {
@@ -162,7 +202,7 @@ export async function updateMediaItem(id, patch = {}) {
         }
 
         const putReq = store.put(updated);
-        putReq.onsuccess = () => resolve(updated);
+        putReq.onsuccess = () => resolve({ ...updated, id: rawId });
         putReq.onerror = (e) => {
           if (e?.target?.error?.name === 'QuotaExceededError') {
             console.warn('[IndexedDB] Kuota penyimpanan browser penuh!');
@@ -178,70 +218,77 @@ export async function updateMediaItem(id, patch = {}) {
   });
 }
 
-// Ambil seluruh media tersimpan (diurutkan dari yang terbaru)
-export async function getAllMediaItems() {
+// Ambil seluruh media tersimpan KHUSUS milik ownerScope aktif (Zero-Trust: [] jika belum terotorisasi)
+export async function getAllMediaItems(ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!scope) return [];
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
-    const request = store.getAll();
+    const request = store.indexNames.contains('ownerScope')
+      ? store.index('ownerScope').getAll(scope)
+      : store.getAll();
 
     request.onsuccess = () => {
       const items = request.result || [];
       const normalized = items
-        .filter((it) => it && it.id && it.id !== 'viewonce-pending' && it.id !== 'viewonce-blocked')
-        .map((it) => ({
-          ...it,
-          id: String(it.id),
-          category: it.category === 'status' ? 'status' : 'chat',
-          isViewOnce: it.isViewOnce !== undefined ? Boolean(it.isViewOnce) : true,
-          mediaType: it.mediaType || (it.base64Data?.includes('video') ? 'video' : 'image'),
-          sentAt: Number(it.sentAt || it.timestamp || Date.now()),
-          isDeleted: Boolean(it.isDeleted),
-          isEdited: Boolean(it.isEdited),
-          durationSec: Number(it.durationSec || 0),
-          fileSize: Number(it.fileSize || 0),
-          bgColor: String(it.bgColor || ''),
-          thumbnailBase64: it.thumbnailBase64 || '',
-          needsOnDemandLoad: Boolean(it.needsOnDemandLoad && !it.base64Data)
-        }));
+        .filter((it) => it && it.ownerScope === scope && it.id)
+        .map((it) => {
+          const rawId = it.rawId || stripScopePrefix(scope, it.id);
+          return {
+            ...it,
+            id: String(rawId),
+            rawId: String(rawId),
+            ownerScope: scope,
+            category: it.category === 'status' ? 'status' : 'chat',
+            isViewOnce: false,
+            mediaType: it.mediaType || (it.base64Data?.includes('video') ? 'video' : 'image'),
+            sentAt: Number(it.sentAt || it.timestamp || Date.now()),
+            isDeleted: Boolean(it.isDeleted),
+            isEdited: Boolean(it.isEdited),
+            durationSec: Number(it.durationSec || 0),
+            fileSize: Number(it.fileSize || 0),
+            bgColor: String(it.bgColor || ''),
+            thumbnailBase64: it.thumbnailBase64 || '',
+            needsOnDemandLoad: Boolean(it.needsOnDemandLoad && !it.base64Data)
+          };
+        });
 
-      normalized.sort((a, b) => {
-        const timeA = Number(a?.sentAt || 0);
-        const timeB = Number(b?.sentAt || 0);
-        return timeB - timeA;
-      });
-
+      normalized.sort((a, b) => Number(b?.sentAt || 0) - Number(a?.sentAt || 0));
       resolve(normalized);
     };
     request.onerror = () => reject(request.error || new Error('Gagal mengambil data dari IndexedDB.'));
   });
 }
 
-// Hapus satu item berdasarkan ID
-export async function deleteMediaItem(id) {
-  if (!id) return true;
+// Hapus satu item berdasarkan ID di ownerScope aktif
+export async function deleteMediaItem(id, ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!id || !scope) return false;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    const request = store.delete(String(id));
+    const scopedId = makeScopedKey(scope, id);
+    const request = store.delete(scopedId);
 
     request.onsuccess = () => resolve(true);
     request.onerror = () => reject(request.error || new Error('Gagal menghapus item dari IndexedDB.'));
   });
 }
 
-// Hapus banyak item sekaligus berdasarkan array of IDs
-export async function deleteMediaByIds(ids = []) {
-  if (!Array.isArray(ids) || ids.length === 0) return true;
+// Hapus banyak item sekaligus di ownerScope aktif
+export async function deleteMediaByIds(ids = [], ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!Array.isArray(ids) || ids.length === 0 || !scope) return false;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
 
     for (const id of ids) {
-      if (id) store.delete(String(id));
+      if (id) store.delete(makeScopedKey(scope, id));
     }
 
     tx.oncomplete = () => resolve(true);
@@ -249,27 +296,42 @@ export async function deleteMediaByIds(ids = []) {
   });
 }
 
-// Bersihkan seluruh database di IndexedDB
-export async function clearAllMediaItems() {
+// Bersihkan HANYA seluruh item milik ownerScope aktif (tidak memengaruhi perangkat/akun lain)
+export async function clearAllMediaItems(ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!scope) return false;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
-    const request = store.clear();
+    const req = store.indexNames.contains('ownerScope')
+      ? store.index('ownerScope').getAllKeys(scope)
+      : store.getAll();
 
-    request.onsuccess = () => resolve(true);
-    request.onerror = () => reject(request.error || new Error('Gagal membersihkan database IndexedDB.'));
+    req.onsuccess = () => {
+      const results = req.result || [];
+      for (const entry of results) {
+        if (typeof entry === 'string') {
+          store.delete(entry);
+        } else if (entry && entry.ownerScope === scope && entry.id) {
+          store.delete(entry.id);
+        }
+      }
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error || new Error('Gagal membersihkan database IndexedDB.'));
+    };
+    req.onerror = () => reject(req.error || new Error('Gagal membaca database IndexedDB.'));
   });
 }
 
-// Alias untuk kompatibilitas penamaan ekspor WaViewOnceView
 export const deleteMediaById = deleteMediaItem;
 export const clearAllMedia = clearAllMediaItems;
 
-// Dapatkan statistik kapasitas penyimpanan IndexedDB browser pengguna
-export async function getVaultStorageStats() {
+export async function getVaultStorageStats(ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!scope) return { totalItems: 0, statusCount: 0, estimatedMB: '0.00' };
   try {
-    const items = await getAllMediaItems();
+    const items = await getAllMediaItems(scope);
     let totalBytes = 0;
     let statusCount = 0;
 
@@ -281,11 +343,10 @@ export async function getVaultStorageStats() {
       if (it.caption) totalBytes += it.caption.length * 2;
     }
 
-    const estimatedMB = (totalBytes / (1024 * 1024)).toFixed(2);
     return {
       totalItems: items.length,
       statusCount,
-      estimatedMB
+      estimatedMB: (totalBytes / (1024 * 1024)).toFixed(2)
     };
   } catch (err) {
     console.error('Gagal menghitung statistik vault:', err);
@@ -293,14 +354,17 @@ export async function getVaultStorageStats() {
   }
 }
 
-// Bersihkan Status WA yang sudah kedaluwarsa (> 24 jam) untuk menghemat storage HP/browser
-export async function pruneExpiredStatuses(maxAgeMs = 24 * 60 * 60 * 1000) {
+export async function pruneExpiredStatuses(maxAgeMs = 24 * 60 * 60 * 1000, ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!scope) return 0;
   const db = await openWaDB();
   return new Promise((resolve, reject) => {
     try {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       const store = tx.objectStore(STORE_NAME);
-      const request = store.getAll();
+      const request = store.indexNames.contains('ownerScope')
+        ? store.index('ownerScope').getAll(scope)
+        : store.getAll();
 
       request.onsuccess = () => {
         const items = request.result || [];
@@ -308,7 +372,7 @@ export async function pruneExpiredStatuses(maxAgeMs = 24 * 60 * 60 * 1000) {
         let deletedCount = 0;
 
         for (const item of items) {
-          if (item.category === 'status') {
+          if (item.ownerScope === scope && item.category === 'status') {
             const age = now - (Number(item.sentAt) || 0);
             if (age > maxAgeMs) {
               store.delete(item.id);
@@ -493,11 +557,12 @@ export async function clearAuthSnapshotOnly(deviceId) {
 }
 
 // =========================================================================
-// STORE KHUSUS: wa_contacts (Peta Nama Kontak Asli Disimpan User di WA)
+// STORE KHUSUS: wa_contacts (Peta Nama Kontak Terisolasi per ownerScope)
 // =========================================================================
 
-export async function saveContactsMap(contactsObj) {
-  if (!contactsObj || typeof contactsObj !== 'object') return 0;
+export async function saveContactsMap(contactsObj, ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!contactsObj || typeof contactsObj !== 'object' || !scope) return 0;
   try {
     const entries = Object.entries(contactsObj).filter(([k, v]) => k && v);
     if (entries.length === 0) return 0;
@@ -506,10 +571,12 @@ export async function saveContactsMap(contactsObj) {
       const tx = db.transaction(CONTACTS_STORE, 'readwrite');
       const store = tx.objectStore(CONTACTS_STORE);
       for (const [key, val] of entries) {
+        const rawKey = String(key);
+        const scopedKey = makeScopedKey(scope, rawKey);
         if (typeof val === 'string') {
-          store.put({ key: String(key), savedName: val });
+          store.put({ key: scopedKey, rawKey, ownerScope: scope, savedName: val });
         } else if (val && typeof val === 'object') {
-          store.put({ key: String(key), ...val });
+          store.put({ ...val, key: scopedKey, rawKey, ownerScope: scope });
         }
       }
       tx.oncomplete = () => resolve(entries.length);
@@ -520,18 +587,24 @@ export async function saveContactsMap(contactsObj) {
   }
 }
 
-export async function getContactsMap() {
+export async function getContactsMap(ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!scope) return {};
   try {
     const db = await openWaDB();
     return await new Promise((resolve) => {
       const tx = db.transaction(CONTACTS_STORE, 'readonly');
-      const req = tx.objectStore(CONTACTS_STORE).getAll();
+      const store = tx.objectStore(CONTACTS_STORE);
+      const req = store.indexNames.contains('ownerScope')
+        ? store.index('ownerScope').getAll(scope)
+        : store.getAll();
       req.onsuccess = () => {
         const list = req.result || [];
         const map = {};
         for (const entry of list) {
-          if (entry?.key && entry?.savedName) {
-            map[entry.key] = entry.savedName;
+          if (entry?.ownerScope === scope && entry?.savedName) {
+            const rawKey = entry.rawKey || stripScopePrefix(scope, entry.key);
+            if (rawKey) map[rawKey] = entry.savedName;
           }
         }
         resolve(map);
@@ -543,14 +616,30 @@ export async function getContactsMap() {
   }
 }
 
-export async function clearContactsMap() {
+export async function clearContactsMap(ownerScope = '') {
+  const scope = normalizeOwnerScope(ownerScope);
+  if (!scope) return false;
   try {
     const db = await openWaDB();
     return await new Promise((resolve) => {
       const tx = db.transaction(CONTACTS_STORE, 'readwrite');
-      tx.objectStore(CONTACTS_STORE).clear();
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => resolve(false);
+      const store = tx.objectStore(CONTACTS_STORE);
+      const req = store.indexNames.contains('ownerScope')
+        ? store.index('ownerScope').getAllKeys(scope)
+        : store.getAll();
+      req.onsuccess = () => {
+        const results = req.result || [];
+        for (const entry of results) {
+          if (typeof entry === 'string') {
+            store.delete(entry);
+          } else if (entry && entry.ownerScope === scope && entry.key) {
+            store.delete(entry.key);
+          }
+        }
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      };
+      req.onerror = () => resolve(false);
     });
   } catch {
     return false;
