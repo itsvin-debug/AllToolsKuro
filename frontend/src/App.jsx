@@ -15,6 +15,7 @@ import { ManhwaFinderScreen } from './features/manhwa-finder';
 import { IpCheckerScreen } from './features/ip-checker';
 import { TiktokStalkerScreen } from './features/social-stalker';
 import { WaViewOnceView } from './features/wa-vault';
+import { WaSoundStickerView } from './features/wa-sound-sticker';
 import { CodeToVideoView } from './features/code-to-video';
 import { PngToPdfScreen } from './features/png-to-pdf';
 import { MediaCompressorScreen } from './features/media-compressor';
@@ -347,6 +348,14 @@ export default function App() {
 
           {currentScreen === 'waViewOnce' && (
             <WaViewOnceView
+              onBack={() => handleNavigate('welcome')}
+              onShowToast={handleShowToast}
+              lang={settings.language || 'id'}
+            />
+          )}
+
+          {currentScreen === 'waSoundSticker' && (
+            <WaSoundStickerView
               onBack={() => handleNavigate('welcome')}
               onShowToast={handleShowToast}
               lang={settings.language || 'id'}

@@ -16,9 +16,11 @@ const {
 } = require('../services/contactsService');
 const { buildVaultPayload, downloadMediaStreamBuffer } = require('../services/vaultService');
 const { startBaileys } = require('./whatsappSessionHandler');
+const { registerStickerSenderHandler } = require('./stickerSenderHandler');
 
 function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
+    registerStickerSenderHandler(io, socket);
     socket.on('resume-session', async (payload) => {
       try {
         const { sessionId, deviceToken, authSnapshot, targetNumber, monitorMode = 'all', swMode = 'auto', confirmedLids } = payload || {};

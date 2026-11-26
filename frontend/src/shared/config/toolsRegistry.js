@@ -15,7 +15,8 @@ import {
   Globe,
   Globe2,
   ShieldCheck,
-  Clapperboard
+  Clapperboard,
+  Volume2
 } from 'lucide-react';
 
 /**
@@ -175,6 +176,15 @@ export const TOOLS_METADATA = [
     defaultTag: 'NEW • 3D RENDER',
     staticTag: true,
     icon: Clapperboard
+  },
+  {
+    id: 'waSoundSticker',
+    category: 'utility',
+    defaultName: 'Stiker Suara WA',
+    defaultDesc: 'Gabungkan foto/video 512×512 dengan potongan sound detik presisi, cek live preview chat WA, lalu kirim ke WA sendiri atau unduh.',
+    defaultTag: 'WA SOUND',
+    staticTag: true,
+    icon: Volume2
   }
 ];
 
