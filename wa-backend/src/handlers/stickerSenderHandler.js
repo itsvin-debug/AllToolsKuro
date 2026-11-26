@@ -10,21 +10,9 @@ const jidNormalizedUser =
     return userPart ? `${userPart}@s.whatsapp.net` : '';
   });
 
-const MAX_WEBP_BYTES = 1.2 * 1024 * 1024;
-const MAX_AUDIO_BYTES = 3 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 5 * 1024 * 1024;
+const MAX_WEBP_BYTES = 1.2 * 1024 * 1024;
 const RATE_LIMIT_MS = 4000;
-
-const ALLOWED_AUDIO_MIMES = new Set([
-  'audio/mp4',
-  'audio/aac',
-  'audio/ogg; codecs=opus',
-  'audio/ogg;codecs=opus',
-  'audio/ogg',
-  'audio/mpeg',
-  'audio/wav',
-  'audio/webm'
-]);
 
 const lastStickerSendAt = new Map();
 
@@ -33,12 +21,12 @@ function decodeBoundedBase64(rawInput, maxBytes, label) {
     throw new Error(`Payload ${label} tidak tersedia.`);
   }
   const commaIdx = rawInput.indexOf(',');
-  const pureBase64 = commaIdx !== -1 && rawInput.slice(0, commaIdx).includes('base64')
-    ? rawInput.slice(commaIdx + 1)
-    : rawInput;
+  const pureBase64 =
+    commaIdx !== -1 && rawInput.slice(0, commaIdx).includes('base64')
+      ? rawInput.slice(commaIdx + 1)
+      : rawInput;
   const cleaned = pureBase64.replace(/\s+/g, '');
 
-  // Estimasi awal sebelum alokasi Buffer agar RAM tetap aman
   const approxBytes = Math.floor((cleaned.length * 3) / 4);
   if (approxBytes <= 0 || approxBytes > maxBytes) {
     throw new Error(`Ukuran ${label} melebihi batas aman (${(maxBytes / (1024 * 1024)).toFixed(1)} MB).`);
@@ -55,24 +43,22 @@ function decodeBoundedBase64(rawInput, maxBytes, label) {
 }
 
 /**
- * Handler Socket.io Terisolasi & Zero-Disk untuk Pengiriman Stiker Suara ke Nomor Pemilik Sendiri
+ * Handler Socket.io Terisolasi & Zero-Disk untuk Stiker Suara Kotak 1:1 (Target Terkunci ke Diri Sendiri)
+ * Audit WAProto (@whiskeysockets/baileys@6.7.24):
+ * IStickerMessage belum memiliki field audio/sound dan memaksa mimetype 'image/webp'.
+ * Pengiriman 1-file kotak 512x512 MP4 bersuara (video 1:1 gifPlayback:false ptv:false) menjaga objek tunggal bersuara di WA.
  */
 function registerStickerSenderHandler(io, socket) {
   socket.on('send-self-sound-sticker', async (payload) => {
-    let stickerBuf = null;
-    let audioBuf = null;
     let videoBuf = null;
+    let stickerBuf = null;
 
     const {
       sessionId,
       deviceToken,
-      deliveryMode = 'combo',
-      stickerWebpBase64,
-      audioBase64,
-      audioMime = 'audio/mp4',
-      audioPtt = false,
       videoMp4Base64,
-      useCircularPtv = false,
+      stickerWebpBase64 = '',
+      includeFavoriteWebp = false,
       caption = ''
     } = payload || {};
 
@@ -98,7 +84,7 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
 
-      // Target mutlak terkunci hanya ke JID akun WhatsApp pemilik sesi sendiri
+      // Target pengiriman terkunci mutlak ke nomor pemilik perangkat sendiri
       const selfJid = jidNormalizedUser(session.sock.user.id);
       if (!selfJid || !selfJid.endsWith('@s.whatsapp.net')) {
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
@@ -107,57 +93,27 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
 
-      const mode = deliveryMode === 'video-note' || deliveryMode === 'both' ? deliveryMode : 'combo';
-      const normalizedMime = String(audioMime || 'audio/mp4').trim().toLowerCase();
-      const safeAudioMime = ALLOWED_AUDIO_MIMES.has(normalizedMime) ? normalizedMime : 'audio/mp4';
       const safeCaption = String(caption || '').slice(0, 300).trim();
+      videoBuf = decodeBoundedBase64(videoMp4Base64, MAX_VIDEO_BYTES, 'stiker suara 512x512 MP4');
 
-      if (mode === 'combo') {
-        stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_WEBP_BYTES, 'stiker WebP');
-        audioBuf = decodeBoundedBase64(audioBase64, MAX_AUDIO_BYTES, 'audio potongan');
+      // Kirim 1 file kotak persegi 512x512 MP4 bersuara (bukan bulat PTV dan bukan Voice Note terpisah)
+      const sentVideoMsg = await session.sock.sendMessage(selfJid, {
+        video: videoBuf,
+        mimetype: 'video/mp4',
+        gifPlayback: false,
+        ptv: false,
+        caption: safeCaption
+      });
+      videoBuf = null;
 
-        const sentStickerMsg = await session.sock.sendMessage(selfJid, { sticker: stickerBuf });
-        stickerBuf = null;
-
+      if (includeFavoriteWebp && stickerWebpBase64) {
+        stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_WEBP_BYTES, 'versi stiker WebP');
         await session.sock.sendMessage(
           selfJid,
-          {
-            audio: audioBuf,
-            mimetype: safeAudioMime,
-            ptt: Boolean(audioPtt)
-          },
-          sentStickerMsg ? { quoted: sentStickerMsg } : undefined
+          { sticker: stickerBuf },
+          sentVideoMsg ? { quoted: sentVideoMsg } : undefined
         );
-        audioBuf = null;
-      } else if (mode === 'video-note') {
-        videoBuf = decodeBoundedBase64(videoMp4Base64, MAX_VIDEO_BYTES, 'video stiker');
-        await session.sock.sendMessage(selfJid, {
-          video: videoBuf,
-          mimetype: 'video/mp4',
-          ptv: Boolean(useCircularPtv),
-          gifPlayback: false,
-          caption: Boolean(useCircularPtv) ? '' : safeCaption
-        });
-        videoBuf = null;
-      } else {
-        stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_WEBP_BYTES, 'stiker WebP');
-        videoBuf = decodeBoundedBase64(videoMp4Base64, MAX_VIDEO_BYTES, 'video stiker');
-
-        const sentStickerMsg = await session.sock.sendMessage(selfJid, { sticker: stickerBuf });
         stickerBuf = null;
-
-        await session.sock.sendMessage(
-          selfJid,
-          {
-            video: videoBuf,
-            mimetype: 'video/mp4',
-            ptv: Boolean(useCircularPtv),
-            gifPlayback: false,
-            caption: Boolean(useCircularPtv) ? '' : safeCaption
-          },
-          sentStickerMsg ? { quoted: sentStickerMsg } : undefined
-        );
-        videoBuf = null;
       }
 
       session.lastActive = Date.now();
@@ -165,7 +121,7 @@ function registerStickerSenderHandler(io, socket) {
 
       emitToDevice(io, sessionId, 'sound-sticker-result', {
         ok: true,
-        deliveryMode: mode,
+        deliveryMode: includeFavoriteWebp && stickerWebpBase64 ? 'square-mp4+webp' : 'square-mp4',
         selfJid,
         sentAt: Date.now()
       });
@@ -178,9 +134,8 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
     } finally {
-      stickerBuf = null;
-      audioBuf = null;
       videoBuf = null;
+      stickerBuf = null;
     }
   });
 }

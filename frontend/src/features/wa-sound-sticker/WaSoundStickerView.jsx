@@ -21,7 +21,8 @@ import {
   Volume2,
   RefreshCw,
   LogOut,
-  ShieldCheck
+  ShieldCheck,
+  Info
 } from 'lucide-react';
 import { downloadBlob } from '../../shared/utils/fileDownload';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
@@ -32,9 +33,8 @@ import {
   encodeTrimmedAudio,
   createSnippetPlayer
 } from './audioTrimmerEngine';
-import { buildWaWebpStickerBlob } from './webpStickerEncoder';
-import { composeSoundVideoMp4 } from './soundVideoComposer';
-import WaStickerPreviewBubble from './WaStickerPreviewBubble';
+import { buildWaWebpStickerBlob, composeSoundStickerMp4 } from './soundStickerComposer';
+import WaSoundStickerPreview from './WaSoundStickerPreview';
 import {
   getWaBackendUrl,
   normalizeWaPhone,
@@ -50,6 +50,7 @@ import {
 
 const MAX_VISUAL_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_FILE_BYTES = 25 * 1024 * 1024;
+const RECOMMENDED_FULL_SEC = 15;
 const MAX_CLIP_DURATION_SEC = 30;
 
 function formatTimeSec(sec = 0) {
@@ -60,7 +61,7 @@ function formatTimeSec(sec = 0) {
 }
 
 export default function WaSoundStickerView({ onBack, onShowToast }) {
-  // ─── 1. VISUAL STATE (FOTO / VIDEO) ───
+  // ─── 1. VISUAL STATE (FOTO / VIDEO 512x512) ───
   const [visualFileMeta, setVisualFileMeta] = useState(null);
   const [sourceMedia, setSourceMedia] = useState(null);
   const [isVideoSource, setIsVideoSource] = useState(false);
@@ -68,11 +69,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [visualPreviewUrl, setVisualPreviewUrl] = useState('');
 
   const [cropMode, setCropMode] = useState('cover'); // 'cover' | 'contain'
-  const [bgStyle, setBgStyle] = useState('transparent'); // 'transparent' | 'solid'
-  const [bgColor, setBgColor] = useState('#ffffff');
+  const [bgStyle, setBgStyle] = useState('solid'); // 'solid' | 'blur' | 'transparent'
+  const [bgColor, setBgColor] = useState('#111827');
   const [motionEffect, setMotionEffect] = useState('static'); // 'static' | 'zoom' | 'bounce' | 'wobble'
   const [stickerText, setStickerText] = useState('');
-  const [textPosition, setTextPosition] = useState('bottom'); // 'bottom' | 'top'
+  const [textPosition, setTextPosition] = useState('bottom'); // 'bottom' | 'middle' | 'top'
+  const [textSize, setTextSize] = useState(46); // 28..64 px
   const [packName, setPackName] = useState('Kuro Sound Sticker');
   const [packPublisher, setPackPublisher] = useState('Kuro Studio');
 
@@ -81,11 +83,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [audioBuffer, setAudioBuffer] = useState(null);
   const [waveformPeaks, setWaveformPeaks] = useState([]);
   const [trimMode, setTrimMode] = useState('cut'); // 'full' | 'cut'
+  const [limitFull15s, setLimitFull15s] = useState(true);
   const [startSec, setStartSec] = useState(0);
   const [endSec, setEndSec] = useState(5);
   const [volume, setVolume] = useState(1.0);
   const [fadeSmooth, setFadeSmooth] = useState(true);
-  const [showVisualizerInVideo, setShowVisualizerInVideo] = useState(true);
 
   const [isTestingSound, setIsTestingSound] = useState(false);
   const [testPlayheadSec, setTestPlayheadSec] = useState(0);
@@ -96,12 +98,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const visualInputRef = useRef(null);
   const audioInputRef = useRef(null);
 
-  // ─── 3. PREVIEW & MODE KIRIM ───
-  const [deliveryMode, setDeliveryMode] = useState('combo'); // 'combo' | 'video-note' | 'both'
-  const [audioAsPtt, setAudioAsPtt] = useState(true);
-  const [useCircularPtv, setUseCircularPtv] = useState(false);
-
-  // ─── 4. STATUS KONEKSI WA PER-PERANGKAT & SEND PROGRESS ───
+  // ─── 3. OPSI TAMBAHAN & STATUS KONEKSI WA PER-PERANGKAT ───
+  const [includeFavoriteWebp, setIncludeFavoriteWebp] = useState(false);
   const [{ sessionId, deviceToken }] = useState(() => getOrCreateDeviceCredentials());
   const backendUrl = useMemo(() => getWaBackendUrl(), []);
   const socketRef = useRef(null);
@@ -109,7 +107,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [socketConnected, setSocketConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
   const [connectedPhone, setConnectedPhone] = useState('');
-  const [authMethod, setAuthMethod] = useState('pairing'); // 'pairing' | 'qr'
+  const [authMethod, setAuthMethod] = useState('pairing');
   const [pairingPhone, setPairingPhone] = useState(() => getSavedPairingPhone());
   const [pairingCode, setPairingCode] = useState('');
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
@@ -128,12 +126,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       bgColor,
       motionEffect: isVideoSource ? 'static' : motionEffect,
       stickerText,
-      textPosition
+      textPosition,
+      textSize
     }),
-    [cropMode, bgStyle, bgColor, isVideoSource, motionEffect, stickerText, textPosition]
+    [cropMode, bgStyle, bgColor, isVideoSource, motionEffect, stickerText, textPosition, textSize]
   );
 
-  // Bersihkan resource URL & player saat unmount
+  // Bersihkan resource URL & pemutar saat keluar
   useEffect(() => {
     trimPlayerRef.current = createSnippetPlayer();
     return () => {
@@ -253,7 +252,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       if (res?.ok) {
         setLastSendSuccess(res);
         setWaError(null);
-        onShowToast?.('Stiker Suara berhasil dikirim ke chat WA Anda sendiri!', 'success');
+        onShowToast?.('Stiker Suara berhasil masuk ke chat WA Anda sendiri!', 'success');
       } else {
         const errText = res?.error || 'Gagal mengirim stiker ke WhatsApp.';
         setWaError(errText);
@@ -301,14 +300,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
         await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('Waktu muat video habis.')), 10000);
-          videoEl.onloadeddata = () => {
-            clearTimeout(timer);
-            resolve();
-          };
-          videoEl.onerror = () => {
-            clearTimeout(timer);
-            reject(new Error('Browser gagal memuat video ini.'));
-          };
+          videoEl.onloadeddata = () => { clearTimeout(timer); resolve(); };
+          videoEl.onerror = () => { clearTimeout(timer); reject(new Error('Browser gagal memuat video ini.')); };
         });
 
         setSourceMedia(videoEl);
@@ -322,7 +315,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           width: videoEl.videoWidth,
           height: videoEl.videoHeight
         });
-        onShowToast?.('Video dimuat ke kanvas stiker 512×512.', 'success');
+        onShowToast?.('Video dimuat ke stiker kotak 512×512.', 'success');
       } else {
         const imgEl = new Image();
         imgEl.crossOrigin = 'anonymous';
@@ -343,7 +336,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           width: imgEl.naturalWidth,
           height: imgEl.naturalHeight
         });
-        onShowToast?.('Foto dimuat ke kanvas stiker 512×512.', 'success');
+        onShowToast?.('Foto dimuat ke stiker kotak 512×512.', 'success');
       }
     } catch (err) {
       try { URL.revokeObjectURL(objUrl); } catch {}
@@ -366,20 +359,18 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     try {
       const decoded = await decodeMediaToAudioBuffer(file);
       const peaks = extractWaveformPeaks(decoded, 96);
-      const safeEnd = Number(Math.min(decoded.duration, MAX_CLIP_DURATION_SEC).toFixed(1));
-      const initialEnd = decoded.duration <= 6
-        ? safeEnd
-        : Number(Math.min(5.0, safeEnd).toFixed(1));
+      const capSec = limitFull15s ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
+      const safeFullEnd = Number(Math.min(decoded.duration, capSec).toFixed(1));
+      const initialCutEnd = decoded.duration <= 6
+        ? safeFullEnd
+        : Number(Math.min(5.0, safeFullEnd).toFixed(1));
 
       setAudioBuffer(decoded);
       setWaveformPeaks(peaks);
-      setAudioFileMeta({
-        name: `${labelPrefix}${file.name}`,
-        duration: decoded.duration
-      });
-      setTrimMode(decoded.duration <= MAX_CLIP_DURATION_SEC ? 'full' : 'cut');
+      setAudioFileMeta({ name: `${labelPrefix}${file.name}`, duration: decoded.duration });
+      setTrimMode(decoded.duration <= capSec ? 'full' : 'cut');
       setStartSec(0);
-      setEndSec(decoded.duration <= MAX_CLIP_DURATION_SEC ? safeEnd : initialEnd);
+      setEndSec(decoded.duration <= capSec ? safeFullEnd : initialCutEnd);
       onShowToast?.(`Audio berhasil dimuat (${decoded.duration.toFixed(1)} detik).`, 'success');
     } catch (err) {
       onShowToast?.(err.message || 'Gagal memproses file audio.', 'error');
@@ -388,14 +379,21 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
-  // Sinkronkan slider saat toggle Full Sound vs Potong Detik
-  const handleChangeTrimMode = (mode) => {
-    setTrimMode(mode);
-    if (!audioBuffer) return;
-    if (mode === 'full') {
-      const clampedEnd = Number(Math.min(audioBuffer.duration, MAX_CLIP_DURATION_SEC).toFixed(1));
+  const applyFullModeBounds = useCallback(
+    (buf, use15sCap) => {
+      if (!buf) return;
+      const cap = use15sCap ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
+      const clampedEnd = Number(Math.min(buf.duration, cap).toFixed(1));
       setStartSec(0);
       setEndSec(Math.max(0.2, clampedEnd));
+    },
+    []
+  );
+
+  const handleChangeTrimMode = (mode) => {
+    setTrimMode(mode);
+    if (mode === 'full' && audioBuffer) {
+      applyFullModeBounds(audioBuffer, limitFull15s);
     }
   };
 
@@ -430,7 +428,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     [startSec, endSec]
   );
 
-  // Gambar Canvas Waveform Interaktif
+  // Gambar Canvas Waveform Visual Interaktif
   useEffect(() => {
     const canvas = waveformCanvasRef.current;
     if (!canvas) return;
@@ -445,7 +443,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       ctx.fillStyle = '#9ca3af';
       ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Unggah audio atau ekstrak suara dari video untuk melihat waveform', w * 0.5, h * 0.54);
+      ctx.fillText('Unggah audio atau klik "Pakai Suara Asli dari Video"', w * 0.5, h * 0.54);
       return;
     }
 
@@ -453,7 +451,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     const startRatio = startSec / totalDur;
     const endRatio = endSec / totalDur;
 
-    // Blok sorotan area terpilih
     const selX = startRatio * w;
     const selW = Math.max(2, (endRatio - startRatio) * w);
     ctx.fillStyle = 'rgba(16, 185, 129, 0.22)';
@@ -471,12 +468,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       ctx.fillRect(x, y, Math.max(2, stepW - 2), barH);
     }
 
-    // Garis batas mulai & selesai
     ctx.fillStyle = '#000000';
     ctx.fillRect(Math.max(0, selX - 1), 0, 2, h);
     ctx.fillRect(Math.min(w - 2, selX + selW - 1), 0, 2, h);
 
-    // Garis playhead berjalan saat dites
     if (isTestingSound) {
       const playAbs = Math.min(totalDur, startSec + testPlayheadSec);
       const px = (playAbs / totalDur) * w;
@@ -520,11 +515,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     });
   };
 
-  // ─── KONTROL TAUTAN WHATSAPP PER PERANGKAT ───
+  // ─── TAUTAN WHATSAPP PER PERANGKAT ───
   const handleStartPairing = (method) => {
     const sock = socketRef.current;
     if (!sock || !socketConnected) {
-      onShowToast?.('Menghubungkan ke server WA... Coba lagi beberapa detik.', 'info');
+      onShowToast?.('Menghubungkan ke server WA... Coba beberapa detik lagi.', 'info');
       return;
     }
 
@@ -566,35 +561,19 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     setConnectionStatus('disconnected');
   };
 
-  // ─── BUILDER ASET & PENGIRIMAN LANGSUNG KE NOMOR WA SENDIRI ───
-  const buildAssetsForSendOrDownload = useCallback(
-    async ({ needSticker = false, needAudio = false, needVideo = false, onStage }) => {
+  // ─── BUILDER & PENGIRIMAN 1-FILE STIKER SUARA 512x512 ───
+  const buildOutputAssets = useCallback(
+    async ({ needMp4 = false, needWebp = false, needAudio = false, onStage }) => {
+      let mp4Blob = null;
       let webpBlob = null;
       let audioEnc = null;
-      let videoBlob = null;
       let trimmedBuf = null;
 
-      if (needSticker) {
-        onStage?.('Memproses Visual Stiker 512×512...', 20);
-        const animDur = audioBuffer ? Math.min(5, selectedDuration) : 3.5;
-        webpBlob = await buildWaWebpStickerBlob({
-          sourceMedia,
-          isAnimated: isVideoSource || motionEffect !== 'static',
-          durationSec: animDur,
-          renderOptions,
-          packMeta: {
-            packName,
-            publisher: packPublisher
-          },
-          onProgress: (p) => onStage?.(`Merakit Stiker WebP (${p}%)...`, 20 + Math.round(p * 0.25))
-        });
-      }
-
-      if (needAudio || needVideo) {
+      if (needMp4 || needAudio) {
         if (!audioBuffer) {
-          throw new Error('Silakan masukkan Audio/Sound pada Langkah 2 terlebih dahulu.');
+          throw new Error('Silakan masukkan Audio/Sound di Langkah 2 terlebih dahulu.');
         }
-        onStage?.(`Memotong Audio (${startSec.toFixed(1)}s – ${endSec.toFixed(1)}s)...`, 50);
+        onStage?.(`Memotong Audio (${startSec.toFixed(1)}s – ${endSec.toFixed(1)}s)...`, 25);
         trimmedBuf = await renderTrimmedAudioBuffer(audioBuffer, {
           startSec,
           endSec,
@@ -603,38 +582,48 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         });
       }
 
-      if (needAudio && trimmedBuf) {
-        onStage?.('Mengencode Potongan Sound untuk WA...', 65);
-        audioEnc = await encodeTrimmedAudio(trimmedBuf);
-      }
-
-      if (needVideo && trimmedBuf) {
-        onStage?.('Menggabungkan Video 512×512 + Sound...', 72);
-        videoBlob = await composeSoundVideoMp4({
+      if (needMp4 && trimmedBuf) {
+        onStage?.('Merakit Stiker 512×512 Bersuara...', 45);
+        mp4Blob = await composeSoundStickerMp4({
           sourceMedia,
           trimmedAudioBuffer: trimmedBuf,
           renderOptions,
-          showVisualizer: showVisualizerInVideo,
-          onProgress: (p) => onStage?.(`Merakit Video Bersuara (${p}%)...`, 72 + Math.round(p * 0.2))
+          onProgress: (p) => onStage?.(`Merakit Stiker 512×512 Bersuara (${p}%)...`, 45 + Math.round(p * 0.35))
         });
       }
 
-      return { webpBlob, audioEnc, videoBlob };
+      if (needWebp) {
+        onStage?.('Membuat versi Stiker WebP 512×512...', 82);
+        const animDur = audioBuffer ? Math.min(5, selectedDuration) : 3.5;
+        webpBlob = await buildWaWebpStickerBlob({
+          sourceMedia,
+          isAnimated: isVideoSource || motionEffect !== 'static',
+          durationSec: animDur,
+          renderOptions,
+          packMeta: { packName, publisher: packPublisher }
+        });
+      }
+
+      if (needAudio && trimmedBuf) {
+        onStage?.('Mengencode Potongan Sound...', 70);
+        audioEnc = await encodeTrimmedAudio(trimmedBuf);
+      }
+
+      return { mp4Blob, webpBlob, audioEnc };
     },
     [
       audioBuffer,
-      selectedDuration,
-      sourceMedia,
-      isVideoSource,
-      motionEffect,
-      renderOptions,
-      packName,
-      packPublisher,
       startSec,
       endSec,
       volume,
       fadeSmooth,
-      showVisualizerInVideo
+      sourceMedia,
+      renderOptions,
+      selectedDuration,
+      isVideoSource,
+      motionEffect,
+      packName,
+      packPublisher
     ]
   );
 
@@ -655,87 +644,71 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     setWaError(null);
     setLastSendSuccess(null);
-    setSendProgress({ active: true, label: 'Menyiapkan aset di browser Anda...', percent: 10 });
+    setSendProgress({ active: true, label: 'Memotong Audio...', percent: 15 });
 
     try {
-      const needSticker = deliveryMode === 'combo' || deliveryMode === 'both';
-      const needAudio = deliveryMode === 'combo';
-      const needVideo = deliveryMode === 'video-note' || deliveryMode === 'both';
-
-      const { webpBlob, audioEnc, videoBlob } = await buildAssetsForSendOrDownload({
-        needSticker,
-        needAudio,
-        needVideo,
+      const { mp4Blob, webpBlob } = await buildOutputAssets({
+        needMp4: true,
+        needWebp: includeFavoriteWebp,
         onStage: (label, percent) => setSendProgress({ active: true, label, percent })
       });
 
+      if (!mp4Blob || mp4Blob.size > 4.5 * 1024 * 1024) {
+        throw new Error('Ukuran Stiker Suara melebihi 4.5 MB. Perpendek durasi potongan audio.');
+      }
       if (webpBlob && webpBlob.size > 1.2 * 1024 * 1024) {
-        throw new Error(`Ukuran stiker (${(webpBlob.size / 1024).toFixed(0)} KB) terlalu besar untuk dikirim.`);
-      }
-      if (audioEnc?.blob && audioEnc.blob.size > 3 * 1024 * 1024) {
-        throw new Error('Potongan audio melebihi batas 3 MB. Perpendek durasi potongan.');
-      }
-      if (videoBlob && videoBlob.size > 4.5 * 1024 * 1024) {
-        throw new Error('Video stiker melebihi batas 4.5 MB. Perpendek durasi potongan.');
+        throw new Error('Versi stiker WebP melebihi batas 1.2 MB.');
       }
 
-      setSendProgress({ active: true, label: 'Mengirim ke Chat WA Anda sendiri...', percent: 94 });
-
+      setSendProgress({ active: true, label: 'Mengirim ke Chat WA Anda...', percent: 94 });
+      const videoMp4Base64 = await blobToBase64String(mp4Blob);
       const stickerWebpBase64 = webpBlob ? await blobToBase64String(webpBlob) : '';
-      const audioBase64 = audioEnc?.blob ? await blobToBase64String(audioEnc.blob) : '';
-      const videoMp4Base64 = videoBlob ? await blobToBase64String(videoBlob) : '';
 
       socketRef.current.emit('send-self-sound-sticker', {
         sessionId,
         deviceToken,
-        deliveryMode,
-        stickerWebpBase64,
-        audioBase64,
-        audioMime: audioEnc?.mimeType || 'audio/mp4',
-        audioPtt: Boolean(audioAsPtt),
         videoMp4Base64,
-        useCircularPtv: Boolean(useCircularPtv),
-        packName,
-        caption: stickerText ? `${stickerText} — Kuro Sound Sticker` : ''
+        stickerWebpBase64,
+        includeFavoriteWebp: Boolean(includeFavoriteWebp && stickerWebpBase64),
+        caption: stickerText ? `${stickerText.toUpperCase()} — ${packName}` : ''
       });
     } catch (err) {
       setSendProgress({ active: false, label: '', percent: 0 });
       setWaError(err.message || 'Gagal menyiapkan berkas untuk WA.');
-      onShowToast?.(err.message || 'Gagal menyiapkan berkas stiker.', 'error');
+      onShowToast?.(err.message || 'Gagal menyiapkan stiker suara.', 'error');
     }
   };
 
-  // ─── UNDUH LOKAL KE PERANGKAT PENGGUNA ───
   const handleLocalDownload = async (kind) => {
     if (downloadingKey) return;
-    if ((kind === 'webp' || kind === 'mp4') && !sourceMedia) {
+    if ((kind === 'mp4' || kind === 'webp') && !sourceMedia) {
       onShowToast?.('Pilih Foto atau Video terlebih dahulu.', 'error');
       return;
     }
-    if ((kind === 'audio' || kind === 'mp4') && !audioBuffer) {
+    if ((kind === 'mp4' || kind === 'audio') && !audioBuffer) {
       onShowToast?.('Masukkan Audio/Sound terlebih dahulu.', 'error');
       return;
     }
 
     setDownloadingKey(kind);
     try {
-      const { webpBlob, audioEnc, videoBlob } = await buildAssetsForSendOrDownload({
-        needSticker: kind === 'webp',
-        needAudio: kind === 'audio',
-        needVideo: kind === 'mp4'
+      const { mp4Blob, webpBlob, audioEnc } = await buildOutputAssets({
+        needMp4: kind === 'mp4',
+        needWebp: kind === 'webp',
+        needAudio: kind === 'audio'
       });
 
       const stamp = Date.now();
-      if (kind === 'webp' && webpBlob) {
+      if (kind === 'mp4' && mp4Blob) {
+        downloadBlob(mp4Blob, `kuro_sound_sticker_${stamp}.mp4`);
+      } else if (kind === 'webp' && webpBlob) {
         downloadBlob(webpBlob, `kuro_sticker_${stamp}.webp`);
-      } else if (kind === 'mp4' && videoBlob) {
-        downloadBlob(videoBlob, `kuro_sound_sticker_${stamp}.mp4`);
       } else if (kind === 'audio' && audioEnc?.blob) {
         downloadBlob(audioEnc.blob, `kuro_sound_trim_${stamp}.${audioEnc.ext}`);
       }
-      onShowToast?.('Berkas berhasil disimpan ke perangkat Anda!', 'success');
+      onShowToast?.('Berkas berhasil diunduh ke perangkat Anda!', 'success');
     } catch (err) {
-      onShowToast?.(err.message || 'Gagal memproses unduhan.', 'error');
+      onShowToast?.(err.message || 'Gagal mengunduh berkas.', 'error');
     } finally {
       setDownloadingKey('');
     }
@@ -762,29 +735,27 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <span>Stiker Suara WA</span>
               </h1>
               <span className="px-2 py-0.5 bg-emerald-300 border border-black font-mono font-black text-[10px]">
-                WA SOUND STUDIO
+                WA SOUND
               </span>
             </div>
             <p className="text-xs text-neutral-700 font-semibold mt-0.5">
-              Buat stiker 512&times;512 + potongan sound presisi, cek live chat WA, lalu kirim langsung ke WA sendiri atau unduh.
+              Buat stiker kotak 1:1 (512&times;512) bersuara dengan teks meme &amp; potongan detik presisi, lalu kirim langsung ke WA sendiri.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
-          <span className={`px-2.5 py-1 border-2 border-black font-mono font-black text-[10px] ${
-            connectionStatus === 'connected' ? 'bg-emerald-300 text-black' : 'bg-yellow-200 text-black'
-          }`}>
-            {connectionStatus === 'connected' ? `WA AKTIF +${connectedPhone}` : 'WA BELUM TERTAUT'}
-          </span>
-        </div>
+        <span className={`px-2.5 py-1 border-2 border-black font-mono font-black text-[10px] self-start sm:self-center shrink-0 ${
+          connectionStatus === 'connected' ? 'bg-emerald-300 text-black' : 'bg-yellow-200 text-black'
+        }`}>
+          {connectionStatus === 'connected' ? `WA AKTIF +${connectedPhone}` : 'WA BELUM TERTAUT'}
+        </span>
       </div>
 
       {/* Workspace 2 Kolom Responsif */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        {/* ─── KOLOM KIRI: LANGKAH 1 & LANGKAH 2 ─── */}
+        {/* ─── KOLOM KIRI: INPUT VISUAL & PEMOTONG SOUND ─── */}
         <div className="lg:col-span-7 space-y-5 min-w-0">
-          {/* LANGKAH 1: VISUAL & GAYA STIKER */}
+          {/* LANGKAH 1: VISUAL 512x512 + TEKS MEME */}
           <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
               <div className="flex items-center gap-2">
@@ -792,7 +763,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   Langkah 1
                 </span>
                 <h2 className="font-black text-sm uppercase text-black">
-                  Visual Stiker (Foto / Video 512&times;512)
+                  Visual Kotak 1:1 &amp; Teks Meme
                 </h2>
               </div>
               {visualFileMeta && (
@@ -802,37 +773,35 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               )}
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-              <button
-                type="button"
-                onClick={() => visualInputRef.current?.click()}
-                className="flex-1 p-4 border-2 border-dashed border-black bg-neutral-50 hover:bg-yellow-50 transition-colors flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer min-h-[108px]"
-              >
-                <div className="flex items-center gap-2 text-black">
-                  <ImageIcon className="w-5 h-5" />
-                  <Film className="w-5 h-5" />
-                </div>
-                <span className="font-black text-xs text-black">
-                  {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih Foto (JPG/PNG/WebP) atau Video (MP4/WebM/MOV)'}
-                </span>
-                <span className="text-[11px] font-semibold text-neutral-600">
-                  Otomatis disesuaikan ke 512&times;512 piksel di browser Anda (maks 25 MB)
-                </span>
-              </button>
-              <input
-                ref={visualInputRef}
-                type="file"
-                accept="image/*,video/*"
-                onChange={(e) => handleSelectVisualFile(e.target.files?.[0])}
-                className="hidden"
-              />
-            </div>
+            <button
+              type="button"
+              onClick={() => visualInputRef.current?.click()}
+              className="w-full p-4 border-2 border-dashed border-black bg-neutral-50 hover:bg-yellow-50 transition-colors flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer min-h-[104px]"
+            >
+              <div className="flex items-center gap-2 text-black">
+                <ImageIcon className="w-5 h-5" />
+                <Film className="w-5 h-5" />
+              </div>
+              <span className="font-black text-xs text-black break-all">
+                {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih Foto (JPG/PNG/WebP) atau Video (MP4/WebM/MOV)'}
+              </span>
+              <span className="text-[11px] font-semibold text-neutral-600">
+                1:1 Persegi 512&times;512 px &bull; Diproses 100% di perangkat Anda (maks 25 MB)
+              </span>
+            </button>
+            <input
+              ref={visualInputRef}
+              type="file"
+              accept="image/*,video/*"
+              onChange={(e) => handleSelectVisualFile(e.target.files?.[0])}
+              className="hidden"
+            />
 
-            {/* Opsi Kustom Visual Stiker */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              {/* Framing 1:1 */}
               <div className="space-y-1.5">
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Mode Potong 1:1:
+                  Framing 1:1:
                 </label>
                 <div className="grid grid-cols-2 border-2 border-black bg-white">
                   <button
@@ -842,7 +811,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       cropMode === 'cover' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
                     }`}
                   >
-                    Penuh (Crop)
+                    Crop Penuh
                   </button>
                   <button
                     type="button"
@@ -856,9 +825,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </div>
               </div>
 
+              {/* Latar Fit / Kotak */}
               <div className="space-y-1.5">
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Latar Belakang Stiker:
+                  Latar Belakang Kotak:
                 </label>
                 <div className="flex items-center gap-2">
                   <select
@@ -866,8 +836,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     onChange={(e) => setBgStyle(e.target.value)}
                     className="flex-1 bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer"
                   >
-                    <option value="transparent">Transparan</option>
-                    <option value="solid">Warna Solid</option>
+                    <option value="solid">Latar Warna Solid</option>
+                    <option value="blur">Latar Blur Otomatis (Fit)</option>
+                    <option value="transparent">Transparan (Khusus .webp)</option>
                   </select>
                   {bgStyle === 'solid' && (
                     <input
@@ -881,6 +852,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </div>
               </div>
 
+              {/* Efek Gerak jika Foto */}
               {!isVideoSource && (
                 <div className="space-y-1.5">
                   <label className="font-black uppercase text-[10px] text-neutral-700 block">
@@ -893,15 +865,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   >
                     <option value="static">Diam (Statis)</option>
                     <option value="zoom">Zoom Halus</option>
-                    <option value="bounce">Denyut Irama (Bounce)</option>
-                    <option value="wobble">Goyang Lucu</option>
+                    <option value="bounce">Denyut Irama (Beat Bounce)</option>
+                    <option value="wobble">Goyang Meme</option>
                   </select>
                 </div>
               )}
 
-              <div className="space-y-1.5">
+              {/* Teks Meme Gaya WA */}
+              <div className={`space-y-1.5 ${isVideoSource ? 'sm:col-span-2' : ''}`}>
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Teks Stiker Opsional:
+                  Teks Meme Stiker WA (Putih Outline Hitam):
                 </label>
                 <div className="flex items-center gap-1.5">
                   <input
@@ -909,7 +882,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     value={stickerText}
                     maxLength={40}
                     onChange={(e) => setStickerText(e.target.value)}
-                    placeholder="Contoh: MANTAP JIWA!"
+                    placeholder="Contoh: JAWA JAWA JAWA"
                     className="flex-1 min-w-0 bg-white border-2 border-black px-2.5 py-2 font-bold text-xs"
                   />
                   <select
@@ -918,14 +891,33 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     className="bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer"
                   >
                     <option value="bottom">Bawah</option>
+                    <option value="middle">Tengah</option>
                     <option value="top">Atas</option>
                   </select>
                 </div>
               </div>
 
+              {stickerText.trim() && (
+                <div className="sm:col-span-2 space-y-1">
+                  <div className="flex justify-between font-bold text-[11px]">
+                    <span>Ukuran Teks Meme:</span>
+                    <span className="font-mono">{textSize}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="28"
+                    max="64"
+                    step="2"
+                    value={textSize}
+                    onChange={(e) => setTextSize(Number(e.target.value))}
+                    className="w-full accent-black cursor-pointer h-2"
+                  />
+                </div>
+              )}
+
               <div className="space-y-1">
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Nama Pack WA:
+                  Nama Pack Stiker:
                 </label>
                 <input
                   type="text"
@@ -951,7 +943,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             </div>
           </section>
 
-          {/* LANGKAH 2: AUDIO WAVEFORM & POTONG DETIK */}
+          {/* LANGKAH 2: AUDIO & PEMOTONG DETIK PRESISI */}
           <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
               <div className="flex items-center gap-2">
@@ -960,12 +952,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </span>
                 <h2 className="font-black text-sm uppercase text-black flex items-center gap-1.5">
                   <Scissors className="w-4 h-4" />
-                  Sound &amp; Atur Potongan Detik
+                  Sound &amp; Atur Detik Potongan
                 </h2>
               </div>
               {audioFileMeta && (
                 <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-100 border border-black">
-                  Total: {audioFileMeta.duration.toFixed(1)}s
+                  Asli: {audioFileMeta.duration.toFixed(1)}s
                 </span>
               )}
             </div>
@@ -975,10 +967,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 type="button"
                 onClick={() => audioInputRef.current?.click()}
                 disabled={isDecodingAudio}
-                className="flex-1 p-3 border-2 border-black bg-neutral-50 hover:bg-cyan-50 font-black text-xs flex items-center justify-center gap-2 cursor-pointer"
+                className="flex-1 p-3 border-2 border-black bg-neutral-50 hover:bg-cyan-50 font-black text-xs flex items-center justify-center gap-2 cursor-pointer min-w-0"
               >
-                {isDecodingAudio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Music className="w-4 h-4" />}
-                <span>{audioFileMeta ? `Ganti Sound (${audioFileMeta.name})` : 'Pilih File Audio (MP3/WAV/M4A/OGG)'}</span>
+                {isDecodingAudio ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Music className="w-4 h-4 shrink-0" />}
+                <span className="truncate">
+                  {audioFileMeta ? `Ganti Sound (${audioFileMeta.name})` : 'Pilih File Audio (MP3/WAV/M4A/OGG/AAC)'}
+                </span>
               </button>
               <input
                 ref={audioInputRef}
@@ -991,17 +985,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               {isVideoSource && visualVideoFile && (
                 <button
                   type="button"
-                  onClick={() => loadAudioSource(visualVideoFile, '[Audio Video] ')}
+                  onClick={() => loadAudioSource(visualVideoFile, '[Suara Video] ')}
                   disabled={isDecodingAudio}
                   className="px-3 py-3 bg-yellow-300 hover:bg-yellow-400 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
                 >
                   <Film className="w-4 h-4" />
-                  <span>Gunakan Audio dari Video di Atas</span>
+                  <span>Pakai Suara Asli dari Video</span>
                 </button>
               )}
             </div>
 
-            {/* Mode Full vs Potong Detik */}
+            {/* Sakelar 2 Mode: Full Sound vs Atur Detik (Potong) */}
             <div className="grid grid-cols-2 border-2 border-black bg-white">
               <button
                 type="button"
@@ -1010,7 +1004,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   trimMode === 'full' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
                 }`}
               >
-                Full Sound (Maks 30s)
+                Full Sound
               </button>
               <button
                 type="button"
@@ -1019,11 +1013,33 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   trimMode === 'cut' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
                 }`}
               >
-                Potong Detik Presisi
+                Atur Detik (Potong)
               </button>
             </div>
 
-            {/* Canvas Waveform Interaktif */}
+            {trimMode === 'full' && audioBuffer && audioBuffer.duration > RECOMMENDED_FULL_SEC && (
+              <div className="p-2.5 bg-amber-50 border border-black text-[11px] font-semibold flex items-center justify-between gap-2 flex-wrap">
+                <span className="flex items-center gap-1.5">
+                  <Info className="w-4 h-4 text-amber-700 shrink-0" />
+                  Audio lebih dari 15 detik. Batasi otomatis 15s agar ringan &amp; cepat dikirim?
+                </span>
+                <label className="flex items-center gap-1.5 font-black cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={limitFull15s}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setLimitFull15s(next);
+                      applyFullModeBounds(audioBuffer, next);
+                    }}
+                    className="w-4 h-4 accent-black"
+                  />
+                  <span>Batasi 15s</span>
+                </label>
+              </div>
+            )}
+
+            {/* Waveform Interaktif */}
             <div className="border-2 border-black bg-neutral-50 overflow-hidden">
               <canvas
                 ref={waveformCanvasRef}
@@ -1031,17 +1047,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 height={96}
                 onClick={handleWaveformClick}
                 className="w-full h-24 block cursor-pointer"
-                title="Klik pada gelombang suara untuk menggeser titik mulai atau selesai"
+                title="Klik pada waveform untuk mengatur titik mulai atau selesai"
               />
             </div>
 
             {audioBuffer && (
               <div className="space-y-3 text-xs">
-                {/* Kontrol Mulai & Selesai Mobile-Friendly */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="p-2.5 bg-neutral-50 border border-black space-y-1.5">
                     <div className="flex items-center justify-between font-black text-[11px]">
-                      <span>Mulai (Detik):</span>
+                      <span>Mulai (detik):</span>
                       <span className="font-mono text-emerald-700">{formatTimeSec(startSec)}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -1073,7 +1088,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
                   <div className="p-2.5 bg-neutral-50 border border-black space-y-1.5">
                     <div className="flex items-center justify-between font-black text-[11px]">
-                      <span>Selesai (Detik):</span>
+                      <span>Selesai (detik):</span>
                       <span className="font-mono text-emerald-700">{formatTimeSec(endSec)}</span>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -1104,13 +1119,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </div>
                 </div>
 
-                {/* Durasi Terpilih & Tes Suara */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-emerald-50 border-2 border-black">
                   <span className="font-black text-xs">
-                    Durasi Terpilih: <span className="font-mono text-emerald-800">{selectedDuration} detik</span>
-                    {audioBuffer.duration > MAX_CLIP_DURATION_SEC && (
-                      <span className="text-[10px] font-semibold text-neutral-600 ml-1">(maks 30s per klip)</span>
-                    )}
+                    Durasi Stiker Suara: <span className="font-mono text-emerald-800">{selectedDuration} detik</span>
                   </span>
 
                   <button
@@ -1125,7 +1136,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </button>
                 </div>
 
-                {/* Volume & Fade Halus */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                   <div>
                     <div className="flex justify-between font-bold text-[11px] mb-1">
@@ -1143,36 +1153,24 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="flex items-center justify-between gap-2 text-[11px] font-bold cursor-pointer">
-                      <span>Fade Halus Awal/Akhir (40ms anti klik)</span>
-                      <input
-                        type="checkbox"
-                        checked={fadeSmooth}
-                        onChange={(e) => setFadeSmooth(e.target.checked)}
-                        className="w-4 h-4 accent-black cursor-pointer"
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-2 text-[11px] font-bold cursor-pointer">
-                      <span>Visualizer Sound di Video MP4</span>
-                      <input
-                        type="checkbox"
-                        checked={showVisualizerInVideo}
-                        onChange={(e) => setShowVisualizerInVideo(e.target.checked)}
-                        className="w-4 h-4 accent-black cursor-pointer"
-                      />
-                    </label>
-                  </div>
+                  <label className="flex items-center justify-between gap-2 text-[11px] font-bold cursor-pointer">
+                    <span>Fade Halus Awal/Akhir (40ms anti klik)</span>
+                    <input
+                      type="checkbox"
+                      checked={fadeSmooth}
+                      onChange={(e) => setFadeSmooth(e.target.checked)}
+                      className="w-4 h-4 accent-black cursor-pointer"
+                    />
+                  </label>
                 </div>
               </div>
             )}
           </section>
         </div>
 
-        {/* ─── KOLOM KANAN: LANGKAH 3 (PREVIEW) & LANGKAH 4 (WA + UNDUH) ─── */}
+        {/* ─── KOLOM KANAN: LIVE PREVIEW STIKER SUARA WA & KIRIM ─── */}
         <div className="lg:col-span-5 space-y-5 min-w-0">
-          {/* LANGKAH 3 */}
-          <WaStickerPreviewBubble
+          <WaSoundStickerPreview
             sourceMedia={sourceMedia}
             isVideoSource={isVideoSource}
             audioBuffer={audioBuffer}
@@ -1182,13 +1180,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             volume={volume}
             fadeSmooth={fadeSmooth}
             renderOptions={renderOptions}
-            deliveryMode={deliveryMode}
-            onChangeDeliveryMode={setDeliveryMode}
-            useCircularPtv={useCircularPtv}
-            onToggleCircularPtv={setUseCircularPtv}
           />
 
-          {/* LANGKAH 4: TAUTKAN WA & KIRIM + UNDUH */}
+          {/* LANGKAH 4: KONEKSI WA PER PERANGKAT & KIRIM / UNDUH */}
           <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
               <div className="flex items-center gap-2">
@@ -1196,44 +1190,42 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   Langkah 4
                 </span>
                 <h3 className="font-black text-xs sm:text-sm uppercase text-black">
-                  Kirim ke WA Sendiri &amp; Unduh
+                  Kirim ke WA Saya &amp; Unduh
                 </h3>
               </div>
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
             </div>
 
-            {/* Status Perangkat WA */}
             {connectionStatus === 'connected' ? (
-              <div className="p-3 bg-emerald-100 border-2 border-black space-y-2">
+              <div className="p-3 bg-emerald-100 border-2 border-black space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                     <span className="font-black text-xs text-black truncate">
-                      WA Terhubung &bull; Siap Kirim ke +{connectedPhone}
+                      WA Terhubung &bull; +{connectedPhone} &mdash; Siap Kirim
                     </span>
                   </div>
                   <button
                     type="button"
                     onClick={handleLogoutWa}
                     className="px-2 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer shrink-0"
-                    title="Putuskan sesi WhatsApp perangkat ini"
                   >
                     <LogOut className="w-3 h-3" />
                     <span>Putus</span>
                   </button>
                 </div>
                 <p className="text-[11px] font-semibold text-neutral-700">
-                  Perangkat ini tertaut aman. Kiriman hanya masuk ke chat &ldquo;Pesan Diri Sendiri&rdquo; milik nomor Anda.
+                  Dikirim sebagai 1 objek kotak 1:1 bersuara langsung ke chat Anda sendiri.
                 </p>
               </div>
             ) : (
               <div className="p-3 bg-neutral-50 border-2 border-black space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-black text-xs text-black">
-                    Tautkan WhatsApp Perangkat Ini
+                    Tautkan Perangkat WA Anda
                   </span>
                   <span className="text-[10px] font-mono font-bold text-neutral-600">
-                    {socketConnected ? (hasSavedAuth ? 'Memulihkan sesi...' : 'Server Siap') : 'Menghubungkan...'}
+                    {socketConnected ? (hasSavedAuth ? 'Memulihkan...' : 'Server Siap') : 'Menghubungkan...'}
                   </span>
                 </div>
 
@@ -1317,17 +1309,15 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            {deliveryMode === 'combo' && (
-              <label className="flex items-center justify-between gap-2 px-2.5 py-2 bg-neutral-50 border border-black text-[11px] font-bold cursor-pointer">
-                <span>Kirim potongan audio sebagai Voice Note (PTT)</span>
-                <input
-                  type="checkbox"
-                  checked={audioAsPtt}
-                  onChange={(e) => setAudioAsPtt(e.target.checked)}
-                  className="w-4 h-4 accent-black cursor-pointer"
-                />
-              </label>
-            )}
+            <label className="flex items-center justify-between gap-2 px-2.5 py-2 bg-neutral-50 border border-black text-[11px] font-bold cursor-pointer">
+              <span>Sertakan juga versi Stiker .webp untuk simpan ke Favorit WA</span>
+              <input
+                type="checkbox"
+                checked={includeFavoriteWebp}
+                onChange={(e) => setIncludeFavoriteWebp(e.target.checked)}
+                className="w-4 h-4 accent-black cursor-pointer"
+              />
+            </label>
 
             {waError && (
               <div className="p-2.5 bg-rose-100 border-2 border-rose-500 text-rose-950 text-[11px] font-bold flex items-start gap-2">
@@ -1339,11 +1329,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             {lastSendSuccess?.ok && (
               <div className="p-2.5 bg-emerald-100 border-2 border-black text-emerald-950 text-[11px] font-bold flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                <span>Terkirim ke Nomor Anda! Cek chat &ldquo;Pesan Diri Sendiri&rdquo; di WhatsApp.</span>
+                <span>Berhasil Masuk ke WA Anda! Buka chat &ldquo;Pesan Diri Sendiri&rdquo; di WhatsApp.</span>
               </div>
             )}
 
-            {/* Progress Tahapan Pengiriman */}
             {sendProgress.active && (
               <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] font-black">
@@ -1362,7 +1351,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            {/* Tombol Utama Kirim ke WA Saya */}
             <button
               type="button"
               onClick={handleSendToSelfWa}
@@ -1373,17 +1361,26 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               <span>Kirim Stiker Suara ke WA Saya</span>
             </button>
 
-            {/* Tombol Unduh Lokal ke Perangkat (0 Beban Server) */}
             <div className="pt-2 border-t-2 border-black space-y-2">
               <span className="text-[10px] font-black uppercase text-neutral-600 block">
-                Atau Unduh Lokal Langsung ke Perangkat (0 Beban Server):
+                Atau Unduh Lokal ke Perangkat Anda (0 Beban Server):
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
                   type="button"
+                  onClick={() => handleLocalDownload('mp4')}
+                  disabled={Boolean(downloadingKey) || !sourceMedia || !audioBuffer}
+                  className="py-2 px-2 bg-white hover:bg-cyan-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 shrink-0" />
+                  <span>{downloadingKey === 'mp4' ? 'Merakit...' : 'Stiker (.mp4)'}</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => handleLocalDownload('webp')}
                   disabled={Boolean(downloadingKey) || !sourceMedia}
-                  className="py-2 px-2.5 bg-white hover:bg-yellow-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                  className="py-2 px-2 bg-white hover:bg-yellow-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5 shrink-0" />
                   <span>{downloadingKey === 'webp' ? 'Memproses...' : 'Stiker (.webp)'}</span>
@@ -1391,19 +1388,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
                 <button
                   type="button"
-                  onClick={() => handleLocalDownload('mp4')}
-                  disabled={Boolean(downloadingKey) || !sourceMedia || !audioBuffer}
-                  className="py-2 px-2.5 bg-white hover:bg-cyan-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 shrink-0" />
-                  <span>{downloadingKey === 'mp4' ? 'Merender...' : 'Video (.mp4)'}</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={() => handleLocalDownload('audio')}
                   disabled={Boolean(downloadingKey) || !audioBuffer}
-                  className="py-2 px-2.5 bg-white hover:bg-emerald-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                  className="py-2 px-2 bg-white hover:bg-emerald-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5 shrink-0" />
                   <span>{downloadingKey === 'audio' ? 'Memotong...' : 'Sound (.m4a)'}</span>
