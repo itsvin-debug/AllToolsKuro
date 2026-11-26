@@ -685,7 +685,7 @@ export default function StudioCustomPanel({
                   const cm = e.target.value;
                   onChangeSetting({
                     cameraMotion: cm,
-                    ...(cm === 'auto-orbit' ? { autoOrbit: true, stage3d: true, frameStyle: '3d-tv' } : {})
+                    autoOrbit: cm === 'auto-orbit'
                   });
                 }}
                 className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer"

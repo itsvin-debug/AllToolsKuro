@@ -93,7 +93,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const [settings, setSettings] = useState(() => {
     try {
       const saved = localStorage.getItem('kuro_c2v_studio_settings');
-      if (saved) return { ...DEFAULT_STUDIO_SETTINGS, ...JSON.parse(saved) };
+      if (saved) {
+        const parsed = { ...DEFAULT_STUDIO_SETTINGS, ...JSON.parse(saved) };
+        if (parsed.pureBypassMode) {
+          parsed.stage3d = false;
+          if (parsed.frameStyle === '3d-tv') parsed.frameStyle = 'full';
+          if (parsed.cameraMotion === 'auto-orbit') parsed.cameraMotion = 'static';
+          parsed.autoOrbit = false;
+        }
+        return parsed;
+      }
     } catch {}
     return { ...DEFAULT_STUDIO_SETTINGS };
   });
@@ -109,8 +118,22 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const [copied, setCopied] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [errorLog, setErrorLog] = useState(null);
+  const [live3dWarning, setLive3dWarning] = useState(false);
 
   const [mobileSection, setMobileSection] = useState('preview'); // 'preview' | 'editor' | 'export'
+  const [isDesktopViewport, setIsDesktopViewport] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
+  const isPreviewVisible = isDesktopViewport || mobileSection === 'preview';
+  const is3dMode = !settings.pureBypassMode && (settings.frameStyle === '3d-tv' || Boolean(settings.stage3d));
+
+  useEffect(() => {
+    const onResizeVp = () => {
+      setIsDesktopViewport(window.innerWidth >= 1024);
+    };
+    window.addEventListener('resize', onResizeVp);
+    return () => window.removeEventListener('resize', onResizeVp);
+  }, []);
 
   // --- VIEWPORT & PREVIEW STATE ---
   const [isPlaying, setIsPlaying] = useState(true);
@@ -196,6 +219,10 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const textareaRef = useRef(null);
   const lastRenderSignatureRef = useRef('');
   const liveCaptureInFlightRef = useRef(false);
+  const liveCaptureSentAtRef = useRef(0);
+  const live3dWaitSinceRef = useRef(0);
+  const live3dWarnedRef = useRef(false);
+  const prevPreviewVisibleRef = useRef(isPreviewVisible);
 
   useEffect(() => {
     try {
@@ -276,7 +303,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         setStageScale(Number.isFinite(nextScale) && nextScale > 0 ? Math.max(0.2, Number(nextScale.toFixed(4))) : 0.28);
       } else {
         const fallbackW = typeof window !== 'undefined' && window.innerWidth > 32
-          ? Math.min(Math.max(window.innerWidth - 32, 260), 420)
+          ? Math.min(Math.max(window.innerWidth - 32, 260), 640)
           : 360;
         const fallbackH = fallbackW * (virtualDims.height / Math.max(1, virtualDims.width));
         const nextScale = Math.min(fallbackW / virtualDims.width, fallbackH / virtualDims.height);
@@ -300,7 +327,39 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (ro) ro.disconnect();
       window.removeEventListener('resize', recalcScale);
     };
-  }, [virtualDims, mobileSection, isFullscreen, iframeRunKey, syncIframeViewport]);
+  }, [virtualDims, mobileSection, isFullscreen, iframeRunKey, isPreviewVisible, syncIframeViewport]);
+
+  // Pastikan Live Iframe mobile dimuat ulang dengan dimensi nyata saat tab Preview baru terlihat
+  useEffect(() => {
+    const wasVisible = prevPreviewVisibleRef.current;
+    prevPreviewVisibleRef.current = isPreviewVisible;
+    if (!wasVisible && isPreviewVisible && !isDesktopViewport) {
+      const raf = requestAnimationFrame(() => {
+        setIframeRunKey((k) => k + 1);
+        syncIframeViewport(virtualDims);
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+    return undefined;
+  }, [isPreviewVisible, isDesktopViewport, syncIframeViewport, virtualDims]);
+
+  // Kaitkan ulang canvas 3D TV ke compositor setiap kali node canvas 3D ter-mount
+  useEffect(() => {
+    if (!compositorRef.current) return;
+    if (is3dMode && canvasRef.current) {
+      compositorRef.current.attachPreviewCanvas(canvasRef.current);
+      compositorRef.current.resetFrameTracking();
+      liveCaptureInFlightRef.current = false;
+      liveCaptureSentAtRef.current = 0;
+      live3dWaitSinceRef.current = performance.now();
+      live3dWarnedRef.current = false;
+      setLive3dWarning(false);
+    } else if (!is3dMode) {
+      live3dWaitSinceRef.current = 0;
+      live3dWarnedRef.current = false;
+      setLive3dWarning(false);
+    }
+  }, [is3dMode, virtualDims.width, virtualDims.height, isPreviewVisible]);
 
   // Inisialisasi Engine Compositor & Loop Direct GPU
   useEffect(() => {
@@ -364,13 +423,28 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, loopT, frameSettings);
           }
         } else {
+          const nowWall = Date.now();
+          if (liveCaptureInFlightRef.current && nowWall - liveCaptureSentAtRef.current > 600) {
+            liveCaptureInFlightRef.current = false;
+          }
           if (!liveCaptureInFlightRef.current && liveIframeRef.current?.contentWindow) {
             liveCaptureInFlightRef.current = true;
+            liveCaptureSentAtRef.current = nowWall;
             liveIframeRef.current.contentWindow.postMessage({
               type: 'ctv-live-capture',
               width: compositorRef.current.width,
               height: compositorRef.current.height
             }, '*');
+          }
+
+          if (
+            !compositorRef.current.hasReceivedFrame &&
+            live3dWaitSinceRef.current > 0 &&
+            now - live3dWaitSinceRef.current > 600 &&
+            !live3dWarnedRef.current
+          ) {
+            live3dWarnedRef.current = true;
+            setLive3dWarning(true);
           }
 
           compositorRef.current.renderFrame(loopT, frameSettings);
@@ -411,8 +485,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         setErrorLog(e.data.error);
       } else if (e.data?.type === 'ctv-live-frame') {
         liveCaptureInFlightRef.current = false;
-        if (e.data.bitmap && compositorRef.current) {
-          compositorRef.current.updateBitmap(e.data.bitmap);
+        if (compositorRef.current) {
+          if (e.data.bitmap) {
+            compositorRef.current.updateBitmap(e.data.bitmap);
+            live3dWarnedRef.current = false;
+            setLive3dWarning(false);
+          } else if (e.data.dataUrl) {
+            compositorRef.current.updateFrameImage(e.data.dataUrl);
+            live3dWarnedRef.current = false;
+            setLive3dWarning(false);
+          }
         }
       }
     };
@@ -456,10 +538,20 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     } catch {}
   };
 
-  // Mengubah opsi di StudioCustomPanel otomatis mengaktifkan Kustomisasi
+  // Mengubah opsi di StudioCustomPanel otomatis mengaktifkan Kustomisasi (tanpa memaksa 3D TV)
   const handleChangeSetting = useCallback((patch) => {
     setSettings((prev) => {
-      const next = { ...prev, ...patch, pureBypassMode: false };
+      const explicit3d = 'stage3d' in patch || patch.frameStyle === '3d-tv';
+      const safeBase = prev.pureBypassMode && !explicit3d
+        ? {
+            ...prev,
+            stage3d: false,
+            frameStyle: prev.frameStyle === '3d-tv' ? 'full' : (prev.frameStyle || 'full'),
+            autoOrbit: false,
+            cameraMotion: prev.cameraMotion === 'auto-orbit' ? 'static' : prev.cameraMotion
+          }
+        : prev;
+      const next = { ...safeBase, ...patch, pureBypassMode: false };
       if ('fontFamily' in patch) {
         try {
           liveIframeRef.current?.contentWindow?.postMessage({
@@ -473,14 +565,22 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   }, []);
 
   const handleToggleBypass = useCallback((bypassOn) => {
-    setSettings((prev) => ({ ...prev, pureBypassMode: Boolean(bypassOn) }));
+    const isBypass = Boolean(bypassOn);
+    setSettings((prev) => ({
+      ...prev,
+      pureBypassMode: isBypass,
+      stage3d: false,
+      frameStyle: prev.frameStyle === '3d-tv' ? 'full' : (prev.frameStyle || 'full'),
+      autoOrbit: false,
+      cameraMotion: prev.cameraMotion === 'auto-orbit' ? 'static' : prev.cameraMotion
+    }));
     try {
-      const fontCss = bypassOn ? '' : (STUDIO_FONT_PRESETS[settingsRef.current.fontFamily] || '');
+      const fontCss = isBypass ? '' : (STUDIO_FONT_PRESETS[settingsRef.current.fontFamily] || '');
       liveIframeRef.current?.contentWindow?.postMessage({ type: 'ctv-live-font', fontCss }, '*');
-      sendLiveSpeed(bypassOn ? 1.0 : (settingsRef.current.motionSpeed || 1.0));
+      sendLiveSpeed(isBypass ? 1.0 : (settingsRef.current.motionSpeed || 1.0));
     } catch {}
     onShowToast?.(
-      bypassOn ? 'Mode Polos Murni aktif — semua efek dibatalkan.' : 'Mode Kustomisasi Studio aktif.',
+      isBypass ? 'Mode Polos Murni aktif — semua efek dibatalkan.' : 'Mode Kustomisasi Studio aktif.',
       'info'
     );
   }, [onShowToast]);
@@ -1488,25 +1588,27 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                         zIndex: 1
                       }}
                     >
-                      <iframe
-                        key={`live-stage-${iframeRunKey}-2d`}
-                        ref={liveIframeRef}
-                        srcDoc={compiledLiveHtml}
-                        sandbox="allow-scripts"
-                        onLoad={() => {
-                          liveCaptureInFlightRef.current = false;
-                          syncIframeViewport(virtualDims);
-                        }}
-                        className="border-0"
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          width: '100%',
-                          height: '100%',
-                          pointerEvents: isRendering || bundleExportState.active ? 'none' : 'auto'
-                        }}
-                        title="Live Animation Stage"
-                      />
+                      {isPreviewVisible && (
+                        <iframe
+                          key={`live-stage-${iframeRunKey}-2d`}
+                          ref={liveIframeRef}
+                          srcDoc={compiledLiveHtml}
+                          sandbox="allow-scripts"
+                          onLoad={() => {
+                            liveCaptureInFlightRef.current = false;
+                            syncIframeViewport(virtualDims);
+                          }}
+                          className="border-0"
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            width: '100%',
+                            height: '100%',
+                            pointerEvents: isRendering || bundleExportState.active ? 'none' : 'auto'
+                          }}
+                          title="Live Animation Stage"
+                        />
+                      )}
                     </div>
                     <canvas
                       ref={overlayCanvasRef}
@@ -1519,27 +1621,33 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 </div>
               ) : (
                 <>
-                  <iframe
-                    key={`live-stage-${iframeRunKey}-3d`}
-                    ref={liveIframeRef}
-                    srcDoc={compiledLiveHtml}
-                    sandbox="allow-scripts"
-                    onLoad={() => {
-                      liveCaptureInFlightRef.current = false;
-                    }}
-                    className="border-0"
-                    style={{
-                      position: 'fixed',
-                      left: 0,
-                      top: 0,
-                      width: `${virtualDims.width}px`,
-                      height: `${virtualDims.height}px`,
-                      opacity: 0.001,
-                      pointerEvents: 'none',
-                      zIndex: -10
-                    }}
-                    title="Live Animation Stage"
-                  />
+                  {isPreviewVisible && (
+                    <iframe
+                      key={`live-stage-${iframeRunKey}-3d`}
+                      ref={liveIframeRef}
+                      srcDoc={compiledLiveHtml}
+                      sandbox="allow-scripts"
+                      onLoad={() => {
+                        liveCaptureInFlightRef.current = false;
+                        if (compositorRef.current) {
+                          compositorRef.current.resetFrameTracking();
+                        }
+                        syncIframeViewport(virtualDims);
+                      }}
+                      className="border-0"
+                      style={{
+                        position: 'fixed',
+                        left: 0,
+                        top: 0,
+                        width: `${virtualDims.width}px`,
+                        height: `${virtualDims.height}px`,
+                        opacity: 0.001,
+                        pointerEvents: 'none',
+                        zIndex: -10
+                      }}
+                      title="Live Animation Stage"
+                    />
+                  )}
                   <canvas
                     ref={canvasRef}
                     className="w-full h-full object-contain rounded-sm relative"
@@ -1595,6 +1703,30 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                 </button>
               </div>
             </div>
+
+            {/* Banner Error / Peringatan 3D Capture tepat di bawah Viewport agar terlihat di Mobile */}
+            {errorLog && (
+              <div className="w-full mt-2 p-2.5 bg-red-100 border-2 border-red-500 text-red-950 font-mono text-[11px] flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 break-words">
+                  <span className="font-bold">Runtime Error:</span> {errorLog}
+                </div>
+              </div>
+            )}
+            {is3dMode && live3dWarning && !errorLog && (
+              <div className="w-full mt-2 p-2.5 bg-amber-100 border-2 border-amber-500 text-amber-950 text-[11px] font-semibold flex items-start justify-between gap-2">
+                <span>
+                  Pratinjau 3D TV sedang menunggu frame sandbox. Jika perangkat membatasi capture live 3D, beralih ke <strong>Fullscreen / Sinematik</strong>.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleQuickPreset('clean-full')}
+                  className="px-2 py-1 bg-white border border-black font-black text-[10px] shrink-0 cursor-pointer"
+                >
+                  Ke 2D
+                </button>
+              </div>
+            )}
           </div>
 
           {/* PANEL KUSTOMISASI TERPADU (DIPAKAI BERSAMA EDITOR KODE & EDITOR TEKS) */}

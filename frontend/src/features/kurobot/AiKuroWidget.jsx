@@ -22,9 +22,10 @@ import {
 } from '../../shared/utils/storageService';
 import { isToxicText } from '../../shared/utils/toxicFilter';
 import { cleanSpeechText, KURO_TOOLS_CATALOG } from './kurobotCatalog';
+import TourSpotlightOverlay from './TourSpotlightOverlay';
 
 const POSITION_STORAGE_KEY = 'kuro_bot_floating_pos';
-const MOBILE_POSITION_STORAGE_KEY = 'kuro_bot_floating_pos_mobile';
+const MOBILE_POSITION_STORAGE_KEY = 'kuro_bot_floating_pos_mobile_v2';
 const DEVICE_CHAT_STORAGE_KEY = 'kuro_device_ai_chat_history';
 
 function getPosStorageKey(screenW = typeof window !== 'undefined' ? window.innerWidth : 1024) {
@@ -33,7 +34,7 @@ function getPosStorageKey(screenW = typeof window !== 'undefined' ? window.inner
 
 // Hitung koordinat default yang aman menempel ke tepi kiri atau kanan
 function computeDefaultPosition(isPopup, dockSide = 'right') {
-  if (typeof window === 'undefined') return { x: 12, y: 100, dockSide: 'right' };
+  if (typeof window === 'undefined') return { x: 12, y: 120, dockSide: 'right' };
   const screenW = window.innerWidth;
   const screenH = window.innerHeight;
   const isMobile = screenW < 768;
@@ -42,20 +43,22 @@ function computeDefaultPosition(isPopup, dockSide = 'right') {
     const w = isMobile ? Math.floor(screenW * 0.92) : 385;
     const h = Math.min(Math.floor(screenH * 0.82), isMobile ? 520 : 560);
     const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
-    const y = isMobile ? Math.max(16, screenH - h - 96) : Math.max(16, screenH - h - 24);
+    const y = isMobile ? Math.max(72, screenH - h - 88) : Math.max(16, screenH - h - 24);
     return { x, y, dockSide };
   }
 
   const w = isMobile ? 48 : 175;
   const h = isMobile ? 48 : 56;
   const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
-  const y = isMobile ? Math.max(16, screenH - h - 96) : Math.max(16, screenH - h - 24);
+  const y = isMobile
+    ? Math.max(120, Math.min(screenH - h - 92, screenH - 150))
+    : Math.max(16, screenH - h - 24);
   return { x, y, dockSide };
 }
 
-// Muat dan validasi koordinat tersimpan dengan jaminan edge-docked
+// Muat dan validasi koordinat tersimpan dengan jaminan edge-docked & batas aman header/navbar mobile
 function getInitialPosition() {
-  if (typeof window === 'undefined') return { x: 12, y: 100, dockSide: 'right' };
+  if (typeof window === 'undefined') return { x: 12, y: 120, dockSide: 'right' };
   try {
     const screenW = window.innerWidth;
     const screenH = window.innerHeight;
@@ -67,9 +70,11 @@ function getInitialPosition() {
         const dockSide = parsed.dockSide === 'left' ? 'left' : 'right';
         const w = isMobile ? 48 : 175;
         const h = isMobile ? 48 : 56;
-        const bottomClearance = isMobile ? 96 : 16;
+        const topClearance = isMobile ? 120 : 16;
+        const bottomClearance = isMobile ? 92 : 16;
+        const maxY = isMobile ? Math.min(screenH - h - bottomClearance, screenH - 130) : (screenH - h - bottomClearance);
         const x = dockSide === 'left' ? 12 : Math.max(12, screenW - w - 12);
-        const y = Math.max(16, Math.min(parsed.y, screenH - h - bottomClearance));
+        const y = Math.max(topClearance, Math.min(parsed.y, Math.max(topClearance, maxY)));
         return { x, y, dockSide };
       }
     }
@@ -80,6 +85,8 @@ function getInitialPosition() {
 export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTool }) {
   // Mode tampilan: false = collapsed (tombol mengambang), true = chat popup terbuka
   const [isOpen, setIsOpen] = useState(false);
+  const [isTourActive, setIsTourActive] = useState(false);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
   const [animState, setAnimState] = useState('idle');
 
   // Posisi mengambang persisten dengan strict magnetic edge-docking (left/right)
@@ -141,8 +148,8 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const widgetWidth = rect?.width || (openState ? (isMobile ? Math.floor(screenW * 0.92) : 385) : (isMobile ? 48 : 175));
     const widgetHeight = rect?.height || (openState ? (isMobile ? 520 : 560) : (isMobile ? 48 : 56));
 
-    const bottomClearance = isMobile ? 96 : 16;
-    const topClearance = 16;
+    const bottomClearance = isMobile ? (!openState ? 92 : 84) : 16;
+    const topClearance = isMobile && !openState ? 120 : 16;
 
     // Tentukan dockSide berdasarkan targetPos atau center X
     const dockSide = targetPos?.dockSide === 'left' ? 'left' : (
@@ -150,8 +157,11 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     );
 
     const safeX = dockSide === 'left' ? 12 : Math.max(12, screenW - widgetWidth - 12);
-    const rawY = typeof targetPos?.y === 'number' && !isNaN(targetPos.y) ? targetPos.y : (screenH - widgetHeight - bottomClearance);
-    const safeY = Math.max(topClearance, Math.min(rawY, screenH - widgetHeight - bottomClearance));
+    const maxY = isMobile && !openState
+      ? Math.max(topClearance, Math.min(screenH - widgetHeight - bottomClearance, screenH - 130))
+      : Math.max(topClearance, screenH - widgetHeight - bottomClearance);
+    const rawY = typeof targetPos?.y === 'number' && !isNaN(targetPos.y) ? targetPos.y : maxY;
+    const safeY = Math.max(topClearance, Math.min(rawY, maxY));
 
     return { x: Math.round(safeX), y: Math.round(safeY), dockSide };
   }, []);
@@ -318,6 +328,7 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
       typingTimerRef.current = null;
     }
     setIsTyping(false);
+    setIsTourActive(false);
     setIsOpen(false);
     setAnimState('idle');
     setPos(clampPosition(getInitialPosition(), false));
@@ -325,67 +336,48 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
 
   // Navigasi ke fitur terpilih
   const handleOpenTool = (toolId) => {
+    setIsTourActive(false);
     if (onOpenTool) {
       onOpenTool(toolId);
     }
   };
 
-  // ─── FITUR TUR INTERAKTIF SATU PER SATU (17 FITUR) ───
-  const highlightToolElement = (toolId) => {
+  // ─── FITUR TUR INTERAKTIF SPOTLIGHT SATU PER SATU ───
+  const handleStartTourStep = (stepIndex) => {
+    if (stepIndex < 0 || stepIndex >= KURO_TOOLS_CATALOG.length) return;
+    if (typingTimerRef.current) {
+      clearInterval(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
+    setIsTyping(false);
+    setDisplayedReply('');
+
     if (currentScreen !== 'welcome' && onNavigateScreen) {
       onNavigateScreen('welcome');
     }
-    setTimeout(() => {
-      const el = document.getElementById(`tool-${toolId}`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('ring-4', 'ring-blue-600', 'ring-offset-2', 'animate-pulse');
-        setTimeout(() => {
-          el.classList.remove('ring-4', 'ring-blue-600', 'ring-offset-2', 'animate-pulse');
-        }, 2800);
-      }
-    }, 250);
-  };
 
-  const handleStartTourStep = (stepIndex) => {
-    if (stepIndex < 0 || stepIndex >= KURO_TOOLS_CATALOG.length) return;
-
-    const tool = KURO_TOOLS_CATALOG[stepIndex];
-    highlightToolElement(tool.id);
-
-    const userName = getDeviceUserName() || 'Kawan';
-    const intro = stepIndex === 0 
-      ? `Halo ${userName}! Mari kita mulai Tur Interaktif AllToolsKuro. Berikut fitur ke-[1/17]:`
-      : `Berikut fitur ke-[${stepIndex + 1}/17]:`;
-
-    const fullTourMsg = `${intro}\n\n📌 **${tool.name}** [${tool.tag}]\n${tool.desc}\n\n💡 **Cara Pakai:** ${tool.howToUse}`;
-
+    setTourStepIndex(stepIndex);
+    setIsOpen(true);
+    setIsTourActive(true);
     setAnimState('wave');
-    streamText(fullTourMsg, () => {
-      setMessages(prev => [
-        ...prev,
-        {
-          sender: 'ai',
-          text: fullTourMsg,
-          animation: 'wave',
-          isTourStep: true,
-          stepIndex,
-          tool
-        }
-      ]);
-    });
   };
 
   const handleFinishTour = () => {
+    setIsTourActive(false);
+    setTourStepIndex(0);
     const userName = getDeviceUserName() || 'Kawan';
-    const endMsg = `Tur seluruh 17 fitur selesai! Sekarang kamu sudah mengenal seluruh utilitas di AllToolsKuro. Selamat mencoba, ${userName}! Jika butuh bantuan kapan saja, Kuro siap membantumu. ✨`;
-    setAnimState('wave');
-    streamText(endMsg, () => {
-      setMessages(prev => [
-        ...prev,
-        { sender: 'ai', text: endMsg, animation: 'idle' }
-      ]);
-    });
+    const endMsg = `Tur seluruh ${KURO_TOOLS_CATALOG.length} fitur selesai! Sekarang kamu sudah mengenal seluruh utilitas di AllToolsKuro. Selamat mencoba, ${userName}! Jika butuh bantuan kapan saja, Kuro siap membantumu.`;
+    setAnimState('idle');
+    setMessages((prev) => [
+      ...prev,
+      { sender: 'ai', text: endMsg, animation: 'idle' }
+    ]);
+  };
+
+  const handleReturnToChatFromTour = () => {
+    setIsTourActive(false);
+    setIsOpen(true);
+    setAnimState('idle');
   };
 
   // Hapus riwayat chat di perangkat & reset total status ngambek
@@ -687,19 +679,20 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     if (dragStateRef.current.isDragging) {
       const screenW = window.innerWidth;
       const screenH = window.innerHeight;
-      const isMobile = screenW < 640;
+      const isMobile = screenW < 768;
       const el = widgetRef.current;
       const rect = el ? el.getBoundingClientRect() : null;
       const widgetW = rect?.width || (isMobile ? 48 : 175);
       const widgetH = rect?.height || (isMobile ? 48 : 56);
-      const bottomClearance = isMobile ? 88 : 16;
-      const topClearance = 16;
+      const bottomClearance = isMobile ? 92 : 16;
+      const topClearance = isMobile ? 120 : 16;
+      const maxY = isMobile ? Math.min(screenH - widgetH - bottomClearance, screenH - 130) : (screenH - widgetH - bottomClearance);
 
       const proposedX = dragStateRef.current.originX + dx;
       const proposedY = dragStateRef.current.originY + dy;
 
       const clampedX = Math.max(0, Math.min(proposedX, screenW - widgetW));
-      const clampedY = Math.max(topClearance, Math.min(proposedY, screenH - widgetH - bottomClearance));
+      const clampedY = Math.max(topClearance, Math.min(proposedY, Math.max(topClearance, maxY)));
 
       setDragOffset({ x: clampedX - dragStateRef.current.originX, y: clampedY - dragStateRef.current.originY });
     }
@@ -734,13 +727,14 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
     const rect = el ? el.getBoundingClientRect() : null;
     const widgetW = rect?.width || (isMobile ? 48 : 175);
     const widgetH = rect?.height || (isMobile ? 48 : 56);
-    const bottomClearance = isMobile ? 96 : 16;
-    const topClearance = 16;
+    const bottomClearance = isMobile ? 92 : 16;
+    const topClearance = isMobile ? 120 : 16;
+    const maxY = isMobile ? Math.min(screenH - widgetH - bottomClearance, screenH - 130) : (screenH - widgetH - bottomClearance);
 
     const centerX = rawNewX + widgetW / 2;
     const newDockSide = centerX < screenW / 2 ? 'left' : 'right';
     const snappedX = newDockSide === 'left' ? 12 : Math.max(12, screenW - widgetW - 12);
-    const clampedY = Math.max(topClearance, Math.min(rawNewY, screenH - widgetH - bottomClearance));
+    const clampedY = Math.max(topClearance, Math.min(rawNewY, Math.max(topClearance, maxY)));
 
     const nextPos = { x: Math.round(snappedX), y: Math.round(clampedY), dockSide: newDockSide };
     setPos(nextPos);
@@ -965,8 +959,22 @@ export default function AiKuroWidget({ currentScreen, onNavigateScreen, onOpenTo
         </div>
       )}
 
-      {/* ─── 3. POPUP JENDELA CHAT (EXPANDED) — STRICT VIEWPORT CLAMPED ─── */}
-      {isOpen && (
+      {/* ─── 3A. MODE TUR INTERAKTIF SPOTLIGHT (NON-BLOCKING RINGKAS) ─── */}
+      {isOpen && isTourActive && (
+        <TourSpotlightOverlay
+          tool={KURO_TOOLS_CATALOG[tourStepIndex] || KURO_TOOLS_CATALOG[0]}
+          stepIndex={tourStepIndex}
+          totalSteps={KURO_TOOLS_CATALOG.length}
+          onPrev={() => handleStartTourStep(tourStepIndex - 1)}
+          onNext={() => handleStartTourStep(tourStepIndex + 1)}
+          onFinish={handleFinishTour}
+          onOpenChat={handleReturnToChatFromTour}
+          onOpenTool={handleOpenTool}
+        />
+      )}
+
+      {/* ─── 3B. POPUP JENDELA CHAT (EXPANDED) — STRICT VIEWPORT CLAMPED ─── */}
+      {isOpen && !isTourActive && (
         <div 
           ref={widgetRef}
           style={

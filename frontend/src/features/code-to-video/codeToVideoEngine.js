@@ -408,6 +408,17 @@ export function findPrimaryCanvas(doc) {
 
 function getSandboxSharedHelpersCode() {
   return `
+    // Perkuat DOM/viewport guard sebelum kode pengguna berjalan di mobile maupun desktop
+    try {
+      var vpStyle = document.getElementById('ctv-viewport-guard');
+      if (!vpStyle) {
+        vpStyle = document.createElement('style');
+        vpStyle.id = 'ctv-viewport-guard';
+        vpStyle.textContent = 'html,body{min-width:100%;min-height:100%;margin:0;padding:0;}';
+        (document.head || document.documentElement).appendChild(vpStyle);
+      }
+    } catch(_) {}
+
     // Polifill aman localStorage/sessionStorage untuk iframe sandbox terisolasi
     try { void window.localStorage; } catch(e) {
       var _memStore = {};
@@ -757,7 +768,7 @@ export function buildRenderBridgeScript(width, height) {
       }, '*', bmp ? [bmp] : []);
     });
   })();
-  </script>
+  ${'<'}/script>
   `;
 }
 
@@ -770,6 +781,7 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
   const safeW = Math.max(320, Number(virtualW) || 1280);
   const safeH = Math.max(240, Number(virtualH) || 720);
   return `
+  <style id="ctv-viewport-guard">html,body{min-width:100%;min-height:100%;}</style>
   <script>
   (function() {
     window.__CTV_VIRTUAL_W__ = ${safeW};
@@ -793,7 +805,7 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
 
     ${getSandboxSharedHelpersCode()}
 
-    // Jamin window.innerWidth / innerHeight tidak pernah bernilai 0 saat bootstrap di HP
+    // Jamin window.innerWidth/Height & clientWidth/Height tidak pernah bernilai 0 saat bootstrap di HP
     try {
       var origInnerWDesc = Object.getOwnPropertyDescriptor(window, 'innerWidth');
       var origInnerHDesc = Object.getOwnPropertyDescriptor(window, 'innerHeight');
@@ -815,6 +827,29 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
           }
         });
       }
+      var elProto = typeof Element !== 'undefined' ? Element.prototype : null;
+      if (elProto) {
+        var origClientW = Object.getOwnPropertyDescriptor(elProto, 'clientWidth');
+        var origClientH = Object.getOwnPropertyDescriptor(elProto, 'clientHeight');
+        if (origClientW && origClientW.get && origClientW.configurable) {
+          Object.defineProperty(document.documentElement, 'clientWidth', {
+            configurable: true,
+            get: function() {
+              var val = origClientW.get.call(document.documentElement);
+              return val > 0 ? val : window.__CTV_VIRTUAL_W__;
+            }
+          });
+        }
+        if (origClientH && origClientH.get && origClientH.configurable) {
+          Object.defineProperty(document.documentElement, 'clientHeight', {
+            configurable: true,
+            get: function() {
+              var val = origClientH.get.call(document.documentElement);
+              return val > 0 ? val : window.__CTV_VIRTUAL_H__;
+            }
+          });
+        }
+      }
     } catch(_) {}
 
     function dispatchSafeResize() {
@@ -826,28 +861,34 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', function() {
         dispatchSafeResize();
-        setTimeout(dispatchSafeResize, 150);
+        setTimeout(dispatchSafeResize, 50);
+        setTimeout(dispatchSafeResize, 200);
       });
     } else {
       setTimeout(dispatchSafeResize, 0);
-      setTimeout(dispatchSafeResize, 150);
+      setTimeout(dispatchSafeResize, 50);
+      setTimeout(dispatchSafeResize, 200);
     }
     window.addEventListener('load', function() {
       dispatchSafeResize();
-      setTimeout(dispatchSafeResize, 150);
+      setTimeout(dispatchSafeResize, 50);
+      setTimeout(dispatchSafeResize, 200);
     });
 
     function pumpVirtualRaf() {
       _livePumpScheduled = false;
       var realNow = _origPerfNow();
-      var realDelta = Math.max(0, Math.min(100, realNow - _lastPumpRealMs));
+      var rawDelta = realNow - _lastPumpRealMs;
+      var realDelta = (Number.isFinite(rawDelta) && rawDelta >= 0) ? Math.min(100, rawDelta) : 16.67;
       _lastPumpRealMs = realNow;
 
       if (!_isPaused) {
-        _liveVirtualMs = Math.max(0.016, _liveVirtualMs + realDelta * _speedMultiplier);
+        var nextMs = _liveVirtualMs + realDelta * _speedMultiplier;
+        _liveVirtualMs = (Number.isFinite(nextMs) && nextMs >= 0.016) ? nextMs : (_liveVirtualMs + 16.67);
       }
 
       if (_liveRafQueue.length > 0) {
+        var safeStamp = (Number.isFinite(_liveVirtualMs) && _liveVirtualMs >= 0.016) ? _liveVirtualMs : 16.67;
         var batch = _liveRafQueue.splice(0, _liveRafQueue.length);
         for (var i = 0; i < batch.length; i++) {
           var entry = batch[i];
@@ -856,7 +897,7 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
             continue;
           }
           try {
-            entry.cb(_liveVirtualMs);
+            entry.cb(safeStamp);
           } catch(err) {
             try {
               window.parent.postMessage({
@@ -1006,18 +1047,37 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
       } else if (data.type === 'ctv-live-capture') {
         var targetC = findCanvas();
         var bmp = null;
-        if (targetC && targetC.width > 0 && targetC.height > 0 && window.createImageBitmap) {
-          try {
-            bmp = await window.createImageBitmap(targetC);
-          } catch(_) {}
+        var dataUrl = null;
+        if (targetC && targetC.width > 0 && targetC.height > 0) {
+          if (window.createImageBitmap) {
+            try {
+              bmp = await window.createImageBitmap(targetC);
+            } catch(_) {
+              bmp = null;
+            }
+          }
+          if (!bmp && typeof targetC.toDataURL === 'function') {
+            try {
+              dataUrl = targetC.toDataURL('image/jpeg', 0.85);
+            } catch(_) {
+              dataUrl = null;
+            }
+          }
         } else {
           bmp = await captureDomToBitmap(data.width || window.__CTV_VIRTUAL_W__, data.height || window.__CTV_VIRTUAL_H__);
+          if (!bmp && _domCaptureCanvas && typeof _domCaptureCanvas.toDataURL === 'function') {
+            try {
+              dataUrl = _domCaptureCanvas.toDataURL('image/jpeg', 0.85);
+            } catch(_) {
+              dataUrl = null;
+            }
+          }
         }
-        window.parent.postMessage({ type: 'ctv-live-frame', bitmap: bmp }, '*', bmp ? [bmp] : []);
+        window.parent.postMessage({ type: 'ctv-live-frame', bitmap: bmp, dataUrl: dataUrl }, '*', bmp ? [bmp] : []);
       }
     });
   })();
-  </script>
+  ${'<'}/script>
   `;
 }
 
@@ -1102,10 +1162,31 @@ export class CodeToVideoCompositor {
     this.cloudTexture = createCloudTexture();
 
     this.latestBitmap = null;
+    this.hasReceivedFrame = false;
+    this.waitingSinceMs = 0;
+    this._imageLoadSeq = 0;
+    this._loadingDataUrl = false;
 
     this.initBackgroundLayer();
     this.initCodePlane();
     this.initAtmosphericEffects();
+  }
+
+  attachPreviewCanvas(containerCanvas) {
+    if (!containerCanvas || containerCanvas === this.containerCanvas) return;
+    this.containerCanvas = containerCanvas;
+    this.containerCanvas.width = this.width;
+    this.containerCanvas.height = this.height;
+    this.previewCtx = this.containerCanvas.getContext('2d');
+  }
+
+  resetFrameTracking() {
+    this.hasReceivedFrame = false;
+    this.waitingSinceMs = performance.now();
+    if (this.latestBitmap) {
+      try { this.latestBitmap.close(); } catch {}
+      this.latestBitmap = null;
+    }
   }
 
   updateBitmap(bmp) {
@@ -1113,6 +1194,64 @@ export class CodeToVideoCompositor {
       try { this.latestBitmap.close(); } catch {}
     }
     this.latestBitmap = bmp;
+    if (bmp) {
+      this.hasReceivedFrame = true;
+    }
+  }
+
+  updateFrameImage(dataUrl) {
+    if (!dataUrl || this._loadingDataUrl) return;
+    this._loadingDataUrl = true;
+    const seq = ++this._imageLoadSeq;
+    const img = new Image();
+    img.onload = () => {
+      this._loadingDataUrl = false;
+      if (seq !== this._imageLoadSeq || !this.codeCtx) return;
+      try {
+        this.codeCtx.clearRect(0, 0, this.width, this.height);
+        this.codeCtx.drawImage(img, 0, 0, this.width, this.height);
+        this.hasReceivedFrame = true;
+        if (this.codeTexture) this.codeTexture.needsUpdate = true;
+      } catch {}
+    };
+    img.onerror = () => {
+      this._loadingDataUrl = false;
+    };
+    img.src = dataUrl;
+  }
+
+  draw3dFallbackTexture(timedOut = false) {
+    if (!this.codeCtx) return;
+    const ctx = this.codeCtx;
+    const w = this.width;
+    const h = this.height;
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#0f172a');
+    grad.addColorStop(1, '#1e1b4b');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = timedOut ? '#facc15' : '#38bdf8';
+    ctx.lineWidth = Math.max(4, Math.round(w * 0.004));
+    ctx.strokeRect(24, 24, w - 48, h - 48);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `900 ${Math.round(w * 0.032)}px system-ui, sans-serif`;
+    ctx.fillText(
+      timedOut ? '3D TV STAGE — SANDBOX FRAME BELUM TERSEDIA' : 'MEMUAT PANGGUNG 3D TV...',
+      w * 0.5,
+      h * 0.46
+    );
+    ctx.fillStyle = timedOut ? '#fde047' : '#bae6fd';
+    ctx.font = `600 ${Math.round(w * 0.02)}px system-ui, sans-serif`;
+    ctx.fillText(
+      timedOut
+        ? 'Perangkat membatasi capture live texture. Gunakan Fullscreen / Sinematik atau Ekspor MP4.'
+        : 'Menghubungkan frame animasi langsung ke layar TV 3D...',
+      w * 0.5,
+      h * 0.56
+    );
   }
 
   resize(width, height) {
@@ -1827,9 +1966,15 @@ export class CodeToVideoCompositor {
         this.previewCtx.drawImage(this.masterCanvas, 0, 0, this.width, this.height);
       }
     } else {
+      if (!this.waitingSinceMs) {
+        this.waitingSinceMs = performance.now();
+      }
       if (this.latestBitmap) {
         this.codeCtx.clearRect(0, 0, this.width, this.height);
         this.codeCtx.drawImage(this.latestBitmap, 0, 0, this.width, this.height);
+      } else if (!this.hasReceivedFrame) {
+        const timedOut = performance.now() - this.waitingSinceMs > 600;
+        this.draw3dFallbackTexture(timedOut);
       }
       this.codeTexture.needsUpdate = true;
 

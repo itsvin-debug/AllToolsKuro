@@ -707,9 +707,29 @@ export function compileUniversalCode(rawInput = '', mode = 'live', options = {})
     ? `<style id="ctv-font-override">html,body,h1,h2,h3,h4,p,span,div,button,a{font-family:${safeFontCss} !important;}</style>`
     : '';
   const cleanBgHook = cleanBg
-    ? '<style>h1,h2,h3,h4,h5,h6,p,span,a,button,label,text,tspan{opacity:0!important;color:transparent!important;text-shadow:none!important;}</style><script>(function(){if(window.CanvasRenderingContext2D){var p=CanvasRenderingContext2D.prototype;p.fillText=function(){};p.strokeText=function(){};}})();</script>'
+    ? '<style>h1,h2,h3,h4,h5,h6,p,span,a,button,label,text,tspan{opacity:0!important;color:transparent!important;text-shadow:none!important;}</style><script>(function(){if(window.CanvasRenderingContext2D){var p=CanvasRenderingContext2D.prototype;p.fillText=function(){};p.strokeText=function(){};}})();' + '<' + '/script>'
     : '';
   const bridgeScript = baseBridgeScript + fontHook + cleanBgHook;
+
+  // Sisipkan payload ke <head> tanpa ekspansi karakter $ pada String.prototype.replace
+  const injectIntoHead = (doc, payload) => {
+    const exactIdx = doc.indexOf('<head>');
+    if (exactIdx !== -1) {
+      const splitAt = exactIdx + 6;
+      return `${doc.slice(0, splitAt)}${payload}${doc.slice(splitAt)}`;
+    }
+    const headMatch = /<head\b[^>]*>/i.exec(doc);
+    if (headMatch) {
+      const splitAt = headMatch.index + headMatch[0].length;
+      return `${doc.slice(0, splitAt)}${payload}${doc.slice(splitAt)}`;
+    }
+    const htmlMatch = /<html\b[^>]*>/i.exec(doc);
+    if (htmlMatch) {
+      const splitAt = htmlMatch.index + htmlMatch[0].length;
+      return `${doc.slice(0, splitAt)}<head>${payload}</head>${doc.slice(splitAt)}`;
+    }
+    return null;
+  };
 
   const cleanCode = sanitizeUniversalSource(rawInput);
   const detected = detectCodeLanguage(cleanCode);
@@ -723,20 +743,15 @@ export function compileUniversalCode(rawInput = '', mode = 'live', options = {})
   if (category === 'text-prompt') {
     const compiled = compileTextPromptToSceneGraph(cleanCode, { ...studioSettings, usePromptHexColors: true }, duration);
     const html = cleanBg ? compiled.generatedCleanBgHtmlCode : compiled.generatedHtmlCode;
-    return html.includes('<head>') ? html.replace('<head>', () => `<head>${bridgeScript}`) : html;
+    return injectIntoHead(html, bridgeScript) || html;
   }
 
   // A. Full HTML Document
   if (category === 'full-html') {
     const libTags = buildAutoLibraryTags(cleanCode, /type=["']importmap["']/.test(cleanCode));
     const injectPayload = `${bridgeScript}${libTags ? '\n  ' + libTags : ''}`;
-    if (cleanCode.includes('<head>')) {
-      return cleanCode.replace('<head>', () => `<head>${injectPayload}`);
-    } else if (/<head\b[^>]*>/i.test(cleanCode)) {
-      return cleanCode.replace(/<head\b([^>]*)>/i, (_, attrs) => `<head${attrs}>${injectPayload}`);
-    } else if (/<html\b[^>]*>/i.test(cleanCode)) {
-      return cleanCode.replace(/<html\b([^>]*)>/i, (_, attrs) => `<html${attrs}><head>${injectPayload}</head>`);
-    }
+    const injected = injectIntoHead(cleanCode, injectPayload);
+    if (injected) return injected;
     return `<!DOCTYPE html><html><head><meta charset="utf-8">${injectPayload}</head><body>${cleanCode}</body></html>`;
   }
 
