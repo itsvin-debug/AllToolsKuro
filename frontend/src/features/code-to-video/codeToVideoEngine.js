@@ -773,13 +773,15 @@ export function buildRenderBridgeScript(width, height) {
 }
 
 /**
- * Script Bridge Non-Invasif untuk Live Preview Iframe (Native Direct GPU)
- * Mode normal (speed === 1 & tidak pause) membiarkan requestAnimationFrame,
- * performance.now, dan Date.now berjalan 100% native milik GPU browser.
+ * Script Bridge Non-Invasif untuk Live Preview Iframe (Native Direct GPU + Offset Clock Seekable)
+ * Menjaga 100% refresh rate GPU native (60–144 FPS) tanpa membajak scheduler browser,
+ * sekaligus mendukung seek/scrubbing maju-mundur, Pause/Resume, Restart, dan Speed.
  */
-export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
+export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720, durationSec = 12, initialSpeed = 1.0) {
   const safeW = Math.max(320, Number(virtualW) || 1280);
   const safeH = Math.max(240, Number(virtualH) || 720);
+  const safeDurMs = Math.max(1000, (Number(durationSec) || 12) * 1000);
+  const safeSpeed = Math.max(0.1, Number(initialSpeed) || 1.0);
   return `
   <style id="ctv-viewport-guard">html,body{min-width:100%;min-height:100%;}</style>
   <script>
@@ -787,21 +789,33 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
     window.__CTV_VIRTUAL_W__ = ${safeW};
     window.__CTV_VIRTUAL_H__ = ${safeH};
 
-    var _speedMultiplier = 1.0;
-    var _isPaused = false;
-
     var _origPerfNow = performance.now.bind(performance);
     var _origDateNow = Date.now.bind(Date);
     var _origRaf = window.requestAnimationFrame.bind(window);
     var _origCaf = window.cancelAnimationFrame.bind(window);
+    var _baseEpoch = _origDateNow();
 
-    var _virtualOffsetReady = false;
-    var _liveVirtualMs = 16.67;
-    var _lastPumpRealMs = _origPerfNow();
-    var _liveRafQueue = [];
-    var _liveRafCanceled = new Set();
-    var _liveRafId = 1;
-    var _livePumpScheduled = false;
+    var _anchorReal = _origPerfNow();
+    var _anchorVirtual = 0;
+    var _speed = ${safeSpeed};
+    var _paused = false;
+    var _loopDurationMs = ${safeDurMs};
+
+    var _pendingRafs = new Map();
+    var _nextRafId = 1;
+    var _nativePumpScheduled = false;
+    var _fpsFrames = 0;
+    var _fpsWindowStart = _origPerfNow();
+    var _measuredFps = 60;
+    var _lastTimeReportMs = 0;
+
+    function getVirtualMs() {
+      if (_paused) {
+        return Math.max(0, Number.isFinite(_anchorVirtual) ? _anchorVirtual : 0);
+      }
+      var raw = _anchorVirtual + (_origPerfNow() - _anchorReal) * _speed;
+      return Math.max(0, Number.isFinite(raw) ? raw : _anchorVirtual);
+    }
 
     ${getSandboxSharedHelpersCode()}
 
@@ -875,94 +889,103 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
       setTimeout(dispatchSafeResize, 200);
     });
 
-    function pumpVirtualRaf() {
-      _livePumpScheduled = false;
+    function postParentTime(force) {
       var realNow = _origPerfNow();
-      var rawDelta = realNow - _lastPumpRealMs;
-      var realDelta = (Number.isFinite(rawDelta) && rawDelta >= 0) ? Math.min(100, rawDelta) : 16.67;
-      _lastPumpRealMs = realNow;
+      if (!force && realNow - _lastTimeReportMs < 60) return;
+      _lastTimeReportMs = realNow;
+      var vMs = getVirtualMs();
+      var loopMs = _loopDurationMs > 0 ? (vMs % _loopDurationMs) : vMs;
+      try {
+        window.parent.postMessage({
+          type: 'ctv-time',
+          timeMs: Number.isFinite(loopMs) ? loopMs : 0,
+          rawTimeMs: Number.isFinite(vMs) ? vMs : 0,
+          fps: _measuredFps
+        }, '*');
+      } catch(_) {}
+    }
 
-      if (!_isPaused) {
-        var nextMs = _liveVirtualMs + realDelta * _speedMultiplier;
-        _liveVirtualMs = (Number.isFinite(nextMs) && nextMs >= 0.016) ? nextMs : (_liveVirtualMs + 16.67);
-      }
-
-      if (_liveRafQueue.length > 0) {
-        var safeStamp = (Number.isFinite(_liveVirtualMs) && _liveVirtualMs >= 0.016) ? _liveVirtualMs : 16.67;
-        var batch = _liveRafQueue.splice(0, _liveRafQueue.length);
-        for (var i = 0; i < batch.length; i++) {
-          var entry = batch[i];
-          if (_liveRafCanceled.has(entry.id)) {
-            _liveRafCanceled.delete(entry.id);
-            continue;
-          }
+    function executeBatchAt(timestampMs) {
+      if (_pendingRafs.size === 0) return;
+      var entries = Array.from(_pendingRafs.values());
+      _pendingRafs.clear();
+      var safeTs = Math.max(0, Number.isFinite(timestampMs) ? timestampMs : 0);
+      for (var i = 0; i < entries.length; i++) {
+        try {
+          entries[i](safeTs);
+        } catch(err) {
           try {
-            entry.cb(safeStamp);
-          } catch(err) {
-            try {
-              window.parent.postMessage({
-                type: 'ctv-error',
-                error: 'Live Runtime: ' + (err && err.message ? err.message : String(err)),
-                message: err && err.message ? err.message : String(err)
-              }, '*');
-            } catch(_) {}
-          }
+            window.parent.postMessage({
+              type: 'ctv-error',
+              error: 'Live Runtime: ' + (err && err.message ? err.message : String(err)),
+              message: err && err.message ? err.message : String(err)
+            }, '*');
+          } catch(_) {}
         }
-      }
-
-      if (_liveRafQueue.length > 0 && !_livePumpScheduled && (_isPaused || _speedMultiplier !== 1.0)) {
-        _livePumpScheduled = true;
-        _origRaf(pumpVirtualRaf);
       }
     }
 
-    function syncClockMode() {
-      var useVirtual = _isPaused || _speedMultiplier !== 1.0;
-      if (!useVirtual) {
-        performance.now = _origPerfNow;
-        Date.now = _origDateNow;
-        window.requestAnimationFrame = _origRaf;
-        window.cancelAnimationFrame = _origCaf;
-        // Kosongkan callback tertunda ke rAF native agar loop terus mengalir
-        if (_liveRafQueue.length > 0) {
-          var pending = _liveRafQueue.splice(0, _liveRafQueue.length);
-          for (var i = 0; i < pending.length; i++) {
-            if (!_liveRafCanceled.has(pending[i].id)) {
-              _origRaf(pending[i].cb);
-            }
-          }
-          _liveRafCanceled.clear();
-        }
-        return;
+    function runNativeRafPump() {
+      _nativePumpScheduled = false;
+      if (_paused) return;
+
+      var realNow = _origPerfNow();
+      _fpsFrames++;
+      if (realNow - _fpsWindowStart >= 500) {
+        _measuredFps = Math.max(1, Math.round((_fpsFrames * 1000) / Math.max(1, realNow - _fpsWindowStart)));
+        _fpsFrames = 0;
+        _fpsWindowStart = realNow;
       }
 
-      if (!_virtualOffsetReady) {
-        _liveVirtualMs = _origPerfNow();
-        _lastPumpRealMs = _origPerfNow();
-        _virtualOffsetReady = true;
-      }
+      var now = getVirtualMs();
+      executeBatchAt(now);
+      postParentTime(false);
 
-      performance.now = function() {
-        return _liveVirtualMs;
-      };
-      Date.now = function() {
-        return Math.floor(_origDateNow() + (_liveVirtualMs - _origPerfNow()));
-      };
-      window.requestAnimationFrame = function(cb) {
-        var id = _liveRafId++;
-        if (typeof cb === 'function') {
-          _liveRafQueue.push({ id: id, cb: cb });
-          if (!_livePumpScheduled) {
-            _livePumpScheduled = true;
-            _origRaf(pumpVirtualRaf);
-          }
-        }
-        return id;
-      };
-      window.cancelAnimationFrame = function(id) {
-        _liveRafCanceled.add(id);
-      };
+      if (!_paused && _pendingRafs.size > 0 && !_nativePumpScheduled) {
+        _nativePumpScheduled = true;
+        _origRaf(runNativeRafPump);
+      }
     }
+
+    function renderSinglePausedFrame() {
+      var targetMs = getVirtualMs();
+      if (typeof window.__userDraw === 'function') {
+        var c = findCanvas();
+        if (c) {
+          var ctx2 = c.getContext('2d');
+          var sec = targetMs * 0.001;
+          try {
+            window.__userDraw(ctx2, c, c.width, c.height, sec, sec, 1 / 60, Math.round(sec * 60));
+          } catch(_) {}
+        }
+      }
+      if (_pendingRafs.size > 0) {
+        _origRaf(function() {
+          executeBatchAt(getVirtualMs());
+        });
+      }
+      postParentTime(true);
+    }
+
+    // Offset Clock Non-Invasif: timestamp selalu finite >= 0
+    performance.now = getVirtualMs;
+    Date.now = function() {
+      return Math.floor(_baseEpoch + getVirtualMs());
+    };
+    window.requestAnimationFrame = function(cb) {
+      var id = _nextRafId++;
+      if (typeof cb === 'function') {
+        _pendingRafs.set(id, cb);
+        if (!_paused && !_nativePumpScheduled) {
+          _nativePumpScheduled = true;
+          _origRaf(runNativeRafPump);
+        }
+      }
+      return id;
+    };
+    window.cancelAnimationFrame = function(id) {
+      _pendingRafs.delete(id);
+    };
 
     window.addEventListener('error', function(e) {
       try {
@@ -995,40 +1018,71 @@ export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
         if (data.width > 0) window.__CTV_VIRTUAL_W__ = data.width;
         if (data.height > 0) window.__CTV_VIRTUAL_H__ = data.height;
         dispatchSafeResize();
+      } else if (data.type === 'ctv-set-duration') {
+        var nextDurMs = Math.max(1000, (Number(data.durationSec) || 12) * 1000);
+        _loopDurationMs = nextDurMs;
+        postParentTime(true);
       } else if (data.type === 'ctv-live-speed' || data.type === 'ctv-speed') {
-        _speedMultiplier = Number(data.speedMultiplier) || 1.0;
-        syncClockMode();
+        _anchorVirtual = getVirtualMs();
+        _anchorReal = _origPerfNow();
+        _speed = Math.max(0.1, Number(data.speedMultiplier ?? data.speed) || 1.0);
         if (document.getAnimations) {
           try {
-            document.getAnimations().forEach(function(a) { a.playbackRate = _speedMultiplier; });
+            document.getAnimations().forEach(function(a) { a.playbackRate = _speed; });
           } catch(_) {}
         }
       } else if (data.type === 'ctv-live-pause' || data.type === 'ctv-pause') {
-        _isPaused = true;
-        syncClockMode();
+        _anchorVirtual = getVirtualMs();
+        _anchorReal = _origPerfNow();
+        _paused = true;
         if (document.getAnimations) {
           try {
             document.getAnimations().forEach(function(a) { a.pause(); });
           } catch(_) {}
         }
+        postParentTime(true);
       } else if (data.type === 'ctv-live-resume' || data.type === 'ctv-resume') {
-        _isPaused = false;
-        _lastPumpRealMs = _origPerfNow();
-        syncClockMode();
+        _anchorReal = _origPerfNow();
+        _paused = false;
         if (document.getAnimations) {
           try {
             document.getAnimations().forEach(function(a) { a.play(); });
           } catch(_) {}
         }
-      } else if (data.type === 'ctv-live-restart') {
-        _liveVirtualMs = 0.016;
-        _lastPumpRealMs = _origPerfNow();
-        _isPaused = false;
-        syncClockMode();
+        if (_pendingRafs.size > 0 && !_nativePumpScheduled) {
+          _nativePumpScheduled = true;
+          _origRaf(runNativeRafPump);
+        }
+        postParentTime(true);
+      } else if (data.type === 'ctv-seek') {
+        var targetMs = Math.max(0, Math.min(_loopDurationMs, Number(data.timeMs) || 0));
+        _anchorVirtual = targetMs;
+        _anchorReal = _origPerfNow();
         if (document.getAnimations) {
           try {
-            document.getAnimations().forEach(function(a) { a.currentTime = 0; a.play(); });
+            document.getAnimations().forEach(function(a) { a.currentTime = targetMs; });
           } catch(_) {}
+        }
+        if (_paused) {
+          renderSinglePausedFrame();
+        } else {
+          postParentTime(true);
+        }
+      } else if (data.type === 'ctv-live-restart' || data.type === 'ctv-restart') {
+        _anchorVirtual = 0;
+        _anchorReal = _origPerfNow();
+        if (document.getAnimations) {
+          try {
+            document.getAnimations().forEach(function(a) {
+              a.currentTime = 0;
+              if (!_paused) a.play();
+            });
+          } catch(_) {}
+        }
+        if (_paused) {
+          renderSinglePausedFrame();
+        } else {
+          postParentTime(true);
         }
       } else if (data.type === 'ctv-live-font') {
         var styleId = 'ctv-font-override';
@@ -1086,9 +1140,17 @@ export function detectCodeLanguage(rawInput = '') {
 }
 
 export function compileUniversalCode(rawInput = '', mode = 'live', options = {}) {
+  const initSpeed = options.studioSettings?.pureBypassMode
+    ? 1.0
+    : (Number(options.studioSettings?.motionSpeed) || 1.0);
   return _compileUniversalCode(rawInput, mode, {
     ...options,
-    buildLiveBridge: (w, h) => buildLiveBridgeScript(w ?? options.width ?? 1280, h ?? options.height ?? 720),
+    buildLiveBridge: (w, h) => buildLiveBridgeScript(
+      w ?? options.width ?? 1280,
+      h ?? options.height ?? 720,
+      options.duration ?? 12,
+      initSpeed
+    ),
     buildRenderBridge: buildRenderBridgeScript
   });
 }

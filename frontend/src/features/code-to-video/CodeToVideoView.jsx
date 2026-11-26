@@ -61,6 +61,7 @@ import {
   parseKuroStudioProjectJson
 } from './projectExporter';
 import StudioCustomPanel from './StudioCustomPanel';
+import PreviewControlBar from './PreviewControlBar';
 import { downloadBlob, downloadText, downloadFromUrl } from '../../shared/utils/fileDownload';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
 
@@ -137,8 +138,14 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
   // --- VIEWPORT & PREVIEW STATE ---
   const [isPlaying, setIsPlaying] = useState(true);
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [fpsDisplay, setFpsDisplay] = useState(60);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const isPlayingRef = useRef(true);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   // --- EKSPOR VIDEO SETTINGS (DURASI HINGGA 300 DETIK / 5 MENIT) ---
   const [exportRes, setExportRes] = useState('1080p');
@@ -223,6 +230,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
   const live3dWaitSinceRef = useRef(0);
   const live3dWarnedRef = useRef(false);
   const prevPreviewVisibleRef = useRef(isPreviewVisible);
+  const currentTimeSecRef = useRef(0);
+  const isScrubbingRef = useRef(false);
+  const lastIframeTimeReportAtRef = useRef(0);
+  const lastUiTimeSyncAtRef = useRef(0);
+  const lastUiFpsSyncAtRef = useRef(0);
+  const prevDurationRef = useRef(12);
 
   useEffect(() => {
     try {
@@ -273,6 +286,9 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     });
     setErrorLog(null);
     liveCaptureInFlightRef.current = false;
+    lastIframeTimeReportAtRef.current = 0;
+    currentTimeSecRef.current = 0;
+    setCurrentTimeSec(0);
     setCompiledLiveHtml(compiled);
     setIframeRunKey((k) => k + 1);
     startTimeRef.current = performance.now();
@@ -361,6 +377,87 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   }, [is3dMode, virtualDims.width, virtualDims.height, isPreviewVisible]);
 
+  // Teruskan perubahan durasi ke Live Iframe tanpa reload
+  useEffect(() => {
+    if (prevDurationRef.current === effectiveExportDuration) return;
+    prevDurationRef.current = effectiveExportDuration;
+    try {
+      liveIframeRef.current?.contentWindow?.postMessage({
+        type: 'ctv-set-duration',
+        durationSec: effectiveExportDuration
+      }, '*');
+    } catch {}
+  }, [effectiveExportDuration]);
+
+  // Helper tunggal untuk merender frame overlay 2D / panggung 3D pada detik tertentu
+  const renderOverlaysAtTime = useCallback((loopT, curSettings = settingsRef.current) => {
+    if (!compositorRef.current) return;
+    const isBypass = Boolean(curSettings.pureBypassMode);
+    const is3d = !isBypass && (curSettings.frameStyle === '3d-tv' || Boolean(curSettings.stage3d));
+    const totalDur = effectiveDurationRef.current;
+    const frameSettings = { ...curSettings, totalDuration: totalDur };
+
+    if (!is3d) {
+      const wrapEl = stageContentWrapRef.current;
+      const iframeEl = liveIframeRef.current;
+      const motion = computeMotionAndFrameRect(
+        compositorRef.current.width,
+        compositorRef.current.height,
+        loopT,
+        totalDur,
+        frameSettings
+      );
+      if (wrapEl) {
+        wrapEl.style.left = `${motion.rect.x}px`;
+        wrapEl.style.top = `${motion.rect.y}px`;
+        wrapEl.style.width = `${motion.rect.w}px`;
+        wrapEl.style.height = `${motion.rect.h}px`;
+        wrapEl.style.borderRadius = `${motion.rect.radius}px`;
+        wrapEl.style.clipPath = motion.wipeProgress < 1
+          ? `inset(0 ${Math.round((1 - motion.wipeProgress) * 100)}% 0 0)`
+          : 'none';
+      }
+      if (iframeEl) {
+        iframeEl.style.filter = isBypass ? 'none' : buildCssFilterString(curSettings);
+        iframeEl.style.opacity = String(isBypass ? 1 : motion.alpha);
+        iframeEl.style.transform = isBypass
+          ? 'none'
+          : `translate(${motion.tx.toFixed(1)}px, ${motion.ty.toFixed(1)}px) scale(${motion.scale.toFixed(4)})`;
+      }
+      if (overlayCanvasRef.current) {
+        const oCanvas = overlayCanvasRef.current;
+        const oCtx = oCanvas.getContext('2d');
+        compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, loopT, frameSettings);
+      }
+    } else {
+      const nowWall = Date.now();
+      if (liveCaptureInFlightRef.current && nowWall - liveCaptureSentAtRef.current > 600) {
+        liveCaptureInFlightRef.current = false;
+      }
+      if (!liveCaptureInFlightRef.current && liveIframeRef.current?.contentWindow) {
+        liveCaptureInFlightRef.current = true;
+        liveCaptureSentAtRef.current = nowWall;
+        liveIframeRef.current.contentWindow.postMessage({
+          type: 'ctv-live-capture',
+          width: compositorRef.current.width,
+          height: compositorRef.current.height
+        }, '*');
+      }
+
+      if (
+        !compositorRef.current.hasReceivedFrame &&
+        live3dWaitSinceRef.current > 0 &&
+        performance.now() - live3dWaitSinceRef.current > 600 &&
+        !live3dWarnedRef.current
+      ) {
+        live3dWarnedRef.current = true;
+        setLive3dWarning(true);
+      }
+
+      compositorRef.current.renderFrame(loopT, frameSettings);
+    }
+  }, []);
+
   // Inisialisasi Engine Compositor & Loop Direct GPU
   useEffect(() => {
     const initialDims = getVirtualStageSize(exportAspect);
@@ -379,80 +476,32 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
     // Loop animasi live preview Direct GPU dengan sinkronisasi WYSIWYG 100%
     const loop = (now) => {
-      if (isPlaying && compositorRef.current) {
+      if (isPlayingRef.current && compositorRef.current) {
         const curSettings = settingsRef.current;
         const isBypass = Boolean(curSettings.pureBypassMode);
-        const is3d = !isBypass && (curSettings.frameStyle === '3d-tv' || Boolean(curSettings.stage3d));
         const spd = isBypass ? 1.0 : (curSettings.motionSpeed || 1.0);
         const totalDur = effectiveDurationRef.current;
-        const elapsedRaw = ((now - startTimeRef.current) / 1000) * spd;
-        const loopT = totalDur > 0 ? (elapsedRaw % totalDur) : elapsedRaw;
-        const frameSettings = { ...curSettings, totalDuration: totalDur };
 
-        if (!is3d) {
-          // Terapkan CSS Filter, Bingkai, Camera Motion & Transisi Intro/Outro di DOM Live Stage tanpa re-render React
-          const wrapEl = stageContentWrapRef.current;
-          const iframeEl = liveIframeRef.current;
-          const motion = computeMotionAndFrameRect(
-            compositorRef.current.width,
-            compositorRef.current.height,
-            loopT,
-            totalDur,
-            frameSettings
-          );
-          if (wrapEl) {
-            wrapEl.style.left = `${motion.rect.x}px`;
-            wrapEl.style.top = `${motion.rect.y}px`;
-            wrapEl.style.width = `${motion.rect.w}px`;
-            wrapEl.style.height = `${motion.rect.h}px`;
-            wrapEl.style.borderRadius = `${motion.rect.radius}px`;
-            wrapEl.style.clipPath = motion.wipeProgress < 1
-              ? `inset(0 ${Math.round((1 - motion.wipeProgress) * 100)}% 0 0)`
-              : 'none';
-          }
-          if (iframeEl) {
-            iframeEl.style.filter = isBypass ? 'none' : buildCssFilterString(curSettings);
-            iframeEl.style.opacity = String(isBypass ? 1 : motion.alpha);
-            iframeEl.style.transform = isBypass
-              ? 'none'
-              : `translate(${motion.tx.toFixed(1)}px, ${motion.ty.toFixed(1)}px) scale(${motion.scale.toFixed(4)})`;
-          }
-          if (overlayCanvasRef.current) {
-            const oCanvas = overlayCanvasRef.current;
-            const oCtx = oCanvas.getContext('2d');
-            compositorRef.current.renderOverlayOnly(oCtx, oCanvas.width, oCanvas.height, loopT, frameSettings);
-          }
-        } else {
-          const nowWall = Date.now();
-          if (liveCaptureInFlightRef.current && nowWall - liveCaptureSentAtRef.current > 600) {
-            liveCaptureInFlightRef.current = false;
-          }
-          if (!liveCaptureInFlightRef.current && liveIframeRef.current?.contentWindow) {
-            liveCaptureInFlightRef.current = true;
-            liveCaptureSentAtRef.current = nowWall;
-            liveIframeRef.current.contentWindow.postMessage({
-              type: 'ctv-live-capture',
-              width: compositorRef.current.width,
-              height: compositorRef.current.height
-            }, '*');
-          }
-
-          if (
-            !compositorRef.current.hasReceivedFrame &&
-            live3dWaitSinceRef.current > 0 &&
-            now - live3dWaitSinceRef.current > 600 &&
-            !live3dWarnedRef.current
-          ) {
-            live3dWarnedRef.current = true;
-            setLive3dWarning(true);
-          }
-
-          compositorRef.current.renderFrame(loopT, frameSettings);
+        let loopT = currentTimeSecRef.current;
+        const iframeReportFresh = Date.now() - lastIframeTimeReportAtRef.current < 180;
+        if (!iframeReportFresh && !isScrubbingRef.current) {
+          const elapsedRaw = ((now - startTimeRef.current) / 1000) * spd;
+          loopT = totalDur > 0 ? (Math.max(0, elapsedRaw) % totalDur) : Math.max(0, elapsedRaw);
+          currentTimeSecRef.current = loopT;
         }
 
+        if (!isScrubbingRef.current && now - lastUiTimeSyncAtRef.current >= 60) {
+          lastUiTimeSyncAtRef.current = now;
+          setCurrentTimeSec(loopT);
+        }
+
+        renderOverlaysAtTime(loopT, curSettings);
+
         frameCount++;
-        if (now - lastFpsUpdate >= 1000) {
-          setFpsDisplay(frameCount);
+        if (now - lastFpsUpdate >= 500) {
+          if (Date.now() - lastIframeTimeReportAtRef.current >= 600) {
+            setFpsDisplay(Math.round((frameCount * 1000) / Math.max(1, now - lastFpsUpdate)));
+          }
           frameCount = 0;
           lastFpsUpdate = now;
         }
@@ -467,22 +516,72 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
       if (compositorRef.current) compositorRef.current.dispose();
     };
-  }, []);
+  }, [renderOverlaysAtTime]);
 
-  // Sinkronisasi state fullscreen bila ditutup lewat tombol ESC
+  // Sinkronisasi state fullscreen (Esc & Space shortcut saat tidak mengetik di form)
   useEffect(() => {
     const onFsChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      if (!document.fullscreenElement) {
+        setIsFullscreen(false);
+      }
+    };
+    const onGlobalKeyDown = (e) => {
+      const tag = (document.activeElement?.tagName || '').toLowerCase();
+      const isEditingInput = tag === 'textarea' || tag === 'input' || tag === 'select' || document.activeElement?.isContentEditable;
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      } else if (e.code === 'Space' && !isEditingInput && isPreviewVisible) {
+        e.preventDefault();
+        setIsPlaying((prev) => {
+          const next = !prev;
+          const spd = settingsRef.current?.pureBypassMode ? 1.0 : (Number(settingsRef.current?.motionSpeed) || 1.0);
+          if (next) {
+            startTimeRef.current = performance.now() - (currentTimeSecRef.current * 1000) / Math.max(0.1, spd);
+          }
+          try {
+            liveIframeRef.current?.contentWindow?.postMessage({
+              type: next ? 'ctv-live-resume' : 'ctv-live-pause'
+            }, '*');
+          } catch {}
+          return next;
+        });
+      }
     };
     document.addEventListener('fullscreenchange', onFsChange);
-    return () => document.removeEventListener('fullscreenchange', onFsChange);
-  }, []);
+    window.addEventListener('keydown', onGlobalKeyDown);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange);
+      window.removeEventListener('keydown', onGlobalKeyDown);
+    };
+  }, [isFullscreen, isPreviewVisible]);
 
-  // Tangkap error runtime & bitmap frame live preview dari iframe sandbox
+  // Tangkap error runtime, pelaporan waktu FPS, & bitmap frame live preview dari iframe sandbox
   useEffect(() => {
     const handleMsg = (e) => {
       if (e.data?.type === 'ctv-error') {
         setErrorLog(e.data.error);
+      } else if (e.data?.type === 'ctv-time') {
+        const nowWall = Date.now();
+        lastIframeTimeReportAtRef.current = nowWall;
+        if (!isScrubbingRef.current) {
+          const maxDur = effectiveDurationRef.current;
+          const nextSec = Math.max(0, Math.min(maxDur, (Number(e.data.timeMs) || 0) / 1000));
+          currentTimeSecRef.current = nextSec;
+          const spd = settingsRef.current?.pureBypassMode ? 1.0 : (Number(settingsRef.current?.motionSpeed) || 1.0);
+          startTimeRef.current = performance.now() - (nextSec * 1000) / Math.max(0.1, spd);
+          if (nowWall - lastUiTimeSyncAtRef.current >= 60) {
+            lastUiTimeSyncAtRef.current = nowWall;
+            setCurrentTimeSec(nextSec);
+          }
+        }
+        if (Number.isFinite(e.data.fps) && e.data.fps > 0 && nowWall - lastUiFpsSyncAtRef.current >= 500) {
+          lastUiFpsSyncAtRef.current = nowWall;
+          setFpsDisplay(Math.round(e.data.fps));
+        }
+      } else if (e.data?.type === 'ctv-live-frame') {
       } else if (e.data?.type === 'ctv-live-frame') {
         liveCaptureInFlightRef.current = false;
         if (compositorRef.current) {
@@ -838,10 +937,51 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     }
   };
 
-  // Controls Player (Direct message to Live Iframe tanpa reload)
-  const handleTogglePlay = () => {
+  // Controls Player (Seekable Timeline + Pause/Resume + Restart + Fullscreen CSS Container)
+  const seekToTime = useCallback((nextSec) => {
+    const maxDur = effectiveDurationRef.current;
+    const clamped = Math.max(0, Math.min(maxDur, Number(nextSec) || 0));
+    currentTimeSecRef.current = clamped;
+    setCurrentTimeSec(clamped);
+
+    const spd = settingsRef.current?.pureBypassMode ? 1.0 : (Number(settingsRef.current?.motionSpeed) || 1.0);
+    startTimeRef.current = performance.now() - (clamped * 1000) / Math.max(0.1, spd);
+
+    try {
+      liveIframeRef.current?.contentWindow?.postMessage({
+        type: 'ctv-seek',
+        timeMs: Math.round(clamped * 1000)
+      }, '*');
+    } catch {}
+
+    renderOverlaysAtTime(clamped, settingsRef.current);
+  }, [renderOverlaysAtTime]);
+
+  const handleSeekStart = useCallback(() => {
+    isScrubbingRef.current = true;
+  }, []);
+
+  const handleSeekChange = useCallback((sec) => {
+    isScrubbingRef.current = true;
+    seekToTime(sec);
+  }, [seekToTime]);
+
+  const handleSeekEnd = useCallback((sec) => {
+    isScrubbingRef.current = false;
+    seekToTime(sec);
+  }, [seekToTime]);
+
+  const handleJumpDelta = useCallback((deltaSec) => {
+    seekToTime(currentTimeSecRef.current + (Number(deltaSec) || 0));
+  }, [seekToTime]);
+
+  const handleTogglePlay = useCallback(() => {
     setIsPlaying((prev) => {
       const next = !prev;
+      const spd = settingsRef.current?.pureBypassMode ? 1.0 : (Number(settingsRef.current?.motionSpeed) || 1.0);
+      if (next) {
+        startTimeRef.current = performance.now() - (currentTimeSecRef.current * 1000) / Math.max(0.1, spd);
+      }
       try {
         liveIframeRef.current?.contentWindow?.postMessage({
           type: next ? 'ctv-live-resume' : 'ctv-live-pause'
@@ -849,9 +989,12 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       } catch {}
       return next;
     });
-  };
+  }, []);
 
-  const handleRestart = () => {
+  const handleRestart = useCallback(() => {
+    currentTimeSecRef.current = 0;
+    setCurrentTimeSec(0);
+    lastIframeTimeReportAtRef.current = 0;
     startTimeRef.current = performance.now();
     setIsPlaying(true);
     try {
@@ -859,18 +1002,22 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
         type: 'ctv-live-restart'
       }, '*');
     } catch {}
-  };
+    setIframeRunKey((k) => k + 1);
+  }, []);
 
-  const handleToggleFullscreen = () => {
-    if (!viewportRef.current) return;
-    if (!document.fullscreenElement) {
-      viewportRef.current.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
-    }
-  };
+  const handleToggleFullscreen = useCallback(() => {
+    setIsFullscreen((prev) => {
+      const next = !prev;
+      if (next) {
+        try {
+          viewportRef.current?.requestFullscreen?.().catch(() => {});
+        } catch {}
+      } else if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+      return next;
+    });
+  }, []);
 
   const buildRenderSignature = useCallback(
     (sourceCode) => `${editorTab}|${exportRes}|${exportAspect}|${exportFps}|${effectiveExportDuration}|${exportBitrate}|${JSON.stringify(settingsRef.current)}|${sourceCode.length}:${sourceCode.slice(0, 64)}`,
@@ -1536,177 +1683,174 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
             </div>
           </div>
 
-          {/* Viewport Box (Canvas Output & Scaled Virtual HD Live Stage) */}
+          {/* Container Layar + Kontrol Eksternal (Berubah menjadi Fullscreen Cinema Container saat Fullscreen) */}
           <div
             ref={viewportRef}
-            className="bg-black border-2 border-black shadow-[4px_4px_0px_#000] p-2 relative flex flex-col items-center justify-center overflow-hidden min-w-0"
+            className={
+              isFullscreen
+                ? 'fixed inset-0 z-[9999] bg-neutral-950 flex flex-col w-screen h-[100dvh] overflow-hidden'
+                : 'space-y-3 min-w-0'
+            }
           >
+            {/* 1. KOTAK LAYAR PREVIEW 100% MURNI (ZERO CONTROLS INSIDE & ZERO LETTERBOX OVERFLOW) */}
             <div
-              ref={stageOuterRef}
-              className="w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden"
-              style={{
-                aspectRatio: exportAspect.replace(':', '/'),
-                maxHeight: isFullscreen ? 'calc(100vh - 80px)' : '440px',
-                minHeight: '210px'
-              }}
+              className={
+                isFullscreen
+                  ? 'flex-1 min-h-0 w-full flex items-center justify-center p-2 sm:p-4 overflow-hidden'
+                  : `w-full bg-neutral-950 border-2 border-black shadow-[4px_4px_0px_#000] overflow-hidden ${
+                      virtualDims.height > virtualDims.width ? 'flex justify-center' : ''
+                    }`
+              }
             >
-              {/* Mode Layar Penuh / Bingkai Kustom: Panggung Virtual HD Tersekalakan */}
-              {(settings.pureBypassMode || (settings.frameStyle !== '3d-tv' && !settings.stage3d)) ? (
-                <div
-                  style={{
-                    width: `${Math.max(1, Math.round(virtualDims.width * stageScale))}px`,
-                    height: `${Math.max(1, Math.round(virtualDims.height * stageScale))}px`,
-                    position: 'relative',
-                    overflow: 'hidden',
-                    flexShrink: 0
-                  }}
-                >
+              <div
+                ref={stageOuterRef}
+                className={
+                  isFullscreen
+                    ? 'w-full h-full relative flex items-center justify-center overflow-hidden'
+                    : virtualDims.height > virtualDims.width
+                    ? 'relative flex items-center justify-center bg-neutral-950 overflow-hidden mx-auto h-[420px] sm:h-[480px] lg:h-[520px] max-w-full'
+                    : 'w-full relative flex items-center justify-center bg-neutral-950 overflow-hidden'
+                }
+                style={
+                  isFullscreen
+                    ? undefined
+                    : virtualDims.height > virtualDims.width
+                    ? { aspectRatio: exportAspect.replace(':', '/'), width: 'auto', maxWidth: '100%' }
+                    : { aspectRatio: exportAspect.replace(':', '/') }
+                }
+              >
+                {/* Mode Layar Penuh / Bingkai Kustom: Panggung Virtual HD Tersekalakan */}
+                {(settings.pureBypassMode || (settings.frameStyle !== '3d-tv' && !settings.stage3d)) ? (
                   <div
                     style={{
-                      width: `${virtualDims.width}px`,
-                      height: `${virtualDims.height}px`,
-                      transform: `scale(${stageScale})`,
-                      transformOrigin: 'top left',
+                      width: `${Math.max(1, Math.round(virtualDims.width * stageScale))}px`,
+                      height: `${Math.max(1, Math.round(virtualDims.height * stageScale))}px`,
                       position: 'relative',
-                      background:
-                        !settings.pureBypassMode && (settings.frameStyle === 'neo-brutalist' || settings.frameStyle === 'glass')
-                          ? settings.bgType === 'solid'
-                            ? settings.bgColor1
-                            : `linear-gradient(135deg, ${settings.bgColor1}, ${settings.bgColor2})`
-                          : 'transparent'
+                      overflow: 'hidden',
+                      flexShrink: 0
                     }}
                   >
                     <div
-                      ref={stageContentWrapRef}
                       style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: 0,
-                        width: '100%',
-                        height: '100%',
-                        overflow: 'hidden',
-                        zIndex: 1
-                      }}
-                    >
-                      {isPreviewVisible && (
-                        <iframe
-                          key={`live-stage-${iframeRunKey}-2d`}
-                          ref={liveIframeRef}
-                          srcDoc={compiledLiveHtml}
-                          sandbox="allow-scripts"
-                          onLoad={() => {
-                            liveCaptureInFlightRef.current = false;
-                            syncIframeViewport(virtualDims);
-                          }}
-                          className="border-0"
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            width: '100%',
-                            height: '100%',
-                            pointerEvents: isRendering || bundleExportState.active ? 'none' : 'auto'
-                          }}
-                          title="Live Animation Stage"
-                        />
-                      )}
-                    </div>
-                    <canvas
-                      ref={overlayCanvasRef}
-                      width={virtualDims.width}
-                      height={virtualDims.height}
-                      className="absolute inset-0 w-full h-full pointer-events-none"
-                      style={{ zIndex: 2 }}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {isPreviewVisible && (
-                    <iframe
-                      key={`live-stage-${iframeRunKey}-3d`}
-                      ref={liveIframeRef}
-                      srcDoc={compiledLiveHtml}
-                      sandbox="allow-scripts"
-                      onLoad={() => {
-                        liveCaptureInFlightRef.current = false;
-                        if (compositorRef.current) {
-                          compositorRef.current.resetFrameTracking();
-                        }
-                        syncIframeViewport(virtualDims);
-                      }}
-                      className="border-0"
-                      style={{
-                        position: 'fixed',
-                        left: 0,
-                        top: 0,
                         width: `${virtualDims.width}px`,
                         height: `${virtualDims.height}px`,
-                        opacity: 0.001,
-                        pointerEvents: 'none',
-                        zIndex: -10
+                        transform: `scale(${stageScale})`,
+                        transformOrigin: 'top left',
+                        position: 'relative',
+                        background:
+                          !settings.pureBypassMode && (settings.frameStyle === 'neo-brutalist' || settings.frameStyle === 'glass')
+                            ? settings.bgType === 'solid'
+                              ? settings.bgColor1
+                              : `linear-gradient(135deg, ${settings.bgColor1}, ${settings.bgColor2})`
+                            : 'transparent'
                       }}
-                      title="Live Animation Stage"
+                    >
+                      <div
+                        ref={stageContentWrapRef}
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          top: 0,
+                          width: '100%',
+                          height: '100%',
+                          overflow: 'hidden',
+                          zIndex: 1
+                        }}
+                      >
+                        {isPreviewVisible && (
+                          <iframe
+                            key={`live-stage-${iframeRunKey}-2d`}
+                            ref={liveIframeRef}
+                            srcDoc={compiledLiveHtml}
+                            sandbox="allow-scripts"
+                            onLoad={() => {
+                              liveCaptureInFlightRef.current = false;
+                              syncIframeViewport(virtualDims);
+                            }}
+                            className="border-0"
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              width: '100%',
+                              height: '100%',
+                              pointerEvents: isRendering || bundleExportState.active ? 'none' : 'auto'
+                            }}
+                            title="Live Animation Stage"
+                          />
+                        )}
+                      </div>
+                      <canvas
+                        ref={overlayCanvasRef}
+                        width={virtualDims.width}
+                        height={virtualDims.height}
+                        className="absolute inset-0 w-full h-full pointer-events-none"
+                        style={{ zIndex: 2 }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {isPreviewVisible && (
+                      <iframe
+                        key={`live-stage-${iframeRunKey}-3d`}
+                        ref={liveIframeRef}
+                        srcDoc={compiledLiveHtml}
+                        sandbox="allow-scripts"
+                        onLoad={() => {
+                          liveCaptureInFlightRef.current = false;
+                          if (compositorRef.current) {
+                            compositorRef.current.resetFrameTracking();
+                          }
+                          syncIframeViewport(virtualDims);
+                        }}
+                        className="border-0"
+                        style={{
+                          position: 'fixed',
+                          left: 0,
+                          top: 0,
+                          width: `${virtualDims.width}px`,
+                          height: `${virtualDims.height}px`,
+                          opacity: 0.001,
+                          pointerEvents: 'none',
+                          zIndex: -10
+                        }}
+                        title="Live Animation Stage"
+                      />
+                    )}
+                    <canvas
+                      ref={canvasRef}
+                      className="w-full h-full object-contain rounded-sm relative"
+                      style={{ zIndex: 1 }}
                     />
-                  )}
-                  <canvas
-                    ref={canvasRef}
-                    className="w-full h-full object-contain rounded-sm relative"
-                    style={{ zIndex: 1 }}
-                  />
-                </>
-              )}
-
-              {!isPlaying && (
-                <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 text-yellow-300 border border-yellow-400 font-mono text-[10px] font-bold z-10">
-                  PAUSED
-                </div>
-              )}
-              {(isRendering || bundleExportState.active) && (
-                <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600 text-white font-mono text-[10px] font-black animate-pulse z-10">
-                  REC ●
-                </div>
-              )}
-            </div>
-
-            {/* Viewport Controls Bar */}
-            <div className="w-full bg-neutral-900/90 text-white p-2 mt-2 flex items-center justify-between gap-2 border border-neutral-700 text-xs">
-              <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                <button
-                  onClick={handleTogglePlay}
-                  className="p-1.5 bg-white text-black hover:bg-neutral-200 border border-black font-black cursor-pointer"
-                  title={isPlaying ? 'Jeda' : 'Putar'}
-                >
-                  {isPlaying ? <Pause className="w-3.5 h-3.5 fill-black" /> : <Play className="w-3.5 h-3.5 fill-black" />}
-                </button>
-                <button
-                  onClick={handleRestart}
-                  className="p-1.5 bg-neutral-800 text-white hover:bg-neutral-700 border border-neutral-600 font-bold cursor-pointer"
-                  title="Mulai Ulang dari Detik 0"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                </button>
-                <span className="font-mono text-[11px] text-neutral-400 pl-0.5">
-                  FPS: <span className="text-green-400 font-bold">{fpsDisplay}</span>
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[10px] sm:text-[11px] font-mono px-2 py-0.5 bg-neutral-800 border border-neutral-700 text-yellow-300 truncate">
-                  {exportAspect} &bull; {virtualDims.width}&times;{virtualDims.height} &bull; {settings.pureBypassMode ? 'POLOS MURNI' : settings.frameStyle === '3d-tv' || settings.stage3d ? '3D TV' : 'KUSTOM AKTIF'}
-                </span>
-                <button
-                  onClick={handleToggleFullscreen}
-                  className="p-1.5 bg-neutral-800 text-white hover:bg-neutral-700 border border-neutral-600 cursor-pointer shrink-0"
-                  title="Layar Penuh"
-                >
-                  {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-                </button>
+                  </>
+                )}
               </div>
             </div>
 
-            {/* Banner Error / Peringatan 3D Capture tepat di bawah Viewport agar terlihat di Mobile */}
+            {/* 2. PANEL KONTROL EKSTERNAL TERPADU (DI LUAR LAYAR — MOBILE, PC & FULLSCREEN) */}
+            <div className={isFullscreen ? 'shrink-0 w-full px-2 sm:px-4 pb-3 pt-1' : 'w-full'}>
+              <PreviewControlBar
+                isPlaying={isPlaying}
+                currentTimeSec={currentTimeSec}
+                durationSec={effectiveExportDuration}
+                fps={fpsDisplay}
+                aspectRatio={exportAspect}
+                virtualDims={virtualDims}
+                modeLabel={settings.pureBypassMode ? 'Polos' : is3dMode ? '3D TV' : 'Kustom'}
+                isFullscreen={isFullscreen}
+                onTogglePlay={handleTogglePlay}
+                onRestart={handleRestart}
+                onSeekStart={handleSeekStart}
+                onSeekChange={handleSeekChange}
+                onSeekEnd={handleSeekEnd}
+                onJumpDelta={handleJumpDelta}
+                onToggleFullscreen={handleToggleFullscreen}
+              />
+            </div>
+
+            {/* Banner Error / Peringatan 3D Capture tepat di bawah Kontrol */}
             {errorLog && (
-              <div className="w-full mt-2 p-2.5 bg-red-100 border-2 border-red-500 text-red-950 font-mono text-[11px] flex items-start gap-2">
+              <div className="w-full p-2.5 bg-red-100 border-2 border-red-500 text-red-950 font-mono text-[11px] flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
                 <div className="min-w-0 break-words">
                   <span className="font-bold">Runtime Error:</span> {errorLog}
@@ -1714,7 +1858,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
               </div>
             )}
             {is3dMode && live3dWarning && !errorLog && (
-              <div className="w-full mt-2 p-2.5 bg-amber-100 border-2 border-amber-500 text-amber-950 text-[11px] font-semibold flex items-start justify-between gap-2">
+              <div className="w-full p-2.5 bg-amber-100 border-2 border-amber-500 text-amber-950 text-[11px] font-semibold flex items-start justify-between gap-2">
                 <span>
                   Pratinjau 3D TV sedang menunggu frame sandbox. Jika perangkat membatasi capture live 3D, beralih ke <strong>Fullscreen / Sinematik</strong>.
                 </span>
