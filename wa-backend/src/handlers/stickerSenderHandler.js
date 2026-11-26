@@ -1,12 +1,13 @@
 const baileysModule = require('@whiskeysockets/baileys');
+const { Writer } = require('protobufjs');
 const { sessions } = require('../state/sessionStore');
 const { verifyDeviceOwner, emitToDevice } = require('../services/deviceAuthService');
-const { rememberSentMessage, getSentMessage } = require('./whatsappSessionHandler');
+const { rememberSentMessage, getSentMessage, triggerAuthSnapshotSync } = require('./whatsappSessionHandler');
+const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
 
 const {
   proto,
   prepareWAMessageMedia,
-  generateWAMessageFromContent,
   generateMessageIDV2,
   generateMessageID,
   downloadMediaMessage,
@@ -26,7 +27,7 @@ const MAX_STICKER_BYTES = 1024 * 1024;
 const MAX_MUXED_BYTES = 3.5 * 1024 * 1024;
 const MIN_MEDIA_BYTES = 100;
 const RATE_LIMIT_MS = 4000;
-const CALIBRATION_WINDOW_MS = 3 * 60 * 1000;
+const CALIBRATION_WINDOW_MS = 5 * 60 * 1000;
 const DELIVERY_WATCH_MS = 15 * 1000;
 
 const STANDARD_WEBP_CHUNKS = new Set([
@@ -143,8 +144,8 @@ function decodeOptionalBase64(rawInput, expectedKind, label) {
 
 function extractExifJsonFromChunk(chunkBuf) {
   try {
-    const startBrace = chunkBuf.indexOf(0x7b); // '{'
-    const endBrace = chunkBuf.lastIndexOf(0x7d); // '}'
+    const startBrace = chunkBuf.indexOf(0x7b);
+    const endBrace = chunkBuf.lastIndexOf(0x7d);
     if (startBrace === -1 || endBrace <= startBrace) return null;
     const jsonSlice = chunkBuf.subarray(startBrace, endBrace + 1).toString('utf8');
     const parsed = JSON.parse(jsonSlice);
@@ -290,7 +291,7 @@ function inspectMediaBufferMetadata(buf) {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
-      detectedContainer: 'lottie-zip',
+      detectedContainer: 'zip/lottie',
       chunks: ['PKZIP']
     };
   }
@@ -320,13 +321,26 @@ function summarizeNonBufferFields(obj) {
   return out;
 }
 
-function isInterestingSoundBlueprint(topLevelKeys, stickerMeta, mediaInspection) {
+function collectUnknownStickerTags(rawWireTree = []) {
+  const knownMessageTags = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 22, 26, 35, 37, 44, 50, 56]);
+  const tags = [];
+  for (const node of rawWireTree) {
+    if (!knownMessageTags.has(node.field)) {
+      tags.push({ field: node.field, wireType: node.wireType, len: node.len, previewUtf8: node.previewUtf8 });
+    }
+  }
+  return tags;
+}
+
+function isInterestingSoundBlueprint(topLevelKeys, wrapperChain, stickerMeta, mediaInspection, rawWireTree) {
   const mime = String(stickerMeta?.mimetype || '').toLowerCase();
   if (mime && mime !== 'image/webp') return true;
   if (topLevelKeys.some((k) => k !== 'stickerMessage' && k !== 'messageContextInfo')) return true;
+  if (wrapperChain.some((w) => w !== 'deviceSentMessage')) return true;
   if (Array.isArray(mediaInspection?.customChunks) && mediaInspection.customChunks.length > 0) return true;
   if (Array.isArray(mediaInspection?.extraExifKeys) && mediaInspection.extraExifKeys.length > 0) return true;
   if (mediaInspection?.detectedContainer && mediaInspection.detectedContainer !== 'webp') return true;
+  if (collectUnknownStickerTags(rawWireTree).length > 0) return true;
   return false;
 }
 
@@ -337,6 +351,9 @@ function sanitizeBlueprint(raw) {
   return {
     capturedAt: Number(raw.capturedAt) || Date.now(),
     topLevelKeys: Array.isArray(raw.topLevelKeys) ? raw.topLevelKeys.slice(0, 16).map(String) : [],
+    wrapperChain: Array.isArray(raw.wrapperChain) ? raw.wrapperChain.slice(0, 8).map(String) : [],
+    unknownWireTags: Array.isArray(raw.unknownWireTags) ? raw.unknownWireTags.slice(0, 16) : [],
+    rawWireTree: Array.isArray(raw.rawWireTree) ? raw.rawWireTree.slice(0, 32) : [],
     stickerMeta: {
       mimetype: typeof sm.mimetype === 'string' ? sm.mimetype.slice(0, 64) : 'image/webp',
       isAnimated: Boolean(sm.isAnimated),
@@ -442,9 +459,9 @@ function attachStickerDeliveryWatcher(io, sessionId, session, messageId) {
   if (!sock?.ev || !messageId) return;
 
   const statusLabels = {
-    2: 'Diterima server WhatsApp',
-    3: 'Terkirim ke perangkat WA Anda',
-    4: 'Dibaca di perangkat WA Anda'
+    2: 'Diterima server WhatsApp (✓)',
+    3: 'Terkirim utuh ke perangkat WA Anda (✓✓)',
+    4: 'Dibaca di perangkat WA Anda (✓✓)'
   };
 
   let timer = null;
@@ -481,12 +498,13 @@ function attachStickerDeliveryWatcher(io, sessionId, session, messageId) {
   timer = setTimeout(cleanup, DELIVERY_WATCH_MS);
 }
 
+/**
+ * Detektor Deep Wire-Level Pasif & Aktif (notify + append, selfPn + selfLid, unwrap deviceSentMessage).
+ */
 function attachCalibrationListener(io, sessionId, session) {
-  const sock = session?.sock;
-  if (!sock || session._calibrationHookSock === sock) return;
-  session._calibrationHookSock = sock;
+  if (!session) return;
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  session._onCalibrationUpsert = async ({ messages, type }) => {
     try {
       const curSession = sessions.get(sessionId);
       if (!curSession || !Array.isArray(messages) || messages.length === 0) return;
@@ -500,28 +518,74 @@ function attachCalibrationListener(io, sessionId, session) {
         curSession.calibratingSoundSticker = false;
       }
 
-      const selfJid = curSession.sock?.user?.id ? jidNormalizedUser(curSession.sock.user.id) : '';
+      const selfPn = curSession.sock?.user?.id ? jidNormalizedUser(curSession.sock.user.id) : '';
+      const selfLid = curSession.sock?.user?.lid ? jidNormalizedUser(curSession.sock.user.lid) : '';
 
       for (const msg of messages) {
-        if (!msg?.message || !msg?.key) continue;
-        const remoteNorm = jidNormalizedUser(msg.key.remoteJid || '');
-        if (!msg.key.fromMe || (selfJid && remoteNorm !== selfJid)) continue;
+        if (!msg?.key) continue;
 
-        // Jangan pernah mengkalibrasi ulang dari pesan stiker yang baru dikirim oleh server ini sendiri
+        const remoteRaw = String(msg.key.remoteJid || '');
+        const remoteNorm = remoteRaw ? jidNormalizedUser(remoteRaw) : '';
+        const isSelfOwner = Boolean(
+          msg.key.fromMe === true ||
+            (selfPn && remoteNorm === selfPn) ||
+            (selfLid && remoteNorm === selfLid)
+        );
+
+        // Jangan kalibrasi ulang dari pesan outgoing yang dikirim oleh web ini sendiri
         if (msg.key.id && getSentMessage(curSession, msg.key.id)) {
           continue;
         }
 
-        const topLevelKeys = Object.keys(msg.message);
-        const stickerNode =
-          msg.message.stickerMessage ||
-          msg.message.lottieStickerMessage?.message?.stickerMessage ||
-          msg.message.ephemeralMessage?.message?.stickerMessage ||
-          null;
-        const mediaTarget = stickerNode || msg.message.videoMessage || msg.message.documentMessage;
+        const { innerMessage, wrapperChain } = unwrapMessageContent(msg.message);
+        const innerKeys = Object.keys(innerMessage || {});
 
+        // Selama mode deteksi format menyala, izinkan chat self (PN/LID), pesan fromMe, maupun stiker masuk di chat lain
+        if (!isArmed && !isSelfOwner) continue;
+        if (isArmed && !isSelfOwner && !innerMessage?.stickerMessage && !innerMessage?.lottieStickerMessage) {
+          continue;
+        }
+
+        if (isArmed) {
+          emitToDevice(io, sessionId, 'sound-sticker-calibration-log', {
+            at: Date.now(),
+            upsertType: type || 'notify',
+            remoteJid: remoteRaw,
+            fromMe: Boolean(msg.key.fromMe),
+            wrapperChain,
+            keys: innerKeys,
+            stubType: msg.messageStubType || null
+          });
+        }
+
+        if (!innerMessage || typeof innerMessage !== 'object') continue;
+
+        const stickerNode = innerMessage.stickerMessage || innerMessage.lottieStickerMessage?.message?.stickerMessage || null;
+        const ptvOrMedia = innerMessage.ptvMessage || (isArmed ? innerMessage.videoMessage || innerMessage.documentMessage : null);
+        const mediaTarget = stickerNode || ptvOrMedia;
+
+        const latestRawPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
+          ? curSession.lastRawWirePackets[curSession.lastRawWirePackets.length - 1]
+          : null;
+
+        let encodedProtoWireTree = [];
+        try {
+          if (proto?.Message?.encode) {
+            const bytes = proto.Message.encode(innerMessage).finish();
+            encodedProtoWireTree = inspectProtobufWire(bytes, 3);
+          }
+        } catch (_) {}
+
+        const rawWireTree = latestRawPacket?.wireTree?.length ? latestRawPacket.wireTree : encodedProtoWireTree;
+        const unknownWireTags = collectUnknownStickerTags(rawWireTree);
+
+        const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
+        const hasUnrecognizedWirePayload = isArmed && nonContextKeys.length === 0 && rawWireTree.length > 0;
         const looksLikeSticker =
-          Boolean(stickerNode) || topLevelKeys.some((k) => k.toLowerCase().includes('sticker'));
+          Boolean(stickerNode) ||
+          innerKeys.some((k) => k.toLowerCase().includes('sticker')) ||
+          hasUnrecognizedWirePayload;
+
         if (!looksLikeSticker && !(isArmed && mediaTarget)) {
           continue;
         }
@@ -532,17 +596,18 @@ function attachCalibrationListener(io, sessionId, session) {
           try {
             if (typeof downloadMediaMessage === 'function') {
               dlBuf = await downloadMediaMessage(
-                msg,
+                { key: msg.key, message: innerMessage },
                 'buffer',
                 {},
                 { reuploadRequest: curSession.sock?.updateMediaMessage }
               );
             } else if (typeof downloadContentFromMessage === 'function') {
-              const stream = await downloadContentFromMessage(mediaTarget, stickerNode ? 'sticker' : 'document');
+              const kind = stickerNode ? 'sticker' : innerMessage.videoMessage ? 'video' : 'document';
+              const stream = await downloadContentFromMessage(mediaTarget, kind);
               const chunks = [];
               let size = 0;
               for await (const chunk of stream) {
-                if (size < 512 * 1024) chunks.push(chunk);
+                if (size < 768 * 1024) chunks.push(chunk);
                 size += chunk.length;
               }
               dlBuf = Buffer.concat(chunks);
@@ -557,8 +622,8 @@ function attachCalibrationListener(io, sessionId, session) {
           }
         }
 
-        const stickerMeta = summarizeNonBufferFields(stickerNode || msg.message);
-        if (!isArmed && !isInterestingSoundBlueprint(topLevelKeys, stickerMeta, mediaInspection)) {
+        const stickerMeta = summarizeNonBufferFields(stickerNode || innerMessage);
+        if (!isArmed && !isInterestingSoundBlueprint(innerKeys, wrapperChain, stickerMeta, mediaInspection, rawWireTree)) {
           continue;
         }
 
@@ -568,12 +633,16 @@ function attachCalibrationListener(io, sessionId, session) {
         const blueprint = {
           capturedAt: Date.now(),
           baileysVersion: '6.7.24',
-          topLevelKeys,
-          hasMessageContextInfo: Boolean(msg.message.messageContextInfo),
+          upsertType: type || 'notify',
+          wrapperChain,
+          topLevelKeys: innerKeys,
+          hasMessageContextInfo: Boolean(innerMessage.messageContextInfo || msg.message?.messageContextInfo),
           stickerMeta,
-          messageKeys: topLevelKeys,
-          stickerFields: stickerMeta,
+          unknownWireTags,
+          rawWireTree,
           mediaInspection,
+          messageKeys: innerKeys,
+          stickerFields: stickerMeta,
           binarySummary: mediaInspection
         };
 
@@ -585,9 +654,12 @@ function attachCalibrationListener(io, sessionId, session) {
     } catch (err) {
       console.warn(`[BlueprintInspector ${sessionId}] Error:`, err.message);
     }
-  });
+  };
 }
 
+/**
+ * Pengirim Resmi Berbasis `sock.sendMessage(selfJid, ...)` + Blueprint Patcher + Zero "Menunggu Pesan Ini".
+ */
 async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, payload }) {
   let stickerWebpBuf = null;
   let muxedMp4Buf = null;
@@ -617,13 +689,26 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     audioOpusBuf = decodeOptionalBase64(audioOpusBase64, 'ogg', 'audio Opus');
     audioM4aBuf = decodeOptionalBase64(audioM4aBase64, 'mp4', 'audio M4A');
 
+    // Segarkan sesi Signal perangkat utama sebelum enkripsi E2EE self-chat
+    try {
+      await session.sock.assertSessions([selfJid], false);
+    } catch (_) {}
+
     const activeBlueprint = sanitizeBlueprint(clientBlueprint) || session.soundStickerBlueprint || null;
     const safeWidth = Math.max(16, Math.min(1024, Number(width) || 512));
     const safeHeight = Math.max(16, Math.min(1024, Number(height) || 512));
 
-    let modeUsed = 'safe-webp-sticker';
-    let note = 'Stiker WebP 512x512 native terkirim aman tanpa bubble video/VN.';
-    let mediaMsg = null;
+    const customMsgId =
+      typeof generateMessageIDV2 === 'function'
+        ? generateMessageIDV2(session.sock.user.id)
+        : typeof generateMessageID === 'function'
+          ? generateMessageID()
+          : undefined;
+
+    let modeUsed = 'official-sendMessage-webp';
+    let note = 'Terkirim via jalur resmi sock.sendMessage (WebP 512x512 + EXIF) tanpa bubble video/VN.';
+    let sentMsg = null;
+    let encodedLen = 0;
 
     const bpMime = String(activeBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
     const bpContainer = activeBlueprint?.mediaInspection?.detectedContainer || '';
@@ -633,118 +718,105 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('video/mp4') || bpMime.includes('video/webm')) &&
       (muxedMp4Buf || muxedWebmBuf)
     ) {
-      // Kasus 2: Blueprint menggunakan stickerMessage bermedia kontainer MP4 / WebM
+      // Pola B1: Blueprint menggunakan stickerMessage dengan container MP4 / WebM
       const preferWebm = bpContainer === 'webm' || bpMime.includes('webm');
       containerBuf = preferWebm && muxedWebmBuf ? muxedWebmBuf : muxedMp4Buf || muxedWebmBuf;
       const targetMime = preferWebm && muxedWebmBuf ? 'video/webm' : 'video/mp4';
 
-      mediaMsg = await prepareWAMessageMedia(
+      const mediaMsg = await prepareWAMessageMedia(
         { sticker: containerBuf },
-        {
-          upload: session.sock.waUploadToServer,
-          mediaTypeOverride: 'sticker'
-        }
+        { upload: session.sock.waUploadToServer }
       );
       if (mediaMsg?.stickerMessage) {
         mediaMsg.stickerMessage.mimetype = bpMime || targetMime;
         mediaMsg.stickerMessage.isAnimated = true;
         mediaMsg.stickerMessage.width = safeWidth;
         mediaMsg.stickerMessage.height = safeHeight;
-        mediaMsg.stickerMessage.stickerSentTs = Date.now();
-        if (activeBlueprint.stickerMeta?.accessibilityLabel) {
-          mediaMsg.stickerMessage.accessibilityLabel = activeBlueprint.stickerMeta.accessibilityLabel;
-        }
       }
+
+      const verifyErr = proto?.Message?.verify?.(mediaMsg);
+      if (verifyErr) throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
+      const encodedWire = proto?.Message?.encode ? proto.Message.encode(mediaMsg).finish() : null;
+      if (!encodedWire || encodedWire.length <= 16) {
+        throw new Error('Payload protobuf stiker kosong (<= 16 byte), dibatalkan.');
+      }
+      encodedLen = encodedWire.length;
+
+      sentMsg = await session.sock.sendMessage(
+        selfJid,
+        { forward: { key: { fromMe: true, remoteJid: selfJid, id: customMsgId }, message: mediaMsg } },
+        { messageId: customMsgId }
+      );
       modeUsed = `blueprint-${targetMime}`;
-      note = `Dikirim mengikuti blueprint container ${targetMime} asli WhatsApp.`;
+      note = `Dikirim via jalur resmi E2EE mengikuti blueprint ${targetMime} asli WhatsApp.`;
     } else {
-      // Kasus 1 (Blueprint WebP + custom chunk/EXIF) atau Kasus 3 (Default WebP 512x512 aman)
+      // Pola A (Blueprint WebP custom EXIF/chunk) atau Pola C (Default WebP 512x512 aman lewat sock.sendMessage)
       const bestAudioBuf = audioOpusBuf || audioM4aBuf;
       const { finalWebpBuf, customized } = activeBlueprint
         ? applyBlueprintToWebp(stickerWebpBuf, activeBlueprint, { audioBuf: bestAudioBuf, durationSec })
         : { finalWebpBuf: stickerWebpBuf, customized: false };
 
-      mediaMsg = await prepareWAMessageMedia(
-        {
-          sticker: finalWebpBuf,
-          mimetype: 'image/webp',
-          isAnimated: Boolean(isAnimatedBitstream),
-          width: safeWidth,
-          height: safeHeight
-        },
-        {
-          upload: session.sock.waUploadToServer,
-          mediaTypeOverride: 'sticker'
-        }
-      );
-      if (mediaMsg?.stickerMessage) {
-        mediaMsg.stickerMessage.mimetype = 'image/webp';
-        mediaMsg.stickerMessage.isAnimated = Boolean(isAnimatedBitstream);
-        mediaMsg.stickerMessage.width = safeWidth;
-        mediaMsg.stickerMessage.height = safeHeight;
-        mediaMsg.stickerMessage.stickerSentTs = Date.now();
-        if (activeBlueprint?.stickerMeta?.accessibilityLabel) {
-          mediaMsg.stickerMessage.accessibilityLabel = activeBlueprint.stickerMeta.accessibilityLabel;
-        }
-      }
       if (customized) {
+        validateStickerWebpBuffer(finalWebpBuf);
         modeUsed = 'blueprint-webp-injected';
-        note = 'Dikirim mengikuti blueprint WebP + metadata/chunk custom hasil kalibrasi.';
+        note = 'Dikirim via jalur resmi sock.sendMessage mengikuti blueprint WebP hasil deteksi.';
+      }
+
+      // Hook patchMessageBeforeSending sementara agar proto.Message terverifikasi > 16 byte & masuk sentMessageStore SEBELUM stanza terkirim
+      const prevPatch = session._patchOutgoingWire;
+      session._patchOutgoingWire = (outgoingMsg) => {
+        const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
+        if (inner?.stickerMessage) {
+          inner.stickerMessage.isAnimated = Boolean(isAnimatedBitstream);
+          inner.stickerMessage.width = safeWidth;
+          inner.stickerMessage.height = safeHeight;
+          const wire = proto?.Message?.encode ? proto.Message.encode(inner).finish() : null;
+          if (wire && wire.length > 16) {
+            encodedLen = wire.length;
+            if (customMsgId) rememberSentMessage(session, customMsgId, inner);
+          }
+        }
+        return outgoingMsg;
+      };
+
+      try {
+        attachStickerDeliveryWatcher(io, sessionId, session, customMsgId);
+        sentMsg = await session.sock.sendMessage(
+          selfJid,
+          { sticker: finalWebpBuf },
+          { ...(customMsgId ? { messageId: customMsgId } : {}) }
+        );
+      } finally {
+        session._patchOutgoingWire = prevPatch;
       }
     }
 
-    stickerWebpBuf = null;
-    muxedMp4Buf = null;
-    muxedWebmBuf = null;
-    audioOpusBuf = null;
-    audioM4aBuf = null;
-    containerBuf = null;
-
-    if (!mediaMsg?.stickerMessage) {
-      throw new Error('Gagal membangun objek stickerMessage WAProto.');
+    const finalMsgId = sentMsg?.key?.id || customMsgId;
+    if (sentMsg?.key?.id && sentMsg?.message) {
+      rememberSentMessage(session, sentMsg.key.id, sentMsg.message);
+      if (!encodedLen && proto?.Message?.encode) {
+        try {
+          encodedLen = proto.Message.encode(sentMsg.message).finish().length;
+        } catch (_) {}
+      }
     }
 
-    const userJid = session.sock.authState?.creds?.me?.id || selfJid;
-    const customMsgId =
-      typeof generateMessageIDV2 === 'function'
-        ? generateMessageIDV2(session.sock.user.id)
-        : typeof generateMessageID === 'function'
-          ? generateMessageID()
-          : undefined;
-
-    const waMsg = generateWAMessageFromContent(selfJid, mediaMsg, {
-      userJid,
-      ...(customMsgId ? { messageId: customMsgId } : {})
-    });
-
-    // Guard anti pesan 0-byte & verifikasi WAProto sebelum enkripsi Signal
-    const verifyErr = proto?.Message?.verify?.(waMsg.message);
-    if (verifyErr) {
-      throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
-    }
-    const encodedWire = proto?.Message?.encode ? proto.Message.encode(waMsg.message).finish() : null;
-    if (!encodedWire || encodedWire.length <= 16) {
-      throw new Error('Payload protobuf stiker kosong/terpangkas (<= 16 byte), pengiriman dibatalkan.');
+    if (finalMsgId && finalMsgId !== customMsgId) {
+      attachStickerDeliveryWatcher(io, sessionId, session, finalMsgId);
     }
 
-    // Simpan ke sentMessageStore SEBELUM relayMessage agar Signal retry receipt tidak pernah jatuh ke payload kosong
-    rememberSentMessage(session, waMsg.key.id, waMsg.message);
-    attachStickerDeliveryWatcher(io, sessionId, session, waMsg.key.id);
-
-    await session.sock.relayMessage(selfJid, waMsg.message, {
-      messageId: waMsg.key.id,
-      useUserDevicesCache: false
-    });
+    // Sinkronkan snapshot kunci Signal terbaru agar ratchet key HP & server tetap sinkron
+    triggerAuthSnapshotSync(io, sessionId, session);
 
     return {
       ok: true,
-      messageId: waMsg.key.id,
-      protocol: 'native-stickerMessage',
+      messageId: finalMsgId,
+      protocol: 'official-sendMessage-sticker',
       modeUsed,
       hasBlueprint: Boolean(activeBlueprint),
-      needsBlueprintCalibration: !activeBlueprint,
-      isAnimated: Boolean(mediaMsg.stickerMessage.isAnimated),
-      encodedBytes: encodedWire.length,
+      needsCalibration: !activeBlueprint,
+      isAnimated: Boolean(isAnimatedBitstream),
+      encodedBytes: encodedLen,
       note,
       selfJid,
       sentAt: Date.now()
@@ -759,10 +831,6 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
   }
 }
 
-/**
- * Handler Socket.io Khusus Stiker Suara WA (Native `stickerMessage`, Wire-Blueprint Cloner, Anti 0-byte)
- * DILARANG mengirim videoMessage maupun audioMessage terpisah.
- */
 function registerStickerSenderHandler(io, socket) {
   socket.on('start-sound-sticker-calibration', (payload) => {
     try {
@@ -787,6 +855,41 @@ function registerStickerSenderHandler(io, socket) {
       });
     } catch (err) {
       console.error('Error start-sound-sticker-calibration:', err.message);
+    }
+  });
+
+  socket.on('refresh-wa-e2ee-sessions', async (payload) => {
+    try {
+      const { sessionId, deviceToken } = payload || {};
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'connected' || !session.sock?.user?.id) {
+        return emitToDevice(io, sessionId, 'wa-e2ee-refreshed', {
+          ok: false,
+          error: 'Perangkat WhatsApp belum terhubung.'
+        });
+      }
+
+      const selfJid = jidNormalizedUser(session.sock.user.id);
+      await session.sock.assertSessions([selfJid], true);
+      triggerAuthSnapshotSync(io, sessionId, session);
+
+      emitToDevice(io, sessionId, 'wa-e2ee-refreshed', {
+        ok: true,
+        selfJid,
+        refreshedAt: Date.now()
+      });
+    } catch (err) {
+      console.error('Error refresh-wa-e2ee-sessions:', err.message);
+      const sessionId = payload?.sessionId;
+      if (sessionId) {
+        emitToDevice(io, sessionId, 'wa-e2ee-refreshed', {
+          ok: false,
+          error: err.message || 'Gagal menyegarkan sesi enkripsi.'
+        });
+      }
     }
   });
 
@@ -853,5 +956,6 @@ module.exports = {
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,
-  sanitizeBlueprint
+  sanitizeBlueprint,
+  Writer
 };

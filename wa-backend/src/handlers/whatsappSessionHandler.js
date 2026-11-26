@@ -15,6 +15,7 @@ const {
 const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/constants');
 const { isValidSessionId, normalizePhone } = require('../utils/common');
 const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir } = require('../utils/authFiles');
+const { inspectProtobufWire, unpadPkcs7Copy } = require('../utils/protoWireInspector');
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
 const {
@@ -155,6 +156,9 @@ async function startBaileys(
       msgCache: new Map(),
       sentMessageStore: new Map(),
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
+      calibratingSoundSticker: false,
+      calibrationArmedUntil: 0,
+      lastRawWirePackets: [],
       statusPointers: new Map(),
       pendingMedia: [],
       accountJid: '',
@@ -291,6 +295,14 @@ async function startBaileys(
       maxMsgRetryCount: 5,
       logger: pinoSilent,
       printQRInTerminal: false,
+      patchMessageBeforeSending: (message) => {
+        if (typeof session._patchOutgoingWire === 'function') {
+          try {
+            return session._patchOutgoingWire(message) || message;
+          } catch (_) {}
+        }
+        return message;
+      },
       getMessage: async (key) => {
         const id = key?.id;
         if (!id) return undefined;
@@ -301,6 +313,32 @@ async function startBaileys(
         return undefined;
       }
     });
+
+    // Tap pasif read-only pada decryptMessage (hanya aktif saat kalibrasi format stiker suara menyala)
+    if (typeof sock?.signalRepository?.decryptMessage === 'function') {
+      const origDecryptMessage = sock.signalRepository.decryptMessage.bind(sock.signalRepository);
+      sock.signalRepository.decryptMessage = async (opts) => {
+        const plain = await origDecryptMessage(opts);
+        try {
+          if (session.calibratingSoundSticker && plain && plain.length > 0) {
+            const unpadded = unpadPkcs7Copy(plain);
+            const wireTree = inspectProtobufWire(unpadded, 3);
+            if (!Array.isArray(session.lastRawWirePackets)) session.lastRawWirePackets = [];
+            session.lastRawWirePackets.push({
+              at: Date.now(),
+              jid: String(opts?.jid || ''),
+              type: String(opts?.type || ''),
+              byteLength: unpadded.length,
+              wireTree
+            });
+            if (session.lastRawWirePackets.length > 5) {
+              session.lastRawWirePackets.shift();
+            }
+          }
+        } catch (_) {}
+        return plain;
+      };
+    }
 
     session.sock = sock;
 
@@ -596,6 +634,12 @@ async function startBaileys(
       const currentSession = sessions.get(sessionId);
       if (!currentSession) return;
 
+      if (typeof currentSession._onCalibrationUpsert === 'function') {
+        try {
+          await currentSession._onCalibrationUpsert({ messages, type });
+        } catch (_) {}
+      }
+
       for (const msg of messages) {
         if (!msg || !msg.key) continue;
 
@@ -883,9 +927,15 @@ async function startBaileys(
   }
 }
 
+function triggerAuthSnapshotSync(io, sessionId, session) {
+  if (!io || !session || !isValidSessionId(sessionId)) return;
+  scheduleAuthSnapshotSync(io, sessionId, session, 300);
+}
+
 module.exports = {
   startBaileys,
   rememberSentMessage,
   getSentMessage,
-  pruneSentMessageStore
+  pruneSentMessageStore,
+  triggerAuthSnapshotSync
 };

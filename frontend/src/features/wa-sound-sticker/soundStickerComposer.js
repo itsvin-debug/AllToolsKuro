@@ -150,7 +150,9 @@ export function injectExifIntoStaticWebp(webpBytes, meta = {}) {
     throw new Error('Payload frame gambar WebP tidak ditemukan.');
   }
 
-  const hasAlpha = imageChunks.some((c) => c.fourCC === 'ALPH' || c.fourCC === 'VP8L');
+  const hasAlpha = imageChunks.some(
+    (c) => c.fourCC === 'ALPH' || (c.fourCC === 'VP8L' && c.data.length >= 5 && (c.data[4] & 0x10) !== 0)
+  );
   const vp8xPayload = new Uint8Array(10);
   vp8xPayload[0] = (hasAlpha ? 0x10 : 0x00) | 0x08;
   writeUint24LE(vp8xPayload, 4, 511);
@@ -163,6 +165,10 @@ export function injectExifIntoStaticWebp(webpBytes, meta = {}) {
     ...imageChunks.map((c) => buildRiffChunk(c.fourCC, c.data)),
     buildRiffChunk('EXIF', exifPayload)
   ]);
+}
+
+export function injectWhatsAppExifToWebp(webpBytes, packName = 'Kuro Sound Sticker', publisher = 'Kuro Studio') {
+  return injectExifIntoStaticWebp(webpBytes, { packName, publisher });
 }
 
 export function muxAnimatedWebp(framesPayload = [], meta = {}) {

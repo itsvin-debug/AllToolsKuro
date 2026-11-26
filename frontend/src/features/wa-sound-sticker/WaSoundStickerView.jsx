@@ -122,10 +122,15 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [sendProgress, setSendProgress] = useState({ active: false, label: '', percent: 0 });
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
+  const [isRefreshingE2ee, setIsRefreshingE2ee] = useState(false);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
+  const [calibrationLogs, setCalibrationLogs] = useState([]);
   const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
     try {
-      const raw = sessionId ? localStorage.getItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`) : null;
+      const raw =
+        sessionId &&
+        (localStorage.getItem(`kuro_sound_sticker_blueprint_${sessionId}`) ||
+          localStorage.getItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`));
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
@@ -274,7 +279,23 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     sock.on('sound-sticker-calibration-armed', () => {
       if (unmounted) return;
       setCalibrationArmed(true);
-      onShowToast?.('Deteksi format aktif 3 menit: teruskan 1 contoh stiker suara WA ke chat diri sendiri.', 'info');
+      setCalibrationLogs([]);
+      onShowToast?.('Deteksi aktif 5 menit: teruskan 1 stiker suara ke Pesan Diri Sendiri atau chat lain.', 'info');
+    });
+
+    sock.on('sound-sticker-calibration-log', (entry) => {
+      if (unmounted || !entry) return;
+      setCalibrationLogs((prev) => [...prev.slice(-4), entry]);
+    });
+
+    sock.on('wa-e2ee-refreshed', (res) => {
+      if (unmounted) return;
+      setIsRefreshingE2ee(false);
+      if (res?.ok) {
+        onShowToast?.('Kunci enkripsi E2EE WhatsApp berhasil disegarkan.', 'success');
+      } else {
+        onShowToast?.(res?.error || 'Gagal menyegarkan kunci E2EE.', 'error');
+      }
     });
 
     const handleBlueprintCaptured = (payloadOrBlueprint) => {
@@ -285,10 +306,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setSoundStickerBlueprint(bp);
       try {
         if (sessionId) {
-          localStorage.setItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`, JSON.stringify(bp));
+          localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, JSON.stringify(bp));
         }
       } catch {}
-      onShowToast?.('Format Stiker Suara WA berhasil disalin dan dikalibrasi!', 'success');
+      onShowToast?.('Format Stiker Suara WA berhasil dideteksi & disimpan!', 'success');
     };
 
     sock.on('sound-sticker-blueprint-ready', handleBlueprintCaptured);
@@ -746,7 +767,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       onShowToast?.('Tautkan WhatsApp terlebih dahulu sebelum memulai deteksi format.', 'error');
       return;
     }
+    setCalibrationLogs([]);
     socketRef.current.emit('start-sound-sticker-calibration', { sessionId, deviceToken });
+  };
+
+  const handleRefreshE2ee = () => {
+    if (connectionStatus !== 'connected' || !socketRef.current || isRefreshingE2ee) return;
+    setIsRefreshingE2ee(true);
+    socketRef.current.emit('refresh-wa-e2ee-sessions', { sessionId, deviceToken });
   };
 
   return (
@@ -1227,24 +1255,36 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
             {connectionStatus === 'connected' ? (
               <div className="p-3 bg-emerald-100 border-2 border-black space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 min-w-0">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                     <span className="font-black text-xs text-black truncate">
                       WA Terhubung &bull; +{connectedPhone}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleLogoutWa}
-                    className="px-2 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    <LogOut className="w-3 h-3" />
-                    <span>Putus</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleRefreshE2ee}
+                      disabled={isRefreshingE2ee}
+                      className="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                      title="Segarkan sesi kunci enkripsi E2EE WhatsApp tanpa scan ulang"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isRefreshingE2ee ? 'animate-spin' : ''}`} />
+                      <span>Segarkan E2EE</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleLogoutWa}
+                      className="px-2 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span>Putus</span>
+                    </button>
+                  </div>
                 </div>
                 <p className="text-[11px] font-semibold text-neutral-700">
-                  Pengiriman terkunci ke nomor WA Anda sendiri via jalur native <code className="font-mono">stickerMessage</code>.
+                  Pengiriman terkunci ke nomor WA Anda sendiri via jalur resmi <code className="font-mono">sock.sendMessage</code>.
                 </p>
               </div>
             ) : (
@@ -1410,11 +1450,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
             {/* Kalibrasi Blueprint Stiker Suara WA (1x Saja Per Perangkat) */}
             <div className="pt-2 border-t-2 border-black space-y-2">
-              {soundStickerBlueprint ? (
+              {soundStickerBlueprint && !calibrationArmed ? (
                 <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="px-2 py-0.5 bg-emerald-300 border border-black font-black text-[10px] uppercase text-black">
-                      Format Stiker Suara Terkalibrasi
+                      Format Stiker Suara Berhasil Terdeteksi!
                     </span>
                     <div className="flex items-center gap-1.5">
                       <button
@@ -1427,7 +1467,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         className="px-2 py-0.5 bg-white hover:bg-neutral-100 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
                       >
                         {copiedSchema ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedSchema ? 'Tersalin' : 'Salin Info Blueprint'}</span>
+                        <span>{copiedSchema ? 'Tersalin' : 'Salin Blueprint JSON'}</span>
                       </button>
                       <button
                         type="button"
@@ -1435,7 +1475,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         disabled={connectionStatus !== 'connected'}
                         className="px-2 py-0.5 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border border-black font-bold text-[10px] cursor-pointer"
                       >
-                        {calibrationArmed ? 'Menunggu...' : 'Kalibrasi Ulang'}
+                        Deteksi Ulang
                       </button>
                     </div>
                   </div>
@@ -1449,6 +1489,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         Chunks: {soundStickerBlueprint.mediaInspection.chunks.slice(0, 8).join(', ')}
                       </div>
                     )}
+                    <div>
+                      Wire Tags: <b>{soundStickerBlueprint.rawWireTree?.length || 0}</b>
+                      {soundStickerBlueprint.unknownWireTags?.length > 0
+                        ? ` (Tag Baru: ${soundStickerBlueprint.unknownWireTags.map((t) => `#${t.field}`).join(', ')})`
+                        : ''}
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -1460,7 +1506,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     <Wrench className="w-3.5 h-3.5 text-black shrink-0" />
                   </div>
                   <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
-                    Teruskan 1 contoh stiker suara dari chat WA ke chat &lsquo;Pesan Diri Sendiri&rsquo; Anda &mdash; web akan menyalin format aslinya otomatis!
+                    {calibrationArmed
+                      ? 'Deteksi aktif! Teruskan atau kirim 1 contoh stiker suara dari HP ke Pesan Diri Sendiri atau chat lain.'
+                      : "Teruskan 1 contoh stiker suara dari chat WA ke chat 'Pesan Diri Sendiri' Anda — web akan menyalin format aslinya otomatis!"}
                   </p>
                   <button
                     type="button"
@@ -1468,13 +1516,33 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     disabled={connectionStatus !== 'connected'}
                     className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <Wrench className="w-3.5 h-3.5" />
+                    {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
                     <span>
                       {calibrationArmed
-                        ? 'Menunggu 1 Contoh Stiker Suara di Chat Anda...'
+                        ? 'Menunggu 1 Contoh Stiker Suara Masuk...'
                         : 'Mulai Deteksi Format'}
                     </span>
                   </button>
+
+                  {calibrationArmed && (
+                    <div className="p-2 bg-white border border-black space-y-1 text-[10px] font-mono">
+                      <div className="font-black uppercase text-neutral-600">
+                        Log Aktivitas Masuk (Real-Time):
+                      </div>
+                      {calibrationLogs.length === 0 ? (
+                        <div className="text-neutral-500">
+                          Menunggu pesan masuk dari HP Anda (notify / append / LID)...
+                        </div>
+                      ) : (
+                        calibrationLogs.map((item, idx) => (
+                          <div key={`${item.at}-${idx}`} className="text-neutral-800 truncate">
+                            [{item.upsertType}] {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} -> ` : ''}
+                            {(item.keys || []).join(', ') || 'raw-wire'}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
