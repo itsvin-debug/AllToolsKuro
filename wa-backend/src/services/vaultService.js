@@ -27,7 +27,6 @@ function buildVaultPayload({
   fileSize = 0,
   durationSec = 0,
   isVoiceNote = false,
-  isViewOnce = false,
   isDeleted = false,
   deletedAt = null,
   isEdited = false,
@@ -53,7 +52,6 @@ function buildVaultPayload({
     fileSize: Number(fileSize || 0),
     durationSec: Number(durationSec || 0),
     isVoiceNote: Boolean(isVoiceNote),
-    isViewOnce: Boolean(isViewOnce),
     isDeleted: Boolean(isDeleted),
     deletedAt: deletedAt ? Number(deletedAt) : null,
     isEdited: Boolean(isEdited),
@@ -68,10 +66,6 @@ function buildVaultPayload({
 
 function emitVaultItem(io, sessionId, session, payload) {
   emitToDevice(io, sessionId, 'vault-item', payload);
-
-  if (payload.isViewOnce) {
-    emitToDevice(io, sessionId, 'view-once-media', payload);
-  }
 
   if (getDeviceRoomSize(io, sessionId) === 0) {
     if (!session.pendingMedia) session.pendingMedia = [];
@@ -205,68 +199,6 @@ async function isAllowedByMode(senderInfo, msg, session) {
   if (session.monitorMode === 'all') return true;
   if (!session.targetNumber) return false;
   return await isFromTarget(msg, session);
-}
-
-function deepExtractViewOnce(obj, inheritedViewOnce = false, depth = 0) {
-  if (!obj || typeof obj !== 'object' || depth > 8) {
-    return null;
-  }
-
-  if (obj.imageMessage && (inheritedViewOnce || obj.imageMessage.viewOnce === true)) {
-    return {
-      mediaType: 'image',
-      mediaObj: obj.imageMessage,
-      unwrappedMessage: { imageMessage: obj.imageMessage }
-    };
-  }
-
-  if (obj.videoMessage && (inheritedViewOnce || obj.videoMessage.viewOnce === true)) {
-    return {
-      mediaType: 'video',
-      mediaObj: obj.videoMessage,
-      unwrappedMessage: { videoMessage: obj.videoMessage }
-    };
-  }
-
-  if (obj.audioMessage && (inheritedViewOnce || obj.audioMessage.viewOnce === true)) {
-    return {
-      mediaType: 'audio',
-      mediaObj: obj.audioMessage,
-      unwrappedMessage: { audioMessage: obj.audioMessage }
-    };
-  }
-
-  const viewOnceWrappers = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'];
-  for (const key of viewOnceWrappers) {
-    if (obj[key]?.message) {
-      const res = deepExtractViewOnce(obj[key].message, true, depth + 1);
-      if (res) return res;
-    } else if (obj[key] && typeof obj[key] === 'object') {
-      const res = deepExtractViewOnce(obj[key], true, depth + 1);
-      if (res) return res;
-    }
-  }
-
-  const commonWrappers = [
-    'ephemeralMessage',
-    'deviceSentMessage',
-    'editedMessage',
-    'documentWithCaptionMessage',
-    'associatedChildMessage',
-    'futureProofMessage',
-    'message'
-  ];
-  for (const key of commonWrappers) {
-    if (obj[key]?.message) {
-      const res = deepExtractViewOnce(obj[key].message, inheritedViewOnce, depth + 1);
-      if (res) return res;
-    } else if (obj[key] && typeof obj[key] === 'object' && key !== 'message') {
-      const res = deepExtractViewOnce(obj[key], inheritedViewOnce, depth + 1);
-      if (res) return res;
-    }
-  }
-
-  return null;
 }
 
 function unwrapStatusContent(rawMsg, depth = 0) {
@@ -540,7 +472,6 @@ module.exports = {
   downloadMediaStreamBuffer,
   isFromTarget,
   isAllowedByMode,
-  deepExtractViewOnce,
   unwrapStatusContent,
   processIncomingStatusMessage
 };

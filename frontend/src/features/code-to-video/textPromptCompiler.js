@@ -1,21 +1,22 @@
 /**
- * Kuro Studio - Deep Semantic Parser & Multi-Scene Motion Director
- * Mengurai deskripsi teks bebas menjadi SceneGraph multi-adegan terstruktur
- * lengkap dengan ekstraksi warna #hex ber-konteks, desain berbobot, & zero fake fallback.
+ * Kuro Studio - Deep Compositional 2D & 3D Motion Compiler
+ * Memisahkan Zona A (Direktif Visual: warna #hex, objek 2D/3D, atmosfer, tipografi)
+ * dari Zona B (Konten & Timeline Adegan Nyata) untuk menghasilkan SceneGraph presisi
+ * tanpa template paksaan maupun slide instruksi palsu.
  */
 
-import { buildProceduralSceneDocument } from './sceneRendererBuilder';
+import { buildProceduralSceneDocument } from './sceneRendererBuilder.js';
 
 export const PROMPT_DESIGN_STYLES = [
   { id: 'auto', name: 'Otomatis (Ikuti Teks)', desc: 'Deteksi gaya desain paling akurat dari teks' },
   { id: 'neo-brutalist', name: 'Neo-Brutalist', desc: 'Kartu terang, border hitam tegas & hard shadow' },
-  { id: 'glassmorphism', name: 'Glassmorphism 3D', desc: 'Kaca transparan modern & ambient orbs' },
-  { id: 'warm-promo', name: 'Sinematik Promo', desc: 'Sorotan harga coret, badge & aura hangat' },
+  { id: 'glassmorphism', name: 'Frosted Glass 3D', desc: 'Kaca dingin transparan & kilau cahaya berlapis' },
+  { id: 'warm-promo', name: 'Sinematik Komersial', desc: 'Produk 3D, pita dinamis, harga coret & badge' },
   { id: 'kinetic-type', name: 'Kinetic Tipografi', desc: 'Reveal kata-demi-kata dinamis & narasi' },
   { id: 'editorial-minimal', name: 'Minimalis Terang', desc: 'Bersih lapang, garis aksen halus' },
   { id: 'cyber-neon', name: 'Neon Cyber', desc: 'Grid 3D perspektif, laser glow & spektrum' },
   { id: '3d-space', name: '3D Futuristik', desc: 'Geometri 3D & orbit galaksi berlapis' },
-  { id: 'culinary-warm', name: 'Kuliner Hangat', desc: 'Bara hangat, uap aroma & kartu menu' },
+  { id: 'culinary-warm', name: 'Kuliner Hangat', desc: 'Mangkok beruap hangat & kartu menu' },
   { id: 'quotes-editorial', name: 'Editorial Quotes', desc: 'Tipografi tenang estetik berkelas' }
 ];
 
@@ -65,16 +66,16 @@ export const PROMPT_COLOR_MOODS = [
   },
   {
     id: 'crimson-fire',
-    name: 'Merah Mercon',
-    bg1: '#150506',
-    bg2: '#420a10',
+    name: 'Merah Sinematik',
+    bg1: '#b90710',
+    bg2: '#3f0206',
     accent: '#ef4444',
-    secondary: '#f97316',
+    secondary: '#ffffff',
     highlight: '#fde047',
-    text: '#fff5f5',
-    muted: '#fecaca',
-    border: '#fb923c',
-    dot: '#ef4444',
+    text: '#ffffff',
+    muted: '#fee2e2',
+    border: '#ffffff',
+    dot: '#e10613',
     isLight: false
   },
   {
@@ -140,31 +141,35 @@ export const PROMPT_BG_PATTERNS = [
   { id: 'grid-tilted', name: 'Grid Kotak Miring' },
   { id: 'grid-3d', name: 'Grid 3D Perspektif' },
   { id: 'aurora', name: 'Aurora Glow' },
-  { id: 'waves', name: 'Gelombang Halus' },
+  { id: 'waves', name: 'Pita Gelombang' },
   { id: 'plain', name: 'Polos Bersih' }
 ];
 
 export const PROMPT_HERO_VISUALS = [
-  { id: 'auto', name: 'Otomatis' },
-  { id: 'browser-mockup', name: 'Browser 3D Melayang' },
-  { id: 'device-duo', name: 'Laptop + HP' },
-  { id: '3d-geometry', name: 'Geometri 3D Orbit' },
-  { id: 'emblem-promo', name: 'Emblem Api / Promo' },
+  { id: 'auto', name: 'Otomatis (Ikuti Teks)' },
+  { id: 'bottle-can-beverage', name: 'Botol / Kaleng Soda 3D' },
+  { id: 'coffee-cup', name: 'Gelas Kopi / Es Boba' },
+  { id: 'food-bowl', name: 'Mangkuk Kuliner Hangat' },
+  { id: 'browser-ui-3d', name: 'Browser 3D Melayang' },
+  { id: 'device-duo-3d', name: 'Laptop + HP 3D' },
+  { id: 'geometry-3d', name: 'Geometri 3D Orbit' },
+  { id: 'product-pedestal-3d', name: 'Podium Produk 3D' },
+  { id: 'kinetic-pure', name: 'Tipografi Kinetik Murni' },
   { id: 'none', name: 'Tanpa Ilustrasi' }
 ];
 
 export const PROMPT_CARD_STYLES = [
   { id: 'auto', name: 'Otomatis' },
+  { id: 'frosted-glass', name: 'Frosted Glass (Kaca Dingin)' },
   { id: 'neo-brutalist', name: 'Neo-Brutalist (Border Tegas)' },
-  { id: 'glass', name: 'Glassmorphism' },
-  { id: 'flat', name: 'Minimalis Flat' },
+  { id: 'clean-editorial', name: 'Minimalis Editorial' },
   { id: 'neon', name: 'Neon Glow' }
 ];
 
 export const PROMPT_SCENE_PARTICLES = [
   { id: 'auto', name: 'Otomatis' },
   { id: 'petals-stars', name: 'Kelopak & Bintang' },
-  { id: 'light-dust', name: 'Debu Cahaya' },
+  { id: 'light-dust', name: 'Gelembung / Embun' },
   { id: 'fire-sparks', name: 'Bara Api' },
   { id: 'off', name: 'Matikan' }
 ];
@@ -244,7 +249,7 @@ ALUR ADEGAN (TOTAL 12 DETIK, 60 FPS):
 Adegan 1 (0.0s - 3.5s) Hook: Tampilkan badge KURO STUDIO memantul masuk, judul besar reveal per kata, dan ilustrasi jendela browser 3D melayang yang merakit komponennya.
 Adegan 2 (3.5s - 8.5s) Fitur Utama:
 - Downloader All-in-One | Unduh video TikTok, IG & YouTube bebas watermark
-- Ghost WA Stealth Vault | Amankan view once dan baca chat tanpa centang biru
+- Ghost WA Stealth Vault | Baca chat tanpa centang biru & amankan Status WA 0 view
 - Photo & PDF Studio | Edit, kompres, & konversi file seketika di browser
 - Code to Video Engine | Render HTML/JS/CSS menjadi video MP4 60 FPS HD
 Adegan 3 (8.5s - 12.0s) Closing CTA: Kartu penutup sorotan kuning stabilo dengan ajakan "COBA GRATIS SEKARANG", alamat alltoolskuro.vercel.app, serta progress bar tipis di bawah.`
@@ -348,12 +353,18 @@ function scoreKeywordList(lower, weightedTerms) {
   return score;
 }
 
+/**
+ * Deteksi warna #hex berdasarkan perannya (bgPrimary, bgSecondary, bgGlow, textPrimary, ribbonColor, frostAccent, badgeColor)
+ */
 function extractContextualHexColors(rawPrompt) {
   const matches = Array.from(rawPrompt.matchAll(/#[0-9a-fA-F]{3,6}\b/g));
   const bgCandidates = [];
-  const accentCandidates = [];
-  const highlightCandidates = [];
-  const borderTextCandidates = [];
+  const bgGlowCandidates = [];
+  const ribbonCandidates = [];
+  const frostCandidates = [];
+  const badgeCandidates = [];
+  const textCandidates = [];
+  const otherAccents = [];
   const allFound = [];
 
   for (const m of matches) {
@@ -361,32 +372,160 @@ function extractContextualHexColors(rawPrompt) {
     if (!hex) continue;
     allFound.push(hex);
 
-    const beforeRaw = rawPrompt.slice(Math.max(0, m.index - 70), m.index);
+    const beforeRaw = rawPrompt.slice(Math.max(0, m.index - 75), m.index);
     const localBefore = beforeRaw.split(/[,;\n]/).pop().toLowerCase();
-    const afterRaw = rawPrompt.slice(m.index + m[0].length, Math.min(rawPrompt.length, m.index + m[0].length + 55));
+    const afterRaw = rawPrompt.slice(m.index + m[0].length, Math.min(rawPrompt.length, m.index + m[0].length + 60));
     const localAfter = afterRaw.split(/[,;\n]/)[0].toLowerCase();
     const lineCtx = (rawPrompt.slice(0, m.index).split('\n').pop() + ' ' + localAfter).toLowerCase();
     const phrase = `${localBefore} ${localAfter}`;
 
-    if (/\b(?:tepi|border|garis|bayangan|shadow|teks|text|ink|outline)\b/.test(phrase)) {
-      borderTextCandidates.push(hex);
-    } else if (/\b(?:sorotan|badge|highlight|stabilo|tag|stiker)\b/.test(phrase)) {
-      highlightCandidates.push(hex);
-    } else if (/\b(?:latar|background|gradasi|putih mutiara|pucat|canvas)\b/.test(lineCtx) && !/\baksen\b/.test(lineCtx)) {
+    if (/\b(?:tepi|border|garis|bayangan|shadow|teks|text|ink|outline|font)\b/.test(phrase)) {
+      textCandidates.push(hex);
+    } else if (/\b(?:glow|aura|sorotan tengah|cahaya tengah|nyala)\b/.test(phrase)) {
+      bgGlowCandidates.push(hex);
+    } else if (/\b(?:pita|ribbon|gelombang|wave)\b/.test(phrase)) {
+      ribbonCandidates.push(hex);
+    } else if (/\b(?:es|frost|embun|dingin|kaca|frosted|ice|kristal)\b/.test(phrase)) {
+      frostCandidates.push(hex);
+    } else if (/\b(?:sorotan|badge|highlight|stabilo|tag|stiker|cta|tombol|promo|diskon)\b/.test(phrase)) {
+      badgeCandidates.push(hex);
+    } else if (/\b(?:latar|background|gradasi|kanvas|merah menyala|putih mutiara|pucat)\b/.test(lineCtx) && !/\baksen\b/.test(lineCtx)) {
       bgCandidates.push(hex);
     } else {
-      accentCandidates.push(hex);
+      otherAccents.push(hex);
     }
   }
 
   return {
     allFound: [...new Set(allFound)],
-    bg1: bgCandidates[0] || '',
-    bg2: bgCandidates[1] || '',
-    accent: accentCandidates[0] || '',
-    secondary: accentCandidates[1] || '',
-    highlight: highlightCandidates[0] || '',
-    borderText: borderTextCandidates[0] || ''
+    bgPrimary: bgCandidates[0] || '',
+    bgSecondary: bgCandidates[1] || '',
+    bgGlow: bgGlowCandidates[0] || bgCandidates[2] || '',
+    textPrimary: textCandidates[0] || '',
+    ribbonColor: ribbonCandidates[0] || otherAccents[0] || '',
+    frostAccent: frostCandidates[0] || otherAccents[1] || otherAccents[0] || '',
+    badgeColor: badgeCandidates[0] || otherAccents[1] || ''
+  };
+}
+
+const DIRECTIVE_SECTION_HEADER_RE =
+  /^(?:[-*•#]*\s*)?(?:\*{1,2})?(?:DESAIN(?:\s*&\s*PALET(?:\s*WARNA)?)?|PALET\s*WARNA|BENTUKAN(?:\s*&\s*ELEMEN(?:\s*VISUAL)?)?|ELEMEN\s*VISUAL|GAYA\s*VISUAL|TIPOGRAFI(?:\s*&\s*EFEK)?|PENCAHAYAAN(?:\s*&\s*ATMOSFER)?|ATMOSFER|EFEK\s*VISUAL|SPESIFIKASI(?:\s*VISUAL)?|WARNA\s*&\s*GAYA)\s*[:=\-]?\s*(?:\*{1,2})?$/i;
+
+const DIRECTIVE_INLINE_LINE_RE =
+  /^(?:[-*•#]*\s*)?(?:\*{1,2})?(?:gaya\s+visual|warna\s+latar|warna\s+aksen|warna\s+teks|warna\s+pita|palet\s+warna|bentukan|elemen\s+visual|tipografi|pencahayaan|atmosfer|efek\s+visual|latar\s+belakang|background|partikel|transisi|progress\s*bar|catatan\s+visual|kamera|gerakan)\s*[:=]/i;
+
+const SCENE_SECTION_EXIT_RE =
+  /^(?:[-*•#]*\s*)?(?:\*{1,2})?(?:ALUR\s*ADEGAN|TIMELINE(?:\s*ADEGAN)?|RANGKAIAN\s*ADEGAN|SKENARIO|NASKAH\s*ADEGAN)\b.*$/i;
+
+const EXPLICIT_SCENE_HEADER_RE =
+  /^(?:[-*•#]*\s*|\d+[.)]\s*)?(?:\*{1,2})?(?:adegan|scene|bagian|slide)\s*(\d+)\b(.*)$/i;
+
+function isDesignSpecLine(line = '') {
+  const low = line.trim().toLowerCase();
+  if (!low) return true;
+  if (DIRECTIVE_SECTION_HEADER_RE.test(line.trim())) return true;
+  if (DIRECTIVE_INLINE_LINE_RE.test(low)) return true;
+  if (SCENE_SECTION_EXIT_RE.test(line.trim())) return true;
+  if (/^[-*•]?\s*(?:progress bar|shadow|bayangan keras|garis tepi hitam|tema gelap|efek kaca dingin)/i.test(low) && !/\|/.test(low)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Memisahkan prompt menjadi Zona A (Direktif Visual) & Zona B (Konten & Adegan Nyata)
+ */
+function parsePromptZones(rawPrompt) {
+  const lines = String(rawPrompt || '').split(/\r?\n/);
+  const directiveLines = [];
+  const headerContentLines = [];
+  const freeContentLines = [];
+  const explicitScenes = [];
+
+  let inDirectiveSection = false;
+  let currentScene = null;
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    // Cek header Adegan eksplisit terlebih dahulu (keluar dari Zona A seketika!)
+    const sceneMatch = trimmed.match(EXPLICIT_SCENE_HEADER_RE);
+    if (sceneMatch) {
+      inDirectiveSection = false;
+      if (currentScene) explicitScenes.push(currentScene);
+
+      const restHeader = String(sceneMatch[2] || '').replace(/^\*{1,2}|\*{1,2}$/g, '');
+      const timeRangeMatch = restHeader.match(/(\d+(?:\.\d+)?)\s*s?\s*[-–—]\s*(\d+(?:\.\d+)?)\s*s?/i);
+      const minSecMatch = restHeader.match(/(\d{1,2}):([0-5]\d)\s*[-–—]\s*(\d{1,2}):([0-5]\d)/);
+
+      let startSec = null;
+      let endSec = null;
+      if (minSecMatch) {
+        startSec = parseInt(minSecMatch[1], 10) * 60 + parseInt(minSecMatch[2], 10);
+        endSec = parseInt(minSecMatch[3], 10) * 60 + parseInt(minSecMatch[4], 10);
+      } else if (timeRangeMatch) {
+        startSec = parseFloat(timeRangeMatch[1]);
+        endSec = parseFloat(timeRangeMatch[2]);
+      }
+
+      const cleanTitle = restHeader
+        .replace(/\(?\d+(?:\.\d+)?\s*s?\s*[-–—]\s*\d+(?:\.\d+)?\s*s?\)?/gi, '')
+        .replace(/\(?(\d{1,2}):([0-5]\d)\s*[-–—]\s*(\d{1,2}):([0-5]\d)\)?/g, '')
+        .replace(/\*+/g, '')
+        .replace(/^[\s:.\-–—]+|[\s:.\-–—]+$/g, '')
+        .trim();
+
+      currentScene = {
+        index: parseInt(sceneMatch[1], 10),
+        headerLabel: cleanTitle,
+        startSec,
+        endSec,
+        lines: []
+      };
+      continue;
+    }
+
+    // Cek heading Alur Adegan -> keluar dari Zona A agar isi adegan dibaca sebagai Zona B
+    if (SCENE_SECTION_EXIT_RE.test(trimmed)) {
+      inDirectiveSection = false;
+      continue;
+    }
+
+    // Cek heading Zona A (Direktif Visual)
+    if (DIRECTIVE_SECTION_HEADER_RE.test(trimmed)) {
+      inDirectiveSection = true;
+      currentScene = null;
+      directiveLines.push(trimmed);
+      continue;
+    }
+
+    if (inDirectiveSection) {
+      directiveLines.push(trimmed);
+      continue;
+    }
+
+    if (DIRECTIVE_INLINE_LINE_RE.test(trimmed)) {
+      directiveLines.push(trimmed);
+      continue;
+    }
+
+    if (currentScene) {
+      currentScene.lines.push(trimmed);
+    } else if (/^(?:brand|merek|nama brand|judul|headline|title|subjudul|subtitle|tagline|cta|ajakan|harga|promo)\s*[:=]/i.test(trimmed)) {
+      headerContentLines.push(trimmed);
+    } else {
+      freeContentLines.push(trimmed);
+    }
+  }
+
+  if (currentScene) explicitScenes.push(currentScene);
+
+  return {
+    directiveLines,
+    headerContentLines,
+    freeContentLines,
+    explicitScenes
   };
 }
 
@@ -407,23 +546,23 @@ function detectDesignSystem(lower, explicitStyle = 'auto') {
   }
 
   const scores = {
+    glassmorphism: scoreKeywordList(lower, [
+      [/glassmorphism|frosted\s*glass|efek kaca|kaca dingin|transparan blur/i, 7],
+      [/ambient orb|floating card/i, 3]
+    ]),
     'neo-brutalist': scoreKeywordList(lower, [
       [/neo[\s-]?brutalis[mt]?/i, 8],
       [/hard[\s-]?shadow|bayangan keras/i, 6],
-      [/border hitam|garis tepi hitam|garis tegas|kotak tegas/i, 6],
-      [/terang lembut|putih mutiara/i, 3]
-    ]),
-    glassmorphism: scoreKeywordList(lower, [
-      [/glassmorphism|frosted glass|efek kaca|transparan blur/i, 5],
-      [/ambient orb|floating card/i, 3]
+      [/border hitam|garis tepi hitam|garis tegas|kotak tegas/i, 6]
     ]),
     'cyber-neon': scoreKeywordList(lower, [
-      [/cyberpunk|neon glow|matrix|hologram|synthwave|spektrum audio|gaming/i, 5],
+      [/cyberpunk|neon glow|matrix|hologram|synthwave|spektrum audio|gaming/i, 6],
       [/grid 3d|perspektif neon|laser/i, 3]
     ]),
     'warm-promo': scoreKeywordList(lower, [
-      [/bakso|kuliner|minuman|makanan|pedas|mercon|kuah|kopi|matcha|resto|warung|cafe|diskon\s+menu/i, 6],
-      [/promo kilat|flash sale|beli\s+\d+\s+gratis/i, 4]
+      [/iklan minuman|commercial|coca[\s-]?cola|soda|minuman dingin|botol|kaleng/i, 6],
+      [/bakso|kuliner|makanan|pedas|mercon|kuah|kopi|matcha|resto|warung|cafe/i, 6],
+      [/promo|flash sale|beli\s+\d+\s+gratis|diskon/i, 4]
     ]),
     'editorial-minimal': scoreKeywordList(lower, [
       [/quotes|kutipan|motivasi|renungan|puisi|sajak|refleksi|editorial/i, 7],
@@ -434,7 +573,7 @@ function detectDesignSystem(lower, explicitStyle = 'auto') {
     ])
   };
 
-  let best = 'neo-brutalist';
+  let best = 'editorial-minimal';
   let bestScore = 0;
   for (const [k, sc] of Object.entries(scores)) {
     if (sc > bestScore) {
@@ -442,33 +581,70 @@ function detectDesignSystem(lower, explicitStyle = 'auto') {
       best = k;
     }
   }
-  return bestScore > 0 ? best : 'editorial-minimal';
+  return best;
 }
 
+/**
+ * Pemilih Hero Object Akurat Berbasis Keyword Spesifik (Anti-Salah-Objek!)
+ */
 function detectHeroVisual(lower, designSystem, explicitHero = 'auto') {
-  if (explicitHero && explicitHero !== 'auto') return explicitHero;
-  if (/\b(?:jendela\s+browser|browser\s+3d|browser\s+mockup)\b/.test(lower)) {
-    return 'browser-mockup';
+  if (explicitHero && explicitHero !== 'auto') {
+    if (explicitHero === 'browser-mockup') return 'browser-ui-3d';
+    if (explicitHero === 'device-duo') return 'device-duo-3d';
+    if (explicitHero === '3d-geometry') return 'geometry-3d';
+    if (explicitHero === 'emblem-promo') return 'food-bowl';
+    return explicitHero;
   }
-  if (/\b(?:laptop|smartphone|mockup\s+hp)\b/.test(lower)) {
-    return 'device-duo';
+
+  // 1. Botol / Kaleng Minuman Soda (Coca-Cola, Sirup, Jus, Teh Botol, Isotonik)
+  if (/\b(?:botol|kaleng|soda|coca[\s-]?cola|cola|pepsi|sprite|fanta|minuman dingin|minuman bersoda|sirup|jus buah|teh botol|sparkling|isotonik)\b/i.test(lower)) {
+    return 'bottle-can-beverage';
   }
-  if (/\b(?:browser|website|web\s+platform|dashboard|landing\s+page|saas|aplikasi\s+web)\b/.test(lower)) {
-    return 'browser-mockup';
+  // 2. Gelas Kopi / Boba / Matcha
+  if (/\b(?:kopi|coffee|matcha|boba|latte|es kopi|gelas|milk tea|thai tea|espresso)\b/i.test(lower)) {
+    return 'coffee-cup';
   }
-  if (/\b(?:mobile\s*&\s*pc|hp\s*&\s*pc|perangkat|responsif)\b/.test(lower)) {
-    return 'device-duo';
+  // 3. Mangkuk Kuliner (HANYA jika teks eksplisit menyebut kuliner kuah/mangkuk)
+  if (/\b(?:bakso|mie\s+ayam|ramen|soto|sop|sup|mangkuk|mangkok|seblak|kuah kaldu)\b/i.test(lower)) {
+    return 'food-bowl';
   }
-  if (designSystem === '3d-space' || /\b(?:planet|orbit|tata surya|kubus 3d|geometri 3d|wireframe)\b/.test(lower)) {
-    return '3d-geometry';
+  // 4. Website / Browser UI 3D
+  if (/\b(?:jendela browser|browser 3d|browser mockup|website|web platform|dashboard|landing page|saas|aplikasi web)\b/i.test(lower)) {
+    return 'browser-ui-3d';
   }
-  if (designSystem === 'warm-promo' || /\b(?:bakso|kopi|makan|minum|api|mercon)\b/.test(lower)) {
-    return 'emblem-promo';
+  // 5. Laptop + HP
+  if (/\b(?:laptop|smartphone|mockup hp|mobile\s*&\s*pc|hp\s*&\s*pc)\b/i.test(lower)) {
+    return 'device-duo-3d';
   }
-  if (designSystem === 'editorial-minimal') {
-    return 'none';
+  // 6. Geometri 3D & Luar Angkasa
+  if (designSystem === '3d-space' || /\b(?:planet|orbit|tata surya|galaksi|nebula|kubus 3d|prisma|kristal 3d|wireframe)\b/i.test(lower)) {
+    return 'geometry-3d';
   }
-  return 'browser-mockup';
+  // 7. Produk Fisik Podium 3D
+  if (/\b(?:produk|parfum|skincare|serum|sepatu|gadget|jam tangan|headset|kamera|podium|stage 3d)\b/i.test(lower)) {
+    return 'product-pedestal-3d';
+  }
+  // 8. Tipografi Kinetik / Quotes / Editorial
+  if (designSystem === 'editorial-minimal' || designSystem === 'kinetic-type' || /\b(?:quotes|kutipan|edukasi|puisi|narasi|teks murni)\b/i.test(lower)) {
+    return 'kinetic-pure';
+  }
+
+  return /\b(?:promo|diskon|harga|rp\.?)\b/i.test(lower) ? 'product-pedestal-3d' : 'kinetic-pure';
+}
+
+function detectVisualLayers(lower, heroVisual, designSystem) {
+  return {
+    dynamicRibbonWave: /\b(?:pita|ribbon|gelombang putih|wave)\b/i.test(lower) || heroVisual === 'bottle-can-beverage',
+    fizzBubbles: /\b(?:gelembung|soda|fizz|karbonasi|sparkling|berbuih)\b/i.test(lower),
+    floatingIceCubes: /\b(?:es batu|kristal es|ice cube|bongkahan es|ice cold|dingin menggigil)\b/i.test(lower),
+    frostMist: /\b(?:kabut dingin|embun|frost|uap dingin|asap dingin|frosted|berembun)\b/i.test(lower),
+    perspectiveGrid3d: designSystem === 'cyber-neon' || designSystem === '3d-space' || /\b(?:grid 3d|perspektif neon|cyberpunk)\b/i.test(lower),
+    tiltedGrid: designSystem === 'neo-brutalist' || /\b(?:grid kotak|miring|neo[\s-]?brutalis)\b/i.test(lower),
+    shimmerSweep: /\b(?:kilau|shimmer|kilatan|mengilap|glossy|specular)\b/i.test(lower) || true,
+    animatedStrikethrough: /\b(?:dicoret|harga coret|dari\s+rp)\b/i.test(lower) || true,
+    wordMaskReveal: /\b(?:kata demi kata|mask|reveal)\b/i.test(lower) || true,
+    bottomProgressBar: !/\btanpa\s+progress\s*bar\b/i.test(lower)
+  };
 }
 
 function resolvePalette(rawPrompt, lower, designSystem, options = {}) {
@@ -479,59 +655,86 @@ function resolvePalette(rawPrompt, lower, designSystem, options = {}) {
   let baseMood = PROMPT_COLOR_MOODS.find((m) => m.id === moodId && m.id !== 'auto');
 
   if (!baseMood) {
-    // Cek kecenderungan terang vs gelap dengan deteksi negasi
+    const redScore = scoreKeywordList(lower, [
+      [/merah|crimson|coca[\s-]?cola|ruby|maroon|menyala/i, 5]
+    ]);
     const lightScore = scoreKeywordList(lower, [
       [/putih mutiara|gradasi terang|tema terang|latar terang|biru langit pucat|sakura|ivory|terang bersih/i, 6],
       [/neo[\s-]?brutalis/i, 4]
     ]);
     const darkScore = scoreKeywordList(lower, [
-      [/tema gelap|latar gelap|hitam pekat|malam|dark mode|obsidian/i, 5]
+      [/tema gelap|latar gelap|hitam pekat|malam|dark mode|obsidian|marun gelap/i, 5]
     ]);
 
-    if (designSystem === 'warm-promo') {
+    if (redScore >= 5 || designSystem === 'warm-promo') {
       baseMood = PROMPT_COLOR_MOODS.find((m) => m.id === 'crimson-fire');
     } else if (designSystem === '3d-space' || designSystem === 'cyber-neon') {
       baseMood = PROMPT_COLOR_MOODS.find((m) => m.id === 'deep-indigo');
-    } else if (lightScore >= darkScore || designSystem === 'neo-brutalist') {
+    } else if (lightScore > darkScore || designSystem === 'neo-brutalist') {
       baseMood = PROMPT_COLOR_MOODS.find((m) => m.id === 'pearl-sky');
     } else {
       baseMood = PROMPT_COLOR_MOODS.find((m) => m.id === 'deep-indigo');
     }
   }
 
-  let pal = { ...baseMood };
+  let pal = {
+    ...baseMood,
+    bgPrimary: baseMood.bg1,
+    bgSecondary: baseMood.bg2,
+    bgGlow: baseMood.accent,
+    textPrimary: baseMood.text,
+    ribbonColor: baseMood.secondary,
+    frostAccent: baseMood.accent,
+    badgeColor: baseMood.highlight || baseMood.accent
+  };
 
   if (moodId === 'custom') {
-    pal.bg1 = normalizeHex(options.customBg1 || options.bgColor1) || pal.bg1;
-    pal.bg2 = normalizeHex(options.customBg2 || options.bgColor2) || pal.bg2;
-    pal.accent = normalizeHex(options.customAccent || options.tintColor) || pal.accent;
-    pal.text = normalizeHex(options.customText || options.hudTextColor) || pal.text;
+    pal.bgPrimary = normalizeHex(options.customBg1 || options.bgColor1) || pal.bg1;
+    pal.bgSecondary = normalizeHex(options.customBg2 || options.bgColor2) || pal.bg2;
+    pal.frostAccent = normalizeHex(options.customAccent || options.tintColor) || pal.accent;
+    pal.textPrimary = normalizeHex(options.customText || options.hudTextColor) || pal.text;
+    pal.bg1 = pal.bgPrimary;
+    pal.bg2 = pal.bgSecondary;
+    pal.accent = pal.frostAccent;
+    pal.text = pal.textPrimary;
     pal.isLight = getHexLuminance(pal.bg1) > 0.55;
     pal.border = pal.isLight ? '#0f172a' : pal.accent;
-    pal.muted = pal.isLight ? '#334155' : '#cbd5e1';
+    pal.muted = pal.isLight ? '#334155' : '#e2e8f0';
     return pal;
   }
 
   if (useHex && hexInfo.allFound.length > 0) {
-    if (hexInfo.bg1) pal.bg1 = hexInfo.bg1;
-    if (hexInfo.bg2) pal.bg2 = hexInfo.bg2;
-    else if (hexInfo.bg1) pal.bg2 = hexInfo.bg1;
+    if (hexInfo.bgPrimary) pal.bgPrimary = hexInfo.bgPrimary;
+    else if (hexInfo.allFound[0]) pal.bgPrimary = hexInfo.allFound[0];
 
-    if (hexInfo.accent) pal.accent = hexInfo.accent;
-    if (hexInfo.secondary) pal.secondary = hexInfo.secondary;
-    if (hexInfo.highlight) pal.highlight = hexInfo.highlight;
-    if (hexInfo.borderText) {
-      pal.border = hexInfo.borderText;
-      if (getHexLuminance(pal.bg1) > 0.55) {
-        pal.text = hexInfo.borderText;
-      }
-    }
+    if (hexInfo.bgSecondary) pal.bgSecondary = hexInfo.bgSecondary;
+    else if (hexInfo.bgGlow) pal.bgSecondary = hexInfo.bgGlow;
+    else if (hexInfo.allFound[1] && hexInfo.allFound[1] !== pal.bgPrimary) pal.bgSecondary = hexInfo.allFound[1];
+    else pal.bgSecondary = pal.bgPrimary;
+
+    pal.bgGlow = hexInfo.bgGlow || hexInfo.frostAccent || pal.bgPrimary;
+    pal.ribbonColor = hexInfo.ribbonColor || pal.secondary || '#ffffff';
+    pal.frostAccent = hexInfo.frostAccent || pal.accent || '#bae6fd';
+    pal.badgeColor = hexInfo.badgeColor || pal.highlight || '#fde047';
+
+    pal.bg1 = pal.bgPrimary;
+    pal.bg2 = pal.bgSecondary;
+    pal.accent = pal.frostAccent;
+    pal.secondary = pal.ribbonColor;
+    pal.highlight = pal.badgeColor;
+
     pal.isLight = getHexLuminance(pal.bg1) > 0.55;
-    pal.text = pal.isLight ? (hexInfo.borderText && getHexLuminance(hexInfo.borderText) < 0.45 ? hexInfo.borderText : '#0f172a') : '#f8fafc';
-    pal.muted = pal.isLight ? '#334155' : '#cbd5e1';
-    if (!hexInfo.borderText) {
-      pal.border = pal.isLight ? '#0f172a' : pal.accent;
+    if (hexInfo.textPrimary) {
+      const lumT = getHexLuminance(hexInfo.textPrimary);
+      pal.textPrimary = (pal.isLight && lumT > 0.65) || (!pal.isLight && lumT < 0.35)
+        ? (pal.isLight ? '#0f172a' : '#ffffff')
+        : hexInfo.textPrimary;
+    } else {
+      pal.textPrimary = pal.isLight ? '#0f172a' : '#ffffff';
     }
+    pal.text = pal.textPrimary;
+    pal.muted = pal.isLight ? '#334155' : 'rgba(255,255,255,0.85)';
+    pal.border = pal.isLight ? '#0f172a' : pal.accent;
     pal.name = 'Hex Kustom dari Teks';
   }
 
@@ -540,23 +743,19 @@ function resolvePalette(rawPrompt, lower, designSystem, options = {}) {
 
 function stripLabeledPrefix(line = '') {
   return String(line)
-    .replace(/^(?:brand|merek|nama brand|judul|headline|title|subjudul|subtitle|tagline|cta|ajakan|link|harga|promo|hook)\s*[:=\-]\s*/i, '')
+    .replace(/^(?:[-*•]\s*)?(?:brand|merek|nama brand|judul(?:\s+utama)?|headline|title|subjudul|subtitle|tagline|cta|ajakan|link|harga|promo|hook)\s*[:=\-]\s*/i, '')
     .trim();
 }
 
-function isDesignSpecLine(line = '') {
-  const low = line.trim().toLowerCase();
-  if (!low) return true;
-  if (/^[-*•]?\s*(?:gaya visual|warna latar|warna aksen|palet warna|desain & palet|alur adegan|progress bar|catatan visual)\s*[:]/i.test(low)) {
-    return true;
+function extractQuotedStrings(text = '') {
+  const results = [];
+  const re = /["“]([^"”\n]{2,110})["”]/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const val = m[1].trim();
+    if (val && !results.includes(val)) results.push(val);
   }
-  if (/^(?:DESAIN\s*&\s*PALET\s*WARNA|ALUR\s*ADEGAN|SPESIFIKASI\s*VISUAL)[:\s]*$/i.test(line.trim())) {
-    return true;
-  }
-  if (/^[-*•]?\s*(?:progress bar|shadow|bayangan keras|garis tepi hitam|tema gelap)/i.test(low) && !/fitur|keunggulan|paket/i.test(low)) {
-    return true;
-  }
-  return false;
+  return results;
 }
 
 function extractExplicitDurationSec(rawPrompt) {
@@ -566,7 +765,6 @@ function extractExplicitDurationSec(rawPrompt) {
   const secMatch = rawPrompt.match(/(?:total|durasi)\s*[:=]?\s*(\d{1,3})\s*(?:detik|seconds?|s\b)/i);
   if (secMatch) return Math.min(300, Math.max(4, parseInt(secMatch[1], 10)));
 
-  // Cari timestamp akhir terbesar misal (8.5s - 12.0s) atau (0:00 - 2:00)
   const minSecRanges = Array.from(rawPrompt.matchAll(/(\d{1,2}):([0-5]\d)\s*(?:-|s\.d|sd|to)\s*(\d{1,2}):([0-5]\d)/g));
   if (minSecRanges.length > 0) {
     const last = minSecRanges[minSecRanges.length - 1];
@@ -621,7 +819,10 @@ function extractPromoDetails(rawPrompt) {
     ? `HEMAT ${discMatch[1].replace(/\s+/g, '')}`
     : (promoPrice && oldPrice ? 'PROMO SPESIAL' : '');
 
-  return { promoPrice, oldPrice, discountBadge };
+  const noteMatch = rawPrompt.match(/(?:catatan|promo berlaku|gratis|bonus|khusus)[^.\n]{4,70}/i);
+  const promoNote = noteMatch ? noteMatch[0].trim() : '';
+
+  return { promoPrice, oldPrice, discountBadge, promoNote };
 }
 
 function extractMetricsFromText(rawText = '') {
@@ -643,12 +844,11 @@ function extractMetricsFromText(rawText = '') {
   return out;
 }
 
-function extractCoreEntities(rawPrompt) {
-  const lines = rawPrompt.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+function extractCoreEntities(rawPrompt, zones) {
+  const contentPool = [...zones.headerContentLines, ...zones.freeContentLines];
 
-  // 1. Ekstrak Brand murni (tanpa fallback palsu)
   let brand = '';
-  for (const line of lines) {
+  for (const line of contentPool) {
     const m = line.match(/^(?:[-*•]\s*)?(?:brand|merek|nama brand|studio|oleh)\s*[:=]\s*(.+)$/i);
     if (m) {
       brand = m[1].replace(/^(?:brand|merek)\s*:\s*/i, '').trim();
@@ -664,10 +864,9 @@ function extractCoreEntities(rawPrompt) {
     if (handleMatch) brand = `@${handleMatch[1]}`;
   }
 
-  // 2. Ekstrak Judul & Subjudul eksplisit
   let headline = '';
   let subheadline = '';
-  for (const line of lines) {
+  for (const line of contentPool) {
     const hMatch = line.match(/^(?:[-*•]\s*)?(?:judul(?:\s+utama)?|headline|title)\s*[:=]\s*(.+)$/i);
     if (hMatch && !headline) {
       headline = stripLabeledPrefix(hMatch[1]);
@@ -679,24 +878,21 @@ function extractCoreEntities(rawPrompt) {
     }
   }
 
-  // Fallback Judul & Subjudul dari baris non-instruksi pertama
-  const contentLines = lines.filter((l) => !isDesignSpecLine(l) && !/^(?:brand|merek)\s*[:=]/i.test(l));
+  const nonLabeled = zones.freeContentLines.filter((l) => !isDesignSpecLine(l));
   if (!headline) {
-    const firstValid = contentLines.find((l) => !/^(?:adegan|scene|bagian|slide)\s*\d+/i.test(l));
-    headline = stripLabeledPrefix(firstValid || 'PRESENTASI VISUAL').slice(0, 72);
+    headline = stripLabeledPrefix(nonLabeled[0] || brand || 'PRESENTASI VISUAL').slice(0, 72);
   }
   if (!subheadline) {
-    const secondValid = contentLines.filter((l) => l !== headline && !/^(?:adegan|scene|bagian|slide)\s*\d+/i.test(l))[0];
-    subheadline = secondValid ? stripLabeledPrefix(secondValid).slice(0, 110) : '';
+    const nextLine = nonLabeled.find((l) => l !== headline);
+    subheadline = nextLine ? stripLabeledPrefix(nextLine).slice(0, 110) : '';
   }
 
-  // 3. Ekstrak CTA, Domain & Kontak tanpa jebakan kata acak
   let cta = '';
-  const quotedCta = rawPrompt.match(/(?:ajakan|cta|tombol)[^"\n]*["“]([^"”]{3,42})["”]/i);
+  const quotedCta = rawPrompt.match(/(?:ajakan|cta|tombol|closing)[^"\n]*["“]([^"”]{3,56})["”]/i);
   const labeledCta = rawPrompt.match(/^(?:[-*•]\s*)?(?:cta|tombol cta|ajakan)\s*[:=]\s*(.+)$/im);
   const waMatch = rawPrompt.match(/\b(?:WA|WhatsApp)\s*[:#]?\s*((?:\+?62|08)[\d\s-]{7,15})/i);
   const domainMatch = rawPrompt.match(/\b([a-z0-9-]+\.(?:vercel\.app|id|com|co\.id|net|io|app|org))\b/i);
-  const marketMatch = rawPrompt.match(/\b((?:GoFood|GrabFood|ShopeeFood|Tokopedia|Shopee|TikTok\s*Shop)(?:\s*(?:,|dan|&|\/)\s*(?:GoFood|GrabFood|ShopeeFood|Tokopedia|Shopee|TikTok\s*Shop))*)/i);
+  const marketMatch = rawPrompt.match(/\b((?:GoFood|GrabFood|ShopeeFood|Tokopedia|Shopee|TikTok\s*Shop|Minimarket|Indomaret|Alfamart)(?:\s*(?:,|dan|&|\/)\s*(?:GoFood|GrabFood|ShopeeFood|Tokopedia|Shopee|TikTok\s*Shop|Minimarket|Indomaret|Alfamart))*)/i);
 
   if (quotedCta) {
     cta = quotedCta[1].trim().toUpperCase();
@@ -705,7 +901,7 @@ function extractCoreEntities(rawPrompt) {
   } else if (waMatch) {
     cta = `KONSULTASI WA ${waMatch[1].trim()}`;
   } else {
-    const actionMatch = rawPrompt.match(/\b((?:coba|pesan|beli|mulai|klaim|daftar|booking|konsultasi|kunjungi|simpan|bagikan)(?:\s+(?:gratis|sekarang|di|hari ini|kutipan)){1,3})/i);
+    const actionMatch = rawPrompt.match(/\b((?:coba|pesan|beli|mulai|klaim|daftar|booking|konsultasi|kunjungi|simpan|bagikan|rasakan)(?:\s+(?:gratis|sekarang|di|hari ini|kesegarannya|kutipan)){1,3})/i);
     if (actionMatch && !isNegatedTerm(rawPrompt.toLowerCase(), actionMatch.index)) {
       cta = actionMatch[1].trim().toUpperCase();
     }
@@ -732,153 +928,153 @@ function extractCoreEntities(rawPrompt) {
 }
 
 function parseBulletCardItem(rawLine) {
-  const clean = rawLine.replace(/^[-*•\d.)\s]+/, '').trim();
+  const clean = rawLine.replace(/^[-*•\d.)\s]+/, '').replace(/\*+/g, '').trim();
   if (!clean || isDesignSpecLine(clean)) return null;
 
   if (clean.includes('|')) {
     const [left, ...rest] = clean.split('|');
     return {
-      title: left.replace(/^(?:kartu|poin|fitur)\s*\d*\s*[:=]\s*/i, '').trim().slice(0, 44),
-      desc: rest.join(' • ').trim().slice(0, 96)
+      title: left.replace(/^(?:kartu|poin|fitur|keunggulan)\s*\d*\s*[:=]\s*/i, '').trim().slice(0, 48),
+      desc: rest.join(' • ').trim().slice(0, 100)
+    };
+  }
+  const dashSplit = clean.match(/^(.{3,48}?)\s+[—–-]\s+(.{3,110})$/);
+  if (dashSplit) {
+    return {
+      title: dashSplit[1].trim(),
+      desc: dashSplit[2].trim()
     };
   }
   const colonIdx = clean.indexOf(':');
-  if (colonIdx > 2 && colonIdx < 36 && !/^https?:/i.test(clean)) {
+  if (colonIdx > 2 && colonIdx < 42 && !/^https?:/i.test(clean)) {
     return {
-      title: clean.slice(0, colonIdx).replace(/^(?:kartu|poin|fitur)\s*\d*\s*/i, '').trim().slice(0, 44),
-      desc: clean.slice(colonIdx + 1).trim().slice(0, 96)
+      title: clean.slice(0, colonIdx).replace(/^(?:kartu|poin|fitur|keunggulan)\s*\d*\s*/i, '').trim().slice(0, 48),
+      desc: clean.slice(colonIdx + 1).trim().slice(0, 100)
     };
   }
   return {
-    title: clean.slice(0, 44),
-    desc: clean.length > 44 ? clean.slice(44, 120).trim() : ''
+    title: clean.slice(0, 48),
+    desc: clean.length > 48 ? clean.slice(48, 120).trim() : ''
   };
 }
 
-function splitExplicitScenes(rawPrompt) {
-  const lines = rawPrompt.split(/\r?\n/);
-  const sceneHeaderRe = /^(?:[-*•#]*\s*)?(?:adegan|scene|bagian|slide)\s*(\d+)\b(.*)$/i;
+/**
+ * Membersihkan instruksi sutradara ("Tampilkan...", "Animasikan...", "Efek...")
+ * agar yang tampil di layar adalah copy iklan/konten yang tajam.
+ */
+function extractScreenCopyFromSceneBlock(block, entities, isFirst, isLast) {
+  const joinedBody = block.lines.join('\n');
+  const quotes = extractQuotedStrings(`${block.headerLabel}\n${joinedBody}`);
 
-  const explicitBlocks = [];
-  let currentBlock = null;
-
-  for (const rawLine of lines) {
-    const trimmed = rawLine.trim();
-    if (!trimmed) continue;
-
-    const headerMatch = trimmed.match(sceneHeaderRe);
-    if (headerMatch) {
-      if (currentBlock) explicitBlocks.push(currentBlock);
-      const restHeader = headerMatch[2] || '';
-      const timeRangeMatch = restHeader.match(/(\d+(?:\.\d+)?)\s*s?\s*[-–—]\s*(\d+(?:\.\d+)?)\s*s?/i);
-      const minSecMatch = restHeader.match(/(\d{1,2}):([0-5]\d)\s*[-–—]\s*(\d{1,2}):([0-5]\d)/);
-
-      let startSec = null;
-      let endSec = null;
-      if (minSecMatch) {
-        startSec = parseInt(minSecMatch[1], 10) * 60 + parseInt(minSecMatch[2], 10);
-        endSec = parseInt(minSecMatch[3], 10) * 60 + parseInt(minSecMatch[4], 10);
-      } else if (timeRangeMatch) {
-        startSec = parseFloat(timeRangeMatch[1]);
-        endSec = parseFloat(timeRangeMatch[2]);
+  const cards = [];
+  const cleanNotes = [];
+  for (const l of block.lines) {
+    const stripped = l.replace(/^[-*•]\s+|^\d+[.)]\s+/, '').trim();
+    if (/^[-*•]\s+|^\d+[.)]\s+/.test(l) || stripped.includes('|') || /\s+[—–]\s+/.test(stripped)) {
+      if (!/^(?:tampilkan|munculkan|animasikan|efek|latar|background|kamera|transisi)\b/i.test(stripped)) {
+        const card = parseBulletCardItem(l);
+        if (card) cards.push(card);
+        continue;
       }
-
-      const cleanTitle = restHeader
-        .replace(/\(?\d+(?:\.\d+)?\s*s?\s*[-–—]\s*\d+(?:\.\d+)?\s*s?\)?/gi, '')
-        .replace(/\(?(\d{1,2}):([0-5]\d)\s*[-–—]\s*(\d{1,2}):([0-5]\d)\)?/g, '')
-        .replace(/^[\s:.\-–—]+|[\s:.\-–—]+$/g, '')
-        .trim();
-
-      currentBlock = {
-        index: parseInt(headerMatch[1], 10),
-        headerLabel: cleanTitle,
-        startSec,
-        endSec,
-        lines: []
-      };
-      continue;
     }
-
-    if (currentBlock) {
-      currentBlock.lines.push(trimmed);
+    if (!isDesignSpecLine(l)) {
+      const plain = stripLabeledPrefix(stripped);
+      const isStageDirection = /^(?:tampilkan|munculkan|masukkan|animasikan|latar|efek|dengan efek|kamera|transisi|geser|muncul)\b/i.test(plain);
+      if (!isStageDirection && plain.length >= 3) {
+        cleanNotes.push(plain);
+      }
     }
   }
-  if (currentBlock) explicitBlocks.push(currentBlock);
 
-  return explicitBlocks;
+  let headline = '';
+  let subtitle = '';
+  let sceneBadge = entities.brand || '';
+  let sceneCta = entities.cta || '';
+
+  if (isFirst) {
+    if (quotes.length >= 2) {
+      sceneBadge = quotes[0].toUpperCase();
+      headline = quotes[1];
+      subtitle = entities.subheadline || '';
+    } else if (quotes.length === 1) {
+      headline = entities.headline || quotes[0];
+      subtitle = quotes[0] !== headline ? quotes[0] : entities.subheadline;
+    } else {
+      headline = entities.headline;
+      subtitle = entities.subheadline || cleanNotes[0] || '';
+    }
+  } else if (isLast) {
+    if (quotes.length >= 2) {
+      headline = quotes[0];
+      sceneCta = quotes[quotes.length - 1].toUpperCase();
+      subtitle = entities.promoNote || entities.channelLine || cleanNotes[0] || '';
+    } else if (quotes.length === 1) {
+      headline = quotes[0];
+      sceneCta = quotes[0].includes('•') ? quotes[0].toUpperCase() : (entities.cta || quotes[0].toUpperCase());
+      subtitle = entities.promoNote || entities.channelLine || cleanNotes[0] || '';
+    } else {
+      headline = entities.cta || block.headerLabel || entities.headline;
+      subtitle = entities.promoNote || entities.channelLine || cleanNotes[0] || entities.subheadline;
+    }
+  } else {
+    headline = quotes[0] || block.headerLabel.replace(/[:]+$/g, '').trim() || cleanNotes[0] || entities.headline;
+    subtitle = quotes[1] || cleanNotes.filter((n) => n !== headline).join(' • ').slice(0, 140);
+  }
+
+  return { headline, subtitle, sceneBadge, sceneCta, cards };
 }
 
-function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual, targetDuration, transitionStyle }) {
-  const explicitBlocks = splitExplicitScenes(rawPrompt);
+function buildMultiSceneTimeline({ rawPrompt, zones, entities, heroVisual, targetDuration, transitionStyle }) {
+  const explicitBlocks = zones.explicitScenes;
   const scenes = [];
 
   if (explicitBlocks.length > 0) {
+    // Gunakan JUMLAH ADEGAN PERSIS sesuai prompt pengguna (mis. 3 Adegan -> tetap 3!)
     explicitBlocks.forEach((block, idx) => {
-      const joinedBody = block.lines.join(' ');
-      const headerLow = `${block.headerLabel} ${joinedBody}`.toLowerCase();
-      const bulletCards = [];
-      const plainParagraphs = [];
-
-      for (const l of block.lines) {
-        if (/^[-*•]\s+|^\d+\.\s+/.test(l) || l.includes('|')) {
-          const card = parseBulletCardItem(l);
-          if (card) bulletCards.push(card);
-        } else if (!isDesignSpecLine(l)) {
-          const cleanP = stripLabeledPrefix(l);
-          if (cleanP.length >= 3) plainParagraphs.push(cleanP);
-        }
-      }
-
-      let kind = 'StoryNarrativeScene';
       const isFirst = idx === 0;
       const isLast = idx === explicitBlocks.length - 1;
+      const joinedBody = block.lines.join(' ');
+      const headerLow = `${block.headerLabel} ${joinedBody}`.toLowerCase();
+      const copy = extractScreenCopyFromSceneBlock(block, entities, isFirst, isLast);
+      const localPromo = extractPromoDetails(joinedBody);
+      const hasPriceInfo = Boolean(localPromo.promoPrice || (isLast && entities.promoPrice && /\b(?:harga|promo|diskon|rp)\b/.test(headerLow)));
 
-      if (isFirst || /\b(?:hook|intro|pembuka|reveal|showcase)\b/.test(headerLow)) {
+      let kind = 'StoryNarrativeScene';
+      if (isFirst || /\b(?:hook|intro|pembuka|reveal)\b/.test(headerLow)) {
         kind = 'HookHeroScene';
-      } else if (isLast && (/\b(?:closing|penutup|cta|kontak|ajakan|akhir)\b/.test(headerLow) || entities.cta || entities.channelLine)) {
+      } else if (isLast && hasPriceInfo) {
+        kind = 'PricingPromoScene';
+      } else if (isLast || /\b(?:closing|penutup|cta|kontak|ajakan|akhir)\b/.test(headerLow)) {
         kind = 'ClosingCTAScene';
-      } else if (/\b(?:harga|promo|paket|diskon)\b/.test(headerLow) && (entities.promoPrice || /\brp\b/i.test(joinedBody))) {
+      } else if (/\b(?:harga|promo|paket|diskon)\b/.test(headerLow) && (localPromo.promoPrice || entities.promoPrice)) {
         kind = 'PricingPromoScene';
       } else if (/\b(?:statistik|angka|metrik|performa|data|fakta)\b/.test(headerLow) && extractMetricsFromText(joinedBody).length > 0) {
         kind = 'MetricStatsScene';
-      } else if (bulletCards.length >= 2 || /\b(?:fitur|keunggulan|paket|menu|poin)\b/.test(headerLow)) {
+      } else if (copy.cards.length >= 2 || /\b(?:fitur|keunggulan|showcase|paket|menu|poin)\b/.test(headerLow)) {
         kind = 'FeatureGridScene';
       }
 
-      const sceneTitle =
-        kind === 'HookHeroScene'
-          ? entities.headline
-          : kind === 'ClosingCTAScene'
-          ? (entities.cta || block.headerLabel || entities.headline)
-          : (block.headerLabel.replace(/[:]+$/g, '').trim() || plainParagraphs[0]?.slice(0, 48) || entities.headline);
-
-      const sceneSubtitle =
-        kind === 'HookHeroScene'
-          ? (entities.subheadline || plainParagraphs[0] || '')
-          : kind === 'ClosingCTAScene'
-          ? (entities.channelLine || plainParagraphs[0] || entities.subheadline)
-          : (plainParagraphs.filter((p) => p !== sceneTitle).join(' ').slice(0, 150));
-
       const metrics = kind === 'MetricStatsScene' ? extractMetricsFromText(joinedBody) : [];
-      const fallbackCards = bulletCards.length > 0
-        ? bulletCards
-        : plainParagraphs.slice(0, 4).map((p) => ({ title: p.slice(0, 44), desc: p.slice(44, 110) }));
+      const fallbackCards = copy.cards.length > 0
+        ? copy.cards
+        : (copy.subtitle && kind === 'FeatureGridScene' ? [{ title: copy.subtitle, desc: '' }] : []);
 
       scenes.push({
         id: `scene-${idx + 1}`,
         index: idx,
         kind,
-        title: sceneTitle,
-        subtitle: sceneSubtitle,
-        badge: entities.brand || '',
+        title: copy.headline,
+        subtitle: copy.subtitle,
+        badge: copy.sceneBadge || entities.brand || '',
         cards: fallbackCards.slice(0, 6),
         metrics,
-        promoPrice: entities.promoPrice,
-        oldPrice: entities.oldPrice,
-        discountBadge: entities.discountBadge,
-        cta: entities.cta,
+        promoPrice: localPromo.promoPrice || (hasPriceInfo ? entities.promoPrice : ''),
+        oldPrice: localPromo.oldPrice || (hasPriceInfo ? entities.oldPrice : ''),
+        discountBadge: localPromo.discountBadge || entities.discountBadge,
+        promoNote: localPromo.promoNote || entities.promoNote,
+        cta: copy.sceneCta || entities.cta,
         channelLine: entities.channelLine,
-        heroVisual: kind === 'HookHeroScene' ? heroVisual : 'none',
+        heroVisual: kind === 'HookHeroScene' ? heroVisual : (kind === 'PricingPromoScene' && heroVisual === 'bottle-can-beverage' ? heroVisual : 'none'),
         explicitStart: block.startSec,
         explicitEnd: block.endSec,
         transition: transitionStyle === 'auto'
@@ -887,23 +1083,26 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
       });
     });
   } else {
-    // Parsing cerdas untuk prompt paragraf / daftar poin tanpa label Adegan eksplisit
-    const lines = rawPrompt.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !isDesignSpecLine(l));
-    const bullets = lines.filter((l) => /^[-*•]\s+|^\d+\.\s+/.test(l) || l.includes('|')).map(parseBulletCardItem).filter(Boolean);
-    const sentences = lines
-      .filter((l) => !/^[-*•]\s+|^\d+\.\s+/.test(l) && !/^(?:brand|merek|judul|subjudul|cta)\s*[:=]/i.test(l))
+    // Prompt paragraf tanpa header Adegan N (Zona A sudah disaring tuntas -> mustahil jadi slide instruksi!)
+    const contentOnly = zones.freeContentLines.filter((l) => !isDesignSpecLine(l));
+    const bullets = contentOnly
+      .filter((l) => /^[-*•]\s+|^\d+[.)]\s+/.test(l) || l.includes('|') || /\s+[—–]\s+/.test(l))
+      .map(parseBulletCardItem)
+      .filter(Boolean);
+
+    const proseSentences = contentOnly
+      .filter((l) => !/^[-*•]\s+|^\d+[.)]\s+/.test(l) && !/^(?:brand|merek|judul|subjudul|cta|harga|promo)\s*[:=]/i.test(l))
       .join(' ')
       .split(/(?<=[.!?])\s+/)
       .map((s) => s.trim())
       .filter((s) => s.length > 6);
 
-    // Adegan 1: Hook
     scenes.push({
       id: 'scene-1',
       index: 0,
       kind: 'HookHeroScene',
       title: entities.headline,
-      subtitle: entities.subheadline || sentences[0] || '',
+      subtitle: entities.subheadline || proseSentences[0] || '',
       badge: entities.brand,
       cards: [],
       metrics: [],
@@ -911,28 +1110,25 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
       transition: transitionStyle === 'auto' ? 'wipe' : transitionStyle
     });
 
-    // Adegan Tengah: Fitur / Harga / Metrik / Narasi bertingkat
     if (bullets.length >= 2) {
-      for (let i = 0; i < bullets.length; i += 4) {
-        const chunk = bullets.slice(i, i + 4);
+      for (let i = 0; i < Math.min(bullets.length, 8); i += 4) {
         scenes.push({
           id: `scene-${scenes.length + 1}`,
           index: scenes.length,
           kind: 'FeatureGridScene',
-          title: i === 0 ? 'KEUNGGULAN UTAMA' : 'FITUR LANJUTAN',
+          title: i === 0 ? 'KEUNGGULAN UTAMA' : 'DETAIL LAINNYA',
           subtitle: '',
           badge: entities.brand,
-          cards: chunk,
+          cards: bullets.slice(i, i + 4),
           metrics: [],
           heroVisual: 'none',
           transition: transitionStyle === 'auto' ? 'slide' : transitionStyle
         });
       }
-    } else if (sentences.length >= 2) {
-      // Naskah cerita / quotes multi-adegan untuk durasi panjang (hingga 5 menit!)
-      for (let i = 0; i < Math.min(sentences.length, 24); i += 2) {
-        const chunkTitle = sentences[i].slice(0, 72);
-        const chunkSub = sentences[i + 1] ? sentences[i + 1].slice(0, 120) : '';
+    } else if (proseSentences.length >= 2) {
+      for (let i = 0; i < Math.min(proseSentences.length, 6); i += 2) {
+        const chunkTitle = proseSentences[i].slice(0, 72);
+        const chunkSub = proseSentences[i + 1] ? proseSentences[i + 1].slice(0, 120) : '';
         const localMetrics = extractMetricsFromText(`${chunkTitle} ${chunkSub}`);
         scenes.push({
           id: `scene-${scenes.length + 1}`,
@@ -955,14 +1151,16 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
         index: scenes.length,
         kind: 'PricingPromoScene',
         title: 'PENAWARAN SPESIAL',
-        subtitle: entities.subheadline,
+        subtitle: entities.promoNote || entities.subheadline,
         badge: entities.discountBadge || entities.brand,
         promoPrice: entities.promoPrice,
         oldPrice: entities.oldPrice,
         discountBadge: entities.discountBadge,
+        promoNote: entities.promoNote,
+        cta: entities.cta,
         cards: [],
         metrics: [],
-        heroVisual: 'none',
+        heroVisual: heroVisual === 'bottle-can-beverage' ? heroVisual : 'none',
         transition: transitionStyle === 'auto' ? 'zoom' : transitionStyle
       });
     }
@@ -985,12 +1183,11 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
     }
   }
 
-  // Hitung alokasi waktu presisi dari 0 .. totalDuration
   const explicitTotal = extractExplicitDurationSec(rawPrompt);
   const wordCount = rawPrompt.trim().split(/\s+/).filter(Boolean).length;
   const recommendedDuration = explicitTotal > 0
     ? explicitTotal
-    : Math.max(8, Math.min(300, Math.max(scenes.length * 4, Math.round(wordCount * 0.35))));
+    : Math.max(8, Math.min(300, Math.max(scenes.length * 4, Math.round(wordCount * 0.25))));
 
   const finalTotalDuration = Math.max(3, Math.min(300, Number(targetDuration) || recommendedDuration));
 
@@ -1009,10 +1206,9 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
       s.duration = Math.max(0.5, Number((s.endTime - s.startTime).toFixed(3)));
     });
   } else {
-    // Beri bobot sedikit lebih besar pada adegan ber-kartu/teks panjang
     const weights = scenes.map((s) => {
       if (s.kind === 'FeatureGridScene') return 1.35;
-      if (s.kind === 'StoryNarrativeScene') return 1.15;
+      if (s.kind === 'PricingPromoScene') return 1.15;
       return 1.0;
     });
     const totalWeight = weights.reduce((a, b) => a + b, 0);
@@ -1032,7 +1228,7 @@ function buildMultiSceneTimeline({ rawPrompt, entities, designSystem, heroVisual
 }
 
 /**
- * Compiler Utama Text Prompt -> SceneGraph Multi-Adegan + Kode HTML5 Canvas 60 FPS
+ * Compiler Utama Text Prompt -> SceneGraph Compositional + HTML5 2D/3D Canvas 60 FPS
  */
 export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {}, requestedDurationSec = 12) {
   const optIn = rawOptions || {};
@@ -1065,10 +1261,13 @@ export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {
   const promptText = String(rawPromptText || '').trim() || QUICK_PROMPT_SAMPLES[0].prompt;
   const lower = promptText.toLowerCase();
 
+  const zones = parsePromptZones(promptText);
   const designSystem = detectDesignSystem(lower, options.designStyle);
   const heroVisual = detectHeroVisual(lower, designSystem, options.heroVisual);
+  const visualLayers = detectVisualLayers(lower, heroVisual, designSystem);
   const palette = resolvePalette(promptText, lower, designSystem, options);
-  const entities = extractCoreEntities(promptText);
+  const entities = extractCoreEntities(promptText, zones);
+
   if (!isPure && optIn.brandBadgeEnabled && String(optIn.brandBadgeText || '').trim()) {
     entities.brand = String(optIn.brandBadgeText).trim().toUpperCase();
   }
@@ -1080,14 +1279,13 @@ export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {
 
   const timeline = buildMultiSceneTimeline({
     rawPrompt: promptText,
+    zones,
     entities,
-    designSystem,
     heroVisual,
     targetDuration: durationToUse,
     transitionStyle: options.transitionStyle || 'auto'
   });
 
-  // Bangun layer & subtitle SRT yang 100% sinkron dengan seluruh adegan untuk Alight Motion / CapCut / FCPXML
   const layers = [
     {
       id: 'bg-stage',
@@ -1164,7 +1362,7 @@ export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {
       });
     });
 
-    if (scene.kind === 'PricingPromoScene' && scene.promoPrice) {
+    if (scene.promoPrice) {
       layers.push({
         id: `s${sIdx + 1}-price`,
         kind: 'price',
@@ -1178,7 +1376,7 @@ export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {
       });
     }
 
-    if (scene.kind === 'ClosingCTAScene' && scene.cta) {
+    if ((scene.kind === 'ClosingCTAScene' || scene.kind === 'PricingPromoScene') && scene.cta) {
       layers.push({
         id: `s${sIdx + 1}-cta`,
         kind: 'cta',
@@ -1197,13 +1395,14 @@ export function compileTextPromptToSceneGraph(rawPromptText = '', rawOptions = {
   const designStyleMeta = PROMPT_DESIGN_STYLES.find((d) => d.id === designSystem) || PROMPT_DESIGN_STYLES[1];
 
   const sceneGraph = {
-    version: '3.0',
+    version: '4.0',
     duration: timeline.totalDuration,
     recommendedDuration: timeline.recommendedDuration,
     designSystem,
     topic: designSystem,
     topicLabel: designStyleMeta.name,
     heroVisual,
+    visualLayers,
     palette,
     entities: {
       ...entities,

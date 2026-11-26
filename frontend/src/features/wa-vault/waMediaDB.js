@@ -392,13 +392,79 @@ export async function saveDeviceAuthRecord({ deviceId, deviceToken, snapshot = u
   }
 }
 
+const LS_LINKED_PREFIX = 'kuro_wa_linked_';
+const LS_CREDS_PREFIX = 'kuro_wa_creds_';
+const MAX_LS_CREDS_CHARS = 148 * 1024;
+
+export function hasSavedDeviceLink(deviceId) {
+  if (!deviceId || typeof window === 'undefined') return false;
+  try {
+    return (
+      window.localStorage.getItem(`${LS_LINKED_PREFIX}${deviceId}`) === '1' ||
+      Boolean(window.localStorage.getItem(`${LS_CREDS_PREFIX}${deviceId}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function saveSnapshotLocalFallback(deviceId, snapshot) {
+  if (!deviceId || !snapshot?.files?.['creds.json'] || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(`${LS_LINKED_PREFIX}${deviceId}`, '1');
+    const fullStr = JSON.stringify(snapshot);
+    if (fullStr.length <= MAX_LS_CREDS_CHARS) {
+      window.localStorage.setItem(`${LS_CREDS_PREFIX}${deviceId}`, fullStr);
+      return;
+    }
+    const compactSnapshot = {
+      version: 1,
+      createdAt: snapshot.createdAt || Date.now(),
+      files: { 'creds.json': snapshot.files['creds.json'] }
+    };
+    const compactStr = JSON.stringify(compactSnapshot);
+    if (compactStr.length <= MAX_LS_CREDS_CHARS) {
+      window.localStorage.setItem(`${LS_CREDS_PREFIX}${deviceId}`, compactStr);
+    }
+  } catch (_) {}
+}
+
+function readSnapshotLocalFallback(deviceId) {
+  if (!deviceId || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(`${LS_CREDS_PREFIX}${deviceId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.files?.['creds.json']) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function loadDeviceAuthSnapshot(deviceId) {
+  if (!deviceId) return null;
+  const record = await getDeviceAuthRecord(deviceId);
+  if (record?.snapshot?.files?.['creds.json']) {
+    return record.snapshot;
+  }
+  return readSnapshotLocalFallback(deviceId);
+}
+
 export async function saveDeviceAuthSnapshot(deviceId, snapshot, updatedAt = Date.now()) {
   if (!deviceId || !snapshot) return null;
+  saveSnapshotLocalFallback(deviceId, snapshot);
   return saveDeviceAuthRecord({ deviceId, snapshot, updatedAt });
 }
 
 export async function clearAuthSnapshotOnly(deviceId) {
   if (!deviceId) return true;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(`${LS_LINKED_PREFIX}${deviceId}`);
+      window.localStorage.removeItem(`${LS_CREDS_PREFIX}${deviceId}`);
+    } catch (_) {}
+  }
   try {
     const db = await openWaDB();
     return await new Promise((resolve) => {

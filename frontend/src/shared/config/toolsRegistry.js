@@ -162,9 +162,9 @@ export const TOOLS_METADATA = [
   {
     id: 'waViewOnce',
     category: 'utility',
-    defaultName: 'WA View Once Vault',
-    defaultDesc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat tertaut.',
-    defaultTag: 'WA MEDIA',
+    defaultName: 'WA Stealth & Status Vault',
+    defaultDesc: 'Platform 3-in-1: Baca chat pribadi tanpa centang biru (Ghost Reader), cegah pesan ditarik/diedit (Anti-Delete), dan amankan Status WA kontak tanpa terlihat (0 View).',
+    defaultTag: 'WA STEALTH',
     icon: ShieldCheck
   },
   {

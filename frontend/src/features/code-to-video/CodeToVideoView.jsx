@@ -143,7 +143,13 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
 
   // Dimensi virtual HD tetap & faktor skala CSS agar Live Preview selalu tajam di HP & desktop
   const virtualDims = useMemo(() => getVirtualStageSize(exportAspect), [exportAspect]);
-  const [stageScale, setStageScale] = useState(1);
+  const [stageScale, setStageScale] = useState(() => {
+    if (typeof window !== 'undefined' && window.innerWidth > 32) {
+      const boxW = window.innerWidth < 1024 ? Math.max(260, window.innerWidth - 36) : Math.min(580, window.innerWidth * 0.45);
+      return Math.max(0.22, Number((boxW / 1280).toFixed(4)));
+    }
+    return 0.28;
+  });
   const [iframeRunKey, setIframeRunKey] = useState(1);
 
   // Kompilasi SceneGraph & HTML animasi multi-adegan dari prompt Editor Teks
@@ -215,6 +221,15 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     return STUDIO_FONT_PRESETS[cfg?.fontFamily] || '';
   }, []);
 
+  const syncIframeViewport = useCallback((dims = virtualDims) => {
+    try {
+      const win = liveIframeRef.current?.contentWindow;
+      if (win) {
+        win.postMessage({ type: 'ctv-force-resize', width: dims.width, height: dims.height }, '*');
+      }
+    } catch {}
+  }, [virtualDims]);
+
   const triggerLiveRun = useCallback((sourceCode, {
     aspect = exportAspect,
     cfg = settingsRef.current,
@@ -239,14 +254,17 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
     if (switchMobilePreview && typeof window !== 'undefined' && window.innerWidth < 1024) {
       setMobileSection('preview');
       requestAnimationFrame(() => {
+        syncIframeViewport(dims);
         requestAnimationFrame(() => {
+          window.dispatchEvent(new Event('resize'));
+          syncIframeViewport(dims);
           viewportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
       });
     }
-  }, [exportAspect, getActiveFontCss]);
+  }, [exportAspect, getActiveFontCss, syncIframeViewport]);
 
-  // ResizeObserver + double-rAF agar skala panggung HD tidak pernah 0 saat tab Preview sempat hidden di HP
+  // ResizeObserver + fallback > 0 agar transform: scale(...) tidak pernah 0 atau NaN di mobile
   useEffect(() => {
     const outerEl = stageOuterRef.current;
     if (!outerEl) return undefined;
@@ -255,13 +273,16 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       const rect = outerEl.getBoundingClientRect();
       if (rect.width > 16 && rect.height > 16) {
         const nextScale = Math.min(rect.width / virtualDims.width, rect.height / virtualDims.height);
-        setStageScale(Math.max(0.18, Number(nextScale.toFixed(4))));
+        setStageScale(Number.isFinite(nextScale) && nextScale > 0 ? Math.max(0.2, Number(nextScale.toFixed(4))) : 0.28);
       } else {
-        const fallbackW = Math.min(Math.max(window.innerWidth - 32, 260), 420);
+        const fallbackW = typeof window !== 'undefined' && window.innerWidth > 32
+          ? Math.min(Math.max(window.innerWidth - 32, 260), 420)
+          : 360;
         const fallbackH = fallbackW * (virtualDims.height / Math.max(1, virtualDims.width));
         const nextScale = Math.min(fallbackW / virtualDims.width, fallbackH / virtualDims.height);
-        setStageScale(Math.max(0.18, Number(nextScale.toFixed(4))));
+        setStageScale(Number.isFinite(nextScale) && nextScale > 0 ? Math.max(0.2, Number(nextScale.toFixed(4))) : 0.28);
       }
+      syncIframeViewport(virtualDims);
     };
 
     recalcScale();
@@ -279,7 +300,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
       if (ro) ro.disconnect();
       window.removeEventListener('resize', recalcScale);
     };
-  }, [virtualDims.width, virtualDims.height, mobileSection, isFullscreen, iframeRunKey]);
+  }, [virtualDims, mobileSection, isFullscreen, iframeRunKey, syncIframeViewport]);
 
   // Inisialisasi Engine Compositor & Loop Direct GPU
   useEffect(() => {
@@ -1474,6 +1495,7 @@ export default function CodeToVideoView({ onBack, onShowToast, lang = 'id' }) {
                         sandbox="allow-scripts"
                         onLoad={() => {
                           liveCaptureInFlightRef.current = false;
+                          syncIframeViewport(virtualDims);
                         }}
                         className="border-0"
                         style={{

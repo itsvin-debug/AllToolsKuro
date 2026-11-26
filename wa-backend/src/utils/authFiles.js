@@ -62,6 +62,7 @@ function packAuthSnapshot(authDir) {
     const credsPath = path.join(authDir, 'creds.json');
     if (!fs.existsSync(credsPath)) return null;
 
+    // Baca raw UTF-8 string tanpa parse+re-stringify agar struktur BufferJSON Baileys utuh 100%
     const credsRaw = fs.readFileSync(credsPath, 'utf8');
     let credsParsed = null;
     try {
@@ -75,10 +76,11 @@ function packAuthSnapshot(authDir) {
     const priorityRank = (fname) => {
       if (fname === 'creds.json') return 0;
       if (fname.startsWith('app-state-sync-key-')) return 1;
-      if (fname.startsWith('lid-mapping-')) return 2;
-      if (fname.startsWith('session-')) return 3;
-      if (fname.startsWith('sender-key-')) return 4;
-      return 5;
+      if (fname.startsWith('app-state-sync-version-')) return 2;
+      if (fname.startsWith('lid-mapping-')) return 3;
+      if (fname.startsWith('session-')) return 4;
+      if (fname.startsWith('pre-key-')) return 5;
+      return 6;
     };
 
     const jsonFiles = entries
@@ -92,10 +94,22 @@ function packAuthSnapshot(authDir) {
 
     const files = {};
     let totalBytes = 0;
-    const MAX_SNAPSHOT_BYTES = 1.5 * 1024 * 1024;
+    const MAX_SNAPSHOT_BYTES = 680 * 1024;
+    let sessionCount = 0;
+    let preKeyCount = 0;
 
     for (const f of jsonFiles) {
-      if (f.size > 512 * 1024 && f.name !== 'creds.json') continue;
+      if (f.size > 384 * 1024 && f.name !== 'creds.json') continue;
+      if (f.name.startsWith('session-')) {
+        if (sessionCount >= 60) continue;
+        sessionCount++;
+      } else if (f.name.startsWith('pre-key-')) {
+        if (preKeyCount >= 30) continue;
+        preKeyCount++;
+      } else if (f.rank === 6) {
+        continue;
+      }
+
       const content = fs.readFileSync(f.full, 'utf8');
       const approxLen = Buffer.byteLength(content, 'utf8') + f.name.length + 16;
       if (totalBytes + approxLen > MAX_SNAPSHOT_BYTES) {
@@ -135,6 +149,13 @@ function unpackAuthSnapshot(authDir, snapshot, tokenHash) {
   try {
     if (!fs.existsSync(authDir)) {
       fs.mkdirSync(authDir, { recursive: true });
+    } else {
+      // Bersihkan file json sisa sesi tak tertaut sebelum memulihkan snapshot terverifikasi
+      for (const entry of fs.readdirSync(authDir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.json')) {
+          try { fs.unlinkSync(path.join(authDir, entry.name)); } catch (_) {}
+        }
+      }
     }
     if (tokenHash) {
       writeOwnerHash(authDir, tokenHash);

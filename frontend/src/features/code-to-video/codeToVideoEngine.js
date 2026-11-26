@@ -762,37 +762,82 @@ export function buildRenderBridgeScript(width, height) {
 }
 
 /**
- * Script Bridge Ringan untuk Live Preview Iframe (Direct GPU)
- * Override rAF dengan timestamp monoton positif & splice(0) sebelum callback agar animasi selalu mulus.
+ * Script Bridge Non-Invasif untuk Live Preview Iframe (Native Direct GPU)
+ * Mode normal (speed === 1 & tidak pause) membiarkan requestAnimationFrame,
+ * performance.now, dan Date.now berjalan 100% native milik GPU browser.
  */
-export function buildLiveBridgeScript() {
+export function buildLiveBridgeScript(virtualW = 1280, virtualH = 720) {
+  const safeW = Math.max(320, Number(virtualW) || 1280);
+  const safeH = Math.max(240, Number(virtualH) || 720);
   return `
   <script>
   (function() {
+    window.__CTV_VIRTUAL_W__ = ${safeW};
+    window.__CTV_VIRTUAL_H__ = ${safeH};
+
     var _speedMultiplier = 1.0;
     var _isPaused = false;
-    var _liveVirtualMs = 16.67;
 
     var _origPerfNow = performance.now.bind(performance);
     var _origDateNow = Date.now.bind(Date);
     var _origRaf = window.requestAnimationFrame.bind(window);
+    var _origCaf = window.cancelAnimationFrame.bind(window);
+
+    var _virtualOffsetReady = false;
+    var _liveVirtualMs = 16.67;
     var _lastPumpRealMs = _origPerfNow();
-
-    ${getSandboxSharedHelpersCode()}
-
-    performance.now = function() {
-      return _liveVirtualMs;
-    };
-    Date.now = function() {
-      return Math.floor(_origDateNow() + (_liveVirtualMs - _origPerfNow()));
-    };
-
     var _liveRafQueue = [];
     var _liveRafCanceled = new Set();
     var _liveRafId = 1;
     var _livePumpScheduled = false;
 
-    function pumpLiveRaf() {
+    ${getSandboxSharedHelpersCode()}
+
+    // Jamin window.innerWidth / innerHeight tidak pernah bernilai 0 saat bootstrap di HP
+    try {
+      var origInnerWDesc = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+      var origInnerHDesc = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+      if (origInnerWDesc && origInnerWDesc.get && origInnerWDesc.configurable) {
+        Object.defineProperty(window, 'innerWidth', {
+          configurable: true,
+          get: function() {
+            var val = origInnerWDesc.get.call(window);
+            return val > 0 ? val : window.__CTV_VIRTUAL_W__;
+          }
+        });
+      }
+      if (origInnerHDesc && origInnerHDesc.get && origInnerHDesc.configurable) {
+        Object.defineProperty(window, 'innerHeight', {
+          configurable: true,
+          get: function() {
+            var val = origInnerHDesc.get.call(window);
+            return val > 0 ? val : window.__CTV_VIRTUAL_H__;
+          }
+        });
+      }
+    } catch(_) {}
+
+    function dispatchSafeResize() {
+      try {
+        window.dispatchEvent(new Event('resize'));
+      } catch(_) {}
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function() {
+        dispatchSafeResize();
+        setTimeout(dispatchSafeResize, 150);
+      });
+    } else {
+      setTimeout(dispatchSafeResize, 0);
+      setTimeout(dispatchSafeResize, 150);
+    }
+    window.addEventListener('load', function() {
+      dispatchSafeResize();
+      setTimeout(dispatchSafeResize, 150);
+    });
+
+    function pumpVirtualRaf() {
       _livePumpScheduled = false;
       var realNow = _origPerfNow();
       var realDelta = Math.max(0, Math.min(100, realNow - _lastPumpRealMs));
@@ -816,49 +861,87 @@ export function buildLiveBridgeScript() {
             try {
               window.parent.postMessage({
                 type: 'ctv-error',
-                error: 'Live Runtime: ' + (err && err.message ? err.message : String(err))
+                error: 'Live Runtime: ' + (err && err.message ? err.message : String(err)),
+                message: err && err.message ? err.message : String(err)
               }, '*');
             } catch(_) {}
           }
         }
       }
 
-      if (_liveRafQueue.length > 0 && !_livePumpScheduled) {
+      if (_liveRafQueue.length > 0 && !_livePumpScheduled && (_isPaused || _speedMultiplier !== 1.0)) {
         _livePumpScheduled = true;
-        _origRaf(pumpLiveRaf);
+        _origRaf(pumpVirtualRaf);
       }
     }
 
-    window.requestAnimationFrame = function(cb) {
-      var id = _liveRafId++;
-      if (typeof cb === 'function') {
-        _liveRafQueue.push({ id: id, cb: cb });
-        if (!_livePumpScheduled) {
-          _livePumpScheduled = true;
-          _origRaf(pumpLiveRaf);
+    function syncClockMode() {
+      var useVirtual = _isPaused || _speedMultiplier !== 1.0;
+      if (!useVirtual) {
+        performance.now = _origPerfNow;
+        Date.now = _origDateNow;
+        window.requestAnimationFrame = _origRaf;
+        window.cancelAnimationFrame = _origCaf;
+        // Kosongkan callback tertunda ke rAF native agar loop terus mengalir
+        if (_liveRafQueue.length > 0) {
+          var pending = _liveRafQueue.splice(0, _liveRafQueue.length);
+          for (var i = 0; i < pending.length; i++) {
+            if (!_liveRafCanceled.has(pending[i].id)) {
+              _origRaf(pending[i].cb);
+            }
+          }
+          _liveRafCanceled.clear();
         }
+        return;
       }
-      return id;
-    };
-    window.cancelAnimationFrame = function(id) {
-      _liveRafCanceled.add(id);
-    };
+
+      if (!_virtualOffsetReady) {
+        _liveVirtualMs = _origPerfNow();
+        _lastPumpRealMs = _origPerfNow();
+        _virtualOffsetReady = true;
+      }
+
+      performance.now = function() {
+        return _liveVirtualMs;
+      };
+      Date.now = function() {
+        return Math.floor(_origDateNow() + (_liveVirtualMs - _origPerfNow()));
+      };
+      window.requestAnimationFrame = function(cb) {
+        var id = _liveRafId++;
+        if (typeof cb === 'function') {
+          _liveRafQueue.push({ id: id, cb: cb });
+          if (!_livePumpScheduled) {
+            _livePumpScheduled = true;
+            _origRaf(pumpVirtualRaf);
+          }
+        }
+        return id;
+      };
+      window.cancelAnimationFrame = function(id) {
+        _liveRafCanceled.add(id);
+      };
+    }
 
     window.addEventListener('error', function(e) {
       try {
         var loc = e.lineno ? (' (baris ' + e.lineno + ')') : '';
+        var errText = 'Live Runtime' + loc + ': ' + (e.message || 'Unknown error');
         window.parent.postMessage({
           type: 'ctv-error',
-          error: 'Live Runtime' + loc + ': ' + (e.message || 'Unknown error')
+          error: errText,
+          message: errText
         }, '*');
       } catch(err) {}
     });
     window.addEventListener('unhandledrejection', function(e) {
       try {
         var msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason || 'Promise rejected');
+        var errText = 'Live Async: ' + msg;
         window.parent.postMessage({
           type: 'ctv-error',
-          error: 'Live Async: ' + msg
+          error: errText,
+          message: errText
         }, '*');
       } catch(err) {}
     });
@@ -867,23 +950,30 @@ export function buildLiveBridgeScript() {
       var data = e.data;
       if (!data || !data.type) return;
 
-      if (data.type === 'ctv-live-speed') {
+      if (data.type === 'ctv-force-resize') {
+        if (data.width > 0) window.__CTV_VIRTUAL_W__ = data.width;
+        if (data.height > 0) window.__CTV_VIRTUAL_H__ = data.height;
+        dispatchSafeResize();
+      } else if (data.type === 'ctv-live-speed' || data.type === 'ctv-speed') {
         _speedMultiplier = Number(data.speedMultiplier) || 1.0;
+        syncClockMode();
         if (document.getAnimations) {
           try {
             document.getAnimations().forEach(function(a) { a.playbackRate = _speedMultiplier; });
           } catch(_) {}
         }
-      } else if (data.type === 'ctv-live-pause') {
+      } else if (data.type === 'ctv-live-pause' || data.type === 'ctv-pause') {
         _isPaused = true;
+        syncClockMode();
         if (document.getAnimations) {
           try {
             document.getAnimations().forEach(function(a) { a.pause(); });
           } catch(_) {}
         }
-      } else if (data.type === 'ctv-live-resume') {
+      } else if (data.type === 'ctv-live-resume' || data.type === 'ctv-resume') {
         _isPaused = false;
         _lastPumpRealMs = _origPerfNow();
+        syncClockMode();
         if (document.getAnimations) {
           try {
             document.getAnimations().forEach(function(a) { a.play(); });
@@ -893,6 +983,7 @@ export function buildLiveBridgeScript() {
         _liveVirtualMs = 0.016;
         _lastPumpRealMs = _origPerfNow();
         _isPaused = false;
+        syncClockMode();
         if (document.getAnimations) {
           try {
             document.getAnimations().forEach(function(a) { a.currentTime = 0; a.play(); });
@@ -920,7 +1011,7 @@ export function buildLiveBridgeScript() {
             bmp = await window.createImageBitmap(targetC);
           } catch(_) {}
         } else {
-          bmp = await captureDomToBitmap(data.width || 1280, data.height || 720);
+          bmp = await captureDomToBitmap(data.width || window.__CTV_VIRTUAL_W__, data.height || window.__CTV_VIRTUAL_H__);
         }
         window.parent.postMessage({ type: 'ctv-live-frame', bitmap: bmp }, '*', bmp ? [bmp] : []);
       }
@@ -937,7 +1028,7 @@ export function detectCodeLanguage(rawInput = '') {
 export function compileUniversalCode(rawInput = '', mode = 'live', options = {}) {
   return _compileUniversalCode(rawInput, mode, {
     ...options,
-    buildLiveBridge: buildLiveBridgeScript,
+    buildLiveBridge: (w, h) => buildLiveBridgeScript(w ?? options.width ?? 1280, h ?? options.height ?? 720),
     buildRenderBridge: buildRenderBridgeScript
   });
 }

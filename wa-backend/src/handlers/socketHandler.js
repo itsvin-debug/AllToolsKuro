@@ -1,13 +1,13 @@
 const path = require('path');
 const fs = require('fs');
 const { normalizePhone } = require('../utils/common');
-const { getSessionDir, writeOwnerHash, removeSessionDir, unpackAuthSnapshot } = require('../utils/authFiles');
+const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir, unpackAuthSnapshot } = require('../utils/authFiles');
 const { sessions, globalMediaDownloadQueue } = require('../state/sessionStore');
 const {
   emitToDevice,
   joinExclusiveDeviceRoom,
   verifyDeviceOwner,
-  scheduleAuthSnapshotSync
+  emitAuthSnapshotNow
 } = require('../services/deviceAuthService');
 const {
   resolveTargetIdentifiers,
@@ -83,15 +83,12 @@ function registerSocketHandlers(io) {
             if (Object.keys(contacts).length > 0) {
               socket.emit('contacts-map-sync', { contacts });
             }
-            scheduleAuthSnapshotSync(io, sessionId, session);
+            emitAuthSnapshotNow(io, sessionId, session);
 
             if (session.pendingMedia && session.pendingMedia.length > 0) {
               while (session.pendingMedia.length > 0) {
                 const item = session.pendingMedia.shift();
                 socket.emit('vault-item', item);
-                if (item.isViewOnce) {
-                  socket.emit('view-once-media', item);
-                }
               }
             }
 
@@ -135,15 +132,14 @@ function registerSocketHandlers(io) {
         }
 
         const sessionDir = getSessionDir(sessionId);
-        const credsFile = path.join(sessionDir, 'creds.json');
-        if (fs.existsSync(credsFile)) {
+        if (isDirRegistered(sessionDir)) {
           writeOwnerHash(sessionDir, tokenHash);
           await startBaileys(io, sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode, swMode, tokenHash);
           return;
         }
 
         if (authSnapshot && unpackAuthSnapshot(sessionDir, authSnapshot, tokenHash)) {
-          console.log(`[WA-SNAPSHOT] Auth sesi ${sessionId} dipulihkan instan dari IndexedDB perangkat!`);
+          console.log(`[WA-SNAPSHOT] Auth sesi ${sessionId} dipulihkan instan dari perangkat tanpa scan QR ulang!`);
           socket.emit('vault-activity', {
             time: Date.now(),
             text: 'Memulihkan sesi tertaut dari perangkat tanpa scan QR ulang...'
@@ -152,7 +148,7 @@ function registerSocketHandlers(io) {
           return;
         }
 
-        socket.emit('session-status', { status: 'disconnected' });
+        socket.emit('session-status', { status: 'disconnected', reason: 'no_saved_auth' });
       } catch (err) {
         console.error('Error resume-session:', err.message);
         socket.emit('session-status', { status: 'disconnected' });
@@ -503,6 +499,10 @@ function registerSocketHandlers(io) {
 
         const session = sessions.get(sessionId);
         if (session) {
+          if (session.reconnectTimer) {
+            clearTimeout(session.reconnectTimer);
+            session.reconnectTimer = null;
+          }
           if (session.authSyncTimer) clearTimeout(session.authSyncTimer);
           if (session.contactsSyncTimer) clearTimeout(session.contactsSyncTimer);
           try {
@@ -521,8 +521,9 @@ function registerSocketHandlers(io) {
         removeSessionDir(sessionId);
         sessions.delete(sessionId);
 
-        emitToDevice(io, sessionId, 'session-status', { status: 'disconnected', reason: 'logged_out', message: 'Sesi WhatsApp berhasil diputuskan.' });
-        emitToDevice(io, sessionId, 'status', { status: 'disconnected', reason: 'logged_out' });
+        emitToDevice(io, sessionId, 'session-status', { status: 'disconnected', reason: 'explicit_logout', message: 'Sesi WhatsApp berhasil diputuskan.' });
+        emitToDevice(io, sessionId, 'logged_out', { reason: 'explicit_logout', message: 'Sesi WhatsApp berhasil diputuskan.' });
+        emitToDevice(io, sessionId, 'status', { status: 'disconnected', reason: 'explicit_logout' });
       } catch (err) {
         console.error('Error logout-session:', err.message);
       }

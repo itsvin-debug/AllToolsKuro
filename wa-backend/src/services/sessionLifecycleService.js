@@ -20,10 +20,6 @@ function startLifecycleTimers(io) {
           const keys = Array.from(session.msgCache.keys()).slice(0, session.msgCache.size - 30);
           for (const k of keys) session.msgCache.delete(k);
         }
-        if (session.viewOnceStore && session.viewOnceStore.size > 10) {
-          const keys = Array.from(session.viewOnceStore.keys()).slice(0, session.viewOnceStore.size - 10);
-          for (const k of keys) session.viewOnceStore.delete(k);
-        }
         if (session.statusPointers) {
           const maxPointers = isIdleSession ? 40 : 100;
           if (session.statusPointers.size > maxPointers) {
@@ -51,7 +47,7 @@ function startLifecycleTimers(io) {
         isReg = Boolean(session.sock?.authState?.creds?.registered) || isDirRegistered(getSessionDir(sessionId));
       } catch (_) {}
 
-      if (!isReg && session.status !== 'connected' && now - session.lastActive > UNLINKED_IDLE_TIMEOUT_MS) {
+      if (!isReg && session.status !== 'connected' && session.status !== 'reconnecting' && now - session.lastActive > UNLINKED_IDLE_TIMEOUT_MS) {
         try {
           session.sock?.ev?.removeAllListeners();
           session.sock?.end();

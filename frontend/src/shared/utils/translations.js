@@ -148,9 +148,9 @@ export const translations = {
           tag: '4 PLATFORM'
         },
         waViewOnce: {
-          name: 'WA View Once Vault',
-          desc: 'Tangkap dan simpan foto/video sekali lihat (View Once) dari nomor target secara real-time via perangkat tertaut.',
-          tag: 'WA MEDIA'
+          name: 'WA Stealth & Status Vault',
+          desc: 'Platform 3-in-1: Baca chat pribadi tanpa centang biru (Ghost Reader), cegah pesan ditarik/diedit (Anti-Delete), dan amankan Status WA kontak tanpa terlihat (0 View).',
+          tag: 'WA STEALTH'
         },
         codeToVideo: {
           name: 'Code to Video Studio',
@@ -745,9 +745,9 @@ export const translations = {
           tag: '4 PLATFORMS'
         },
         waViewOnce: {
-          name: 'WA View Once Vault',
-          desc: 'Capture and securely save View Once photos/videos from target numbers in real-time via linked device.',
-          tag: 'WA MEDIA'
+          name: 'WA Stealth & Status Vault',
+          desc: '3-in-1 platform: Read private chats without blue ticks (Ghost Reader), recover deleted/edited messages (Anti-Delete), and capture WhatsApp Status silently (0 View).',
+          tag: 'WA STEALTH'
         },
         codeToVideo: {
           name: 'Code to Video Studio',

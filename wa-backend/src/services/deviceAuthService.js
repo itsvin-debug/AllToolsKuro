@@ -66,21 +66,35 @@ function verifyDeviceOwner(socket, sessionId, deviceToken) {
   return incomingHash;
 }
 
-function scheduleAuthSnapshotSync(io, sessionId, session) {
+function emitAuthSnapshotNow(io, sessionId, session) {
+  if (!io || !isValidSessionId(sessionId)) return false;
+  if (session?.authSyncTimer) {
+    clearTimeout(session.authSyncTimer);
+    session.authSyncTimer = null;
+  }
+  try {
+    const authDir = getSessionDir(sessionId);
+    const snapshot = packAuthSnapshot(authDir);
+    if (snapshot && getDeviceRoomSize(io, sessionId) > 0) {
+      emitToDevice(io, sessionId, 'auth-snapshot-sync', {
+        sessionId,
+        snapshot,
+        registered: true,
+        updatedAt: Date.now()
+      });
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function scheduleAuthSnapshotSync(io, sessionId, session, debounceMs = 800) {
   if (!io || !session || !isValidSessionId(sessionId)) return;
   if (session.authSyncTimer) clearTimeout(session.authSyncTimer);
   session.authSyncTimer = setTimeout(() => {
-    try {
-      const authDir = getSessionDir(sessionId);
-      const snapshot = packAuthSnapshot(authDir);
-      if (snapshot && getDeviceRoomSize(io, sessionId) > 0) {
-        emitToDevice(io, sessionId, 'auth-snapshot-sync', {
-          snapshot,
-          updatedAt: Date.now()
-        });
-      }
-    } catch (_) {}
-  }, 3000);
+    session.authSyncTimer = null;
+    emitAuthSnapshotNow(io, sessionId, session);
+  }, Math.max(0, Number(debounceMs) || 800));
 }
 
 module.exports = {
@@ -88,5 +102,6 @@ module.exports = {
   emitToDevice,
   joinExclusiveDeviceRoom,
   verifyDeviceOwner,
+  emitAuthSnapshotNow,
   scheduleAuthSnapshotSync
 };

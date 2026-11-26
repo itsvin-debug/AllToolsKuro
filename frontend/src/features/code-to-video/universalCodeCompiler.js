@@ -5,7 +5,7 @@
  * menjadi dokumen sandbox 60 FPS yang stabil & bebas SyntaxError.
  */
 
-import { compileTextPromptToSceneGraph } from './textPromptCompiler';
+import { compileTextPromptToSceneGraph } from './textPromptCompiler.js';
 
 function buildImportMapIfNeeded(jsCode) {
   if (!/\bimport\s+[\s\S]*?\bfrom\s+['"][^'"]+['"]/.test(jsCode)) {
@@ -140,7 +140,7 @@ export function isNaturalLanguagePrompt(rawInput = '') {
 
   // Ada sintaks kode atau pemanggilan fungsi animasi yang jelas
   const hasCodeTokens =
-    /\b(?:function\s+[a-zA-Z_$][\w$]*\s*\(|const\s+[a-zA-Z_$][\w$]*\s*=|let\s+[a-zA-Z_$][\w$]*\s*=|var\s+[a-zA-Z_$][\w$]*\s*=|import\s+[\w*{}\s,]+\s+from\s+|export\s+(?:default|const|function|class)\b|document\.|window\.|requestAnimationFrame\s*\(|setInterval\s*\(|ctx\s*\.\w+|new\s+THREE\.|gl_FragColor|mainImage\s*\(|precision\s+(?:lowp|mediump|highp)\s+float|@keyframes\b|def\s+\w+\s*\(|from\s+manim\s+import|import\s+(?:manim|pygame|turtle|matplotlib|numpy)|class\s+\w+\s*\(|void\s+(?:setup|draw)\s*\(|function\s+love\.|#include\s*<|glBegin\s*\()/.test(code) ||
+    /\b(?:function\s+[a-zA-Z_$][\w$]*\s*\(|const\s+[a-zA-Z_$][\w$]*\s*=|let\s+[a-zA-Z_$][\w$]*\s*=|var\s+[a-zA-Z_$][\w$]*\s*=|import\s+[\w*{}\s,]+\s+from\s+|export\s+(?:default|const|function|class)\b|document\.|window\.|requestAnimationFrame\s*\(|setInterval\s*\(|ctx\s*\.\w+|THREE\.\w+|gsap\.\w+|getContext\s*\(|gl_FragColor|mainImage\s*\(|precision\s+(?:lowp|mediump|highp)\s+float|@keyframes\b|def\s+\w+\s*\(|from\s+manim\s+import|import\s+(?:manim|pygame|turtle|matplotlib|numpy)|class\s+\w+\s*\(|void\s+(?:setup|draw)\s*\(|function\s+love\.|#include\s*<|glBegin\s*\()/.test(code) ||
     /\b(?:background|fill|stroke|rect|circle|ellipse|line|arc|beginPath|fillRect|translate|rotate|scale|createCanvas|clearRect)\s*\(/i.test(code) ||
     /=>\s*[{(]/.test(code) ||
     /^\s*[.#][a-zA-Z_-][\w-]*\s*\{[\s\S]*:[\s\S]*;/m.test(code);
@@ -700,7 +700,7 @@ export function compileUniversalCode(rawInput = '', mode = 'live', options = {})
 
   const baseBridgeScript = mode === 'render'
     ? buildRenderBridge(width, height)
-    : buildLiveBridge();
+    : buildLiveBridge(width, height);
 
   const safeFontCss = fontCss ? String(fontCss).replace(/[<>{}]/g, '') : '';
   const fontHook = safeFontCss
@@ -723,7 +723,7 @@ export function compileUniversalCode(rawInput = '', mode = 'live', options = {})
   if (category === 'text-prompt') {
     const compiled = compileTextPromptToSceneGraph(cleanCode, { ...studioSettings, usePromptHexColors: true }, duration);
     const html = cleanBg ? compiled.generatedCleanBgHtmlCode : compiled.generatedHtmlCode;
-    return html.includes('<head>') ? html.replace('<head>', `<head>${bridgeScript}`) : html;
+    return html.includes('<head>') ? html.replace('<head>', () => `<head>${bridgeScript}`) : html;
   }
 
   // A. Full HTML Document
@@ -731,11 +731,11 @@ export function compileUniversalCode(rawInput = '', mode = 'live', options = {})
     const libTags = buildAutoLibraryTags(cleanCode, /type=["']importmap["']/.test(cleanCode));
     const injectPayload = `${bridgeScript}${libTags ? '\n  ' + libTags : ''}`;
     if (cleanCode.includes('<head>')) {
-      return cleanCode.replace('<head>', `<head>${injectPayload}`);
+      return cleanCode.replace('<head>', () => `<head>${injectPayload}`);
     } else if (/<head\b[^>]*>/i.test(cleanCode)) {
-      return cleanCode.replace(/<head\b([^>]*)>/i, `<head$1>${injectPayload}`);
+      return cleanCode.replace(/<head\b([^>]*)>/i, (_, attrs) => `<head${attrs}>${injectPayload}`);
     } else if (/<html\b[^>]*>/i.test(cleanCode)) {
-      return cleanCode.replace(/<html\b([^>]*)>/i, `<html$1><head>${injectPayload}</head>`);
+      return cleanCode.replace(/<html\b([^>]*)>/i, (_, attrs) => `<html${attrs}><head>${injectPayload}</head>`);
     }
     return `<!DOCTYPE html><html><head><meta charset="utf-8">${injectPayload}</head><body>${cleanCode}</body></html>`;
   }

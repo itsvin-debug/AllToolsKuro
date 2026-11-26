@@ -16,7 +16,7 @@ const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/con
 const { isValidSessionId, normalizePhone } = require('../utils/common');
 const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir } = require('../utils/authFiles');
 const { sessions } = require('../state/sessionStore');
-const { emitToDevice, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
+const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
 const {
   resolveTargetIdentifiers,
   learnLidPair,
@@ -29,7 +29,6 @@ const {
   emitVaultItem,
   downloadMediaStreamBuffer,
   isAllowedByMode,
-  deepExtractViewOnce,
   processIncomingStatusMessage
 } = require('../services/vaultService');
 
@@ -105,13 +104,13 @@ async function startBaileys(
       pendingUnavailableIds: new Set(),
       msgCache: new Map(),
       msgRetryCounterCache: new NodeCache({ stdTTL: 600, useClones: false }),
-      viewOnceStore: new Map(),
       statusPointers: new Map(),
-      latestTargetViewOnceId: null,
       pendingMedia: [],
       authKeys: null,
       authSyncTimer: null,
       contactsSyncTimer: null,
+      reconnectTimer: null,
+      reconnectAttempt: 0,
       isInitializing: true,
       initStartTime: now,
       lastActive: now,
@@ -129,13 +128,16 @@ async function startBaileys(
     if (pairingPhone) session.pairingPhone = normalizePhone(pairingPhone);
     session.pairingCode = null;
     session.pairingCodeRequested = false;
+    if (session.reconnectTimer) {
+      clearTimeout(session.reconnectTimer);
+      session.reconnectTimer = null;
+    }
     if (!session.savedContacts) session.savedContacts = new Map();
     if (!session.contactNames) session.contactNames = new Map();
     if (!session.confirmedTargetLids) session.confirmedTargetLids = new Set();
     if (!session.unmappedLidQueue) session.unmappedLidQueue = new Map();
     if (!session.pendingUnavailableIds) session.pendingUnavailableIds = new Set();
     if (!session.msgCache) session.msgCache = new Map();
-    if (!session.viewOnceStore) session.viewOnceStore = new Map();
     if (!session.statusPointers) session.statusPointers = new Map();
     if (!session.msgRetryCounterCache) {
       session.msgRetryCounterCache = new NodeCache({ stdTTL: 600, useClones: false });
@@ -177,6 +179,17 @@ async function startBaileys(
 
     const version = await getWaVersion();
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+
+    // Cadangkan snapshot otomatis setelah key app-state-sync / session baru ditulis ke disk
+    const origKeysSet = state.keys.set.bind(state.keys);
+    state.keys.set = async (data) => {
+      const res = await origKeysSet(data);
+      if (state.creds?.registered && data && (data['app-state-sync-key'] || data.session)) {
+        scheduleAuthSnapshotSync(io, sessionId, session, 2000);
+      }
+      return res;
+    };
+
     session.authKeys = state.keys;
 
     const sock = makeWASocket({
@@ -221,7 +234,7 @@ async function startBaileys(
           writeOwnerHash(sessionDir, session.tokenHash);
         }
         if (sock.authState?.creds?.registered) {
-          scheduleAuthSnapshotSync(io, sessionId, session);
+          scheduleAuthSnapshotSync(io, sessionId, session, 800);
         }
       } catch (err) {
         console.warn(`[Session ${sessionId}] Error creds.update:`, err.message);
@@ -355,6 +368,11 @@ async function startBaileys(
       if (connection === 'open') {
         session.isInitializing = false;
         session.status = 'connected';
+        session.reconnectAttempt = 0;
+        if (session.reconnectTimer) {
+          clearTimeout(session.reconnectTimer);
+          session.reconnectTimer = null;
+        }
         session.qrCode = null;
         session.qrDataUrl = null;
         session.pairingCode = null;
@@ -379,7 +397,9 @@ async function startBaileys(
         });
         emitToDevice(io, sessionId, 'status', { status: 'connected', phone });
 
-        scheduleAuthSnapshotSync(io, sessionId, session);
+        // Sinkronkan snapshot auth SEGERA (0ms debounce) begitu sesi terhubung
+        emitAuthSnapshotNow(io, sessionId, session);
+
         const initialContacts = buildContactsSyncPayload(session);
         if (Object.keys(initialContacts).length > 0) {
           emitToDevice(io, sessionId, 'contacts-map-sync', { contacts: initialContacts });
@@ -389,9 +409,6 @@ async function startBaileys(
           while (session.pendingMedia.length > 0) {
             const item = session.pendingMedia.shift();
             emitToDevice(io, sessionId, 'vault-item', item);
-            if (item.isViewOnce) {
-              emitToDevice(io, sessionId, 'view-once-media', item);
-            }
           }
         }
       }
@@ -400,40 +417,53 @@ async function startBaileys(
         session.isInitializing = false;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const isRestartRequired = statusCode === 515 || statusCode === DisconnectReason.restartRequired;
-        const wasRegistered = Boolean(sock.authState?.creds?.registered);
+        const wasRegistered = Boolean(sock.authState?.creds?.registered) || isDirRegistered(sessionDir);
         const isLoggedOut = (statusCode === DisconnectReason.loggedOut || statusCode === 401) && wasRegistered;
 
-        if (isRestartRequired) {
-          console.log(`[Session ${sessionId}] Handshake restart required (515). Reconnecting 300ms...`);
-          session.status = 'connecting';
-          emitToDevice(io, sessionId, 'session-status', { status: 'connecting' });
-          setTimeout(() => {
-            if (sessions.has(sessionId)) {
-              startBaileys(io, sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode, session.swMode, session.tokenHash);
-            }
-          }, 300);
-        } else if (isLoggedOut) {
+        if (isLoggedOut) {
+          if (session.reconnectTimer) {
+            clearTimeout(session.reconnectTimer);
+            session.reconnectTimer = null;
+          }
+          if (session.authSyncTimer) {
+            clearTimeout(session.authSyncTimer);
+            session.authSyncTimer = null;
+          }
           removeSessionDir(sessionId);
           sessions.delete(sessionId);
           emitToDevice(io, sessionId, 'session-status', {
             status: 'disconnected',
-            reason: 'logged_out',
-            message: 'Sesi keluar dari perangkat WhatsApp.'
+            reason: 'unlinked_from_phone',
+            message: 'Perangkat diputuskan dari menu Perangkat Tertaut di WhatsApp HP.'
           });
-          emitToDevice(io, sessionId, 'status', { status: 'disconnected', reason: 'logged_out' });
+          emitToDevice(io, sessionId, 'logged_out', {
+            reason: 'unlinked_from_phone',
+            message: 'Perangkat diputuskan dari menu Perangkat Tertaut di WhatsApp HP.'
+          });
+          emitToDevice(io, sessionId, 'status', { status: 'disconnected', reason: 'unlinked_from_phone' });
         } else {
-          session.status = 'reconnecting';
-          emitToDevice(io, sessionId, 'session-status', {
-            status: 'reconnecting',
-            statusCode
-          });
-          emitToDevice(io, sessionId, 'status', { status: 'reconnecting' });
+          // Putus jaringan sementara (515, 503, 408, connectionClosed/Lost/timedOut) -> DILARANG hapus folder auth!
+          const backoffDelays = [2000, 5000, 10000];
+          const delayMs = isRestartRequired
+            ? 350
+            : backoffDelays[Math.min(backoffDelays.length - 1, session.reconnectAttempt || 0)];
+          session.reconnectAttempt = Math.min(3, (session.reconnectAttempt || 0) + 1);
 
-          setTimeout(() => {
+          session.status = isRestartRequired ? 'connecting' : 'reconnecting';
+          emitToDevice(io, sessionId, 'session-status', {
+            status: session.status,
+            statusCode,
+            message: 'Menyambungkan ulang otomatis...'
+          });
+          emitToDevice(io, sessionId, 'status', { status: session.status });
+
+          if (session.reconnectTimer) clearTimeout(session.reconnectTimer);
+          session.reconnectTimer = setTimeout(() => {
+            session.reconnectTimer = null;
             if (sessions.has(sessionId)) {
               startBaileys(io, sessionId, session.targetNumber, false, session.authMethod, session.pairingPhone, false, session.monitorMode, session.swMode, session.tokenHash);
             }
-          }, 1500);
+          }, delayMs);
         }
       }
     });
@@ -502,160 +532,20 @@ async function startBaileys(
 
         const allowed = await isAllowedByMode(senderInfo, msg, currentSession);
         if (!allowed) {
-          if (remoteJid.endsWith('@lid') && deepExtractViewOnce(msg.message)) {
-            emitToDevice(io, sessionId, 'unmapped-lid-view-once', {
-              lid: remoteJid,
-              pushName: senderInfo.senderName,
-              mediaType: 'image',
-              sentAt: Date.now()
-            });
-          }
           continue;
         }
 
-        const voCheck = deepExtractViewOnce(msg.message);
-
-        if (msg.key?.fromMe === true) {
-          const innerMsg =
-            msg.message?.ephemeralMessage?.message ||
-            msg.message?.viewOnceMessage?.message ||
-            msg.message;
-          const ctx =
-            innerMsg?.extendedTextMessage?.contextInfo ||
-            innerMsg?.imageMessage?.contextInfo ||
-            innerMsg?.videoMessage?.contextInfo ||
-            innerMsg?.stickerMessage?.contextInfo ||
-            innerMsg?.reactionMessage?.contextInfo ||
-            null;
-
-          if (ctx?.quotedMessage) {
-            const targetStanzaId = ctx.stanzaId || currentSession.latestTargetViewOnceId;
-            if (targetStanzaId && currentSession.viewOnceStore?.has(targetStanzaId)) {
-              const storedItem = currentSession.viewOnceStore.get(targetStanzaId);
-              emitVaultItem(io, sessionId, currentSession, storedItem);
-              emitToDevice(io, sessionId, 'vault-activity', {
-                time: Date.now(),
-                text: 'Berhasil membuka View Once dari memory store via balasan!'
-              });
-              continue;
-            }
-
-            let quotedVO = deepExtractViewOnce(ctx.quotedMessage);
-            if (!quotedVO) {
-              if (ctx.quotedMessage?.imageMessage) {
-                quotedVO = {
-                  mediaType: 'image',
-                  mediaObj: ctx.quotedMessage.imageMessage,
-                  unwrappedMessage: { imageMessage: ctx.quotedMessage.imageMessage }
-                };
-              } else if (ctx.quotedMessage?.videoMessage) {
-                quotedVO = {
-                  mediaType: 'video',
-                  mediaObj: ctx.quotedMessage.videoMessage,
-                  unwrappedMessage: { videoMessage: ctx.quotedMessage.videoMessage }
-                };
-              }
-            }
-
-            if (quotedVO) {
-              emitToDevice(io, sessionId, 'vault-activity', {
-                time: Date.now(),
-                text: 'Terdeteksi balasan pesan View Once! Mendekripsi via Reply Bypass...'
-              });
-
-              const rawQuotedMsg = {
-                key: {
-                  remoteJid,
-                  id: ctx.stanzaId || msg.key?.id,
-                  fromMe: false
-                },
-                message: quotedVO.unwrappedMessage
-              };
-
-              const buffer = await downloadMediaStreamBuffer(quotedVO.mediaObj, quotedVO.mediaType, rawQuotedMsg, sock);
-
-              if (buffer && buffer.length > 0) {
-                const mimeType = quotedVO.mediaObj.mimetype || (quotedVO.mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-                const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-
-                const payload = buildVaultPayload({
-                  id: ctx.stanzaId || msg.key?.id,
-                  category: 'chat',
-                  senderNumber: senderInfo.phone,
-                  senderLid: senderInfo.senderLid,
-                  senderName: senderInfo.senderName,
-                  mediaType: quotedVO.mediaType,
-                  mimeType,
-                  caption: quotedVO.mediaObj.caption || '',
-                  isViewOnce: true,
-                  sentAt: msgTimestamp,
-                  base64Data
-                });
-
-                if (currentSession.viewOnceStore.size >= 25) {
-                  const firstKey = currentSession.viewOnceStore.keys().next().value;
-                  currentSession.viewOnceStore.delete(firstKey);
-                }
-                currentSession.viewOnceStore.set(payload.id, payload);
-                currentSession.latestTargetViewOnceId = payload.id;
-
-                emitVaultItem(io, sessionId, currentSession, payload);
-                emitToDevice(io, sessionId, 'vault-activity', {
-                  time: Date.now(),
-                  text: 'Berhasil membuka View Once via jalur Reply Bypass!'
-                });
-              }
-            }
-          }
+        // Abaikan pesan View Once yang telah dihentikan dukungannya
+        const isViewOnceMessage = Boolean(
+          msg.message?.viewOnceMessage ||
+          msg.message?.viewOnceMessageV2 ||
+          msg.message?.viewOnceMessageV2Extension ||
+          msg.message?.imageMessage?.viewOnce ||
+          msg.message?.videoMessage?.viewOnce ||
+          msg.message?.audioMessage?.viewOnce
+        );
+        if (isViewOnceMessage || msg.key?.fromMe === true) {
           continue;
-        }
-
-        if (voCheck) {
-          const { mediaType, mediaObj, unwrappedMessage } = voCheck;
-          emitToDevice(io, sessionId, 'vault-activity', {
-            time: Date.now(),
-            text: `Media Sekali Lihat (View Once) dari ${senderInfo.senderName} terdeteksi! Mendekripsi...`
-          });
-
-          const buffer = await downloadMediaStreamBuffer(
-            mediaObj,
-            mediaType,
-            { key: msg.key, message: unwrappedMessage },
-            sock
-          );
-
-          if (buffer && buffer.length > 0) {
-            const mimeType = mediaObj.mimetype || (mediaType === 'image' ? 'image/jpeg' : 'video/mp4');
-            const base64Data = 'data:' + mimeType + ';base64,' + buffer.toString('base64');
-
-            const payload = buildVaultPayload({
-              id: msg.key?.id,
-              category: 'chat',
-              senderNumber: senderInfo.phone,
-              senderLid: senderInfo.senderLid,
-              senderName: senderInfo.senderName,
-              mediaType,
-              mimeType,
-              caption: mediaObj.caption || '',
-              isViewOnce: true,
-              sentAt: msgTimestamp,
-              base64Data
-            });
-
-            if (currentSession.viewOnceStore.size >= 25) {
-              const firstKey = currentSession.viewOnceStore.keys().next().value;
-              currentSession.viewOnceStore.delete(firstKey);
-            }
-            currentSession.viewOnceStore.set(payload.id, payload);
-            currentSession.latestTargetViewOnceId = payload.id;
-
-            emitVaultItem(io, sessionId, currentSession, payload);
-            emitToDevice(io, sessionId, 'vault-activity', {
-              time: Date.now(),
-              text: `Berhasil menangkap ${mediaType === 'image' ? 'Foto' : 'Video'} Sekali Lihat dari ${senderInfo.senderName}!`
-            });
-            continue;
-          }
         }
 
         if (msg.key?.fromMe === false) {
@@ -680,7 +570,7 @@ async function startBaileys(
             continue;
           }
 
-          if (msg.message?.imageMessage && !voCheck) {
+          if (msg.message?.imageMessage) {
             const mediaObj = msg.message.imageMessage;
             const buffer = await downloadMediaStreamBuffer(mediaObj, 'image', msg, sock);
             if (buffer && buffer.length > 0) {
@@ -696,7 +586,6 @@ async function startBaileys(
                 mediaType: 'image',
                 mimeType,
                 caption: mediaObj.caption || '',
-                isViewOnce: false,
                 sentAt: msgTimestamp,
                 base64Data
               });
@@ -710,7 +599,7 @@ async function startBaileys(
             continue;
           }
 
-          if (msg.message?.videoMessage && !voCheck) {
+          if (msg.message?.videoMessage) {
             const mediaObj = msg.message.videoMessage;
             const fileSize = Number(mediaObj.fileLength || 0);
 
@@ -730,7 +619,6 @@ async function startBaileys(
                   mimeType,
                   caption: mediaObj.caption || '',
                   fileSize,
-                  isViewOnce: false,
                   sentAt: msgTimestamp,
                   base64Data
                 });
@@ -751,7 +639,6 @@ async function startBaileys(
                 mediaType: 'video',
                 caption: (mediaObj.caption || '') + ' (Video > 15MB)',
                 fileSize,
-                isViewOnce: false,
                 sentAt: msgTimestamp,
                 base64Data: ''
               });
@@ -760,7 +647,7 @@ async function startBaileys(
             continue;
           }
 
-          if (msg.message?.audioMessage && !voCheck) {
+          if (msg.message?.audioMessage) {
             const mediaObj = msg.message.audioMessage;
             const isVoiceNote = Boolean(mediaObj.ptt);
             const buffer = await downloadMediaStreamBuffer(mediaObj, 'audio', msg, sock);
