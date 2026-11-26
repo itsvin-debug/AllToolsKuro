@@ -406,6 +406,10 @@ export async function buildWaWebpStickerBlob({
     if (bestBlob.size <= 500 * 1024) break;
   }
 
+  if (!bestBlob || bestBlob.size <= 200) {
+    throw new Error('Hasil stiker WebP kosong atau gagal dikodekan.');
+  }
+
   onProgress?.(100);
   return bestBlob;
 }
@@ -428,7 +432,7 @@ function sanitizeVideoMeta(meta) {
 }
 
 /**
- * Kompositor Kontainer Audio+Visual 512x512 Ringan (Untuk jalur muxed apabila terkalibrasi)
+ * Kompositor Kontainer Audio+Visual 512x512 Ringan (Untuk jalur muxed apabila blueprint membutuhkan MP4)
  */
 export async function composeMuxedStickerContainer({
   sourceMedia,
@@ -473,81 +477,93 @@ export async function composeMuxedStickerContainer({
     fastStart: 'in-memory'
   });
 
-  const videoEncoder = new window.VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, sanitizeVideoMeta(meta)),
-    error: () => {}
-  });
-  videoEncoder.configure(vSupport.config);
+  let videoEncoder = null;
+  let audioEncoder = null;
 
-  const audioEncoder = new window.AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-    error: () => {}
-  });
-  audioEncoder.configure(aSupport.config);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d', { alpha: false });
-  const totalFrames = Math.max(1, Math.round(durSec * fps));
-  const frameUs = Math.round(1_000_000 / fps);
-  const srcDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0 ? sourceMedia.duration : durSec;
-
-  for (let i = 0; i < totalFrames; i++) {
-    const tSec = i / fps;
-    if (isVideoEl) {
-      await new Promise((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (!done) {
-            done = true;
-            sourceMedia.removeEventListener('seeked', finish);
-            resolve();
-          }
-        };
-        sourceMedia.addEventListener('seeked', finish, { once: true });
-        sourceMedia.currentTime = tSec % srcDur;
-        setTimeout(finish, 140);
-      });
-    }
-    renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, bgStyle: 'solid' }, tSec);
-    const frame = new window.VideoFrame(canvas, { timestamp: Math.round(tSec * 1_000_000), duration: frameUs });
-    videoEncoder.encode(frame, { keyFrame: i % 48 === 0 });
-    frame.close();
-    if (i % 6 === 0) onProgress?.(Math.min(85, Math.round((i / totalFrames) * 80)));
-  }
-
-  const chData = [];
-  for (let c = 0; c < channels; c++) {
-    chData.push(trimmedAudioBuffer.getChannelData(Math.min(c, trimmedAudioBuffer.numberOfChannels - 1)));
-  }
-  const totalSamples = trimmedAudioBuffer.length;
-  for (let off = 0; off < totalSamples; off += 1024) {
-    const count = Math.min(1024, totalSamples - off);
-    const planar = new Float32Array(count * channels);
-    for (let c = 0; c < channels; c++) planar.set(chData[c].subarray(off, off + count), c * count);
-    const ad = new window.AudioData({
-      format: 'f32-planar',
-      sampleRate: trimmedAudioBuffer.sampleRate,
-      numberOfFrames: count,
-      numberOfChannels: channels,
-      timestamp: Math.round((off / trimmedAudioBuffer.sampleRate) * 1_000_000),
-      data: planar
+  try {
+    videoEncoder = new window.VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, sanitizeVideoMeta(meta)),
+      error: () => {}
     });
-    audioEncoder.encode(ad);
-    ad.close();
-  }
+    videoEncoder.configure(vSupport.config);
 
-  await videoEncoder.flush();
-  await audioEncoder.flush();
-  videoEncoder.close();
-  audioEncoder.close();
-  muxer.finalize();
-  onProgress?.(100);
+    audioEncoder = new window.AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error: () => {}
+    });
+    audioEncoder.configure(aSupport.config);
 
-  const blob = new Blob([target.buffer], { type: 'video/mp4' });
-  if (blob.size > MAX_SAFE_MP4_BYTES) {
-    throw new Error('Kontainer stiker melebihi batas 1.5 MB.');
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const totalFrames = Math.max(1, Math.round(durSec * fps));
+    const frameUs = Math.round(1_000_000 / fps);
+    const srcDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0 ? sourceMedia.duration : durSec;
+
+    for (let i = 0; i < totalFrames; i++) {
+      const tSec = i / fps;
+      if (isVideoEl) {
+        await new Promise((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (!done) {
+              done = true;
+              sourceMedia.removeEventListener('seeked', finish);
+              resolve();
+            }
+          };
+          sourceMedia.addEventListener('seeked', finish, { once: true });
+          sourceMedia.currentTime = tSec % srcDur;
+          setTimeout(finish, 140);
+        });
+      }
+      renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, bgStyle: 'solid' }, tSec);
+      const frame = new window.VideoFrame(canvas, { timestamp: Math.round(tSec * 1_000_000), duration: frameUs });
+      try {
+        videoEncoder.encode(frame, { keyFrame: i % 48 === 0 });
+      } finally {
+        frame.close();
+      }
+      if (i % 6 === 0) onProgress?.(Math.min(85, Math.round((i / totalFrames) * 80)));
+    }
+
+    const chData = [];
+    for (let c = 0; c < channels; c++) {
+      chData.push(trimmedAudioBuffer.getChannelData(Math.min(c, trimmedAudioBuffer.numberOfChannels - 1)));
+    }
+    const totalSamples = trimmedAudioBuffer.length;
+    for (let off = 0; off < totalSamples; off += 1024) {
+      const count = Math.min(1024, totalSamples - off);
+      const planar = new Float32Array(count * channels);
+      for (let c = 0; c < channels; c++) planar.set(chData[c].subarray(off, off + count), c * count);
+      const ad = new window.AudioData({
+        format: 'f32-planar',
+        sampleRate: trimmedAudioBuffer.sampleRate,
+        numberOfFrames: count,
+        numberOfChannels: channels,
+        timestamp: Math.round((off / trimmedAudioBuffer.sampleRate) * 1_000_000),
+        data: planar
+      });
+      try {
+        audioEncoder.encode(ad);
+      } finally {
+        ad.close();
+      }
+    }
+
+    await videoEncoder.flush();
+    await audioEncoder.flush();
+    muxer.finalize();
+    onProgress?.(100);
+
+    const blob = new Blob([target.buffer], { type: 'video/mp4' });
+    if (blob.size <= 200 || blob.size > MAX_SAFE_MP4_BYTES) {
+      throw new Error('Kontainer stiker melebihi batas 1.5 MB atau kosong.');
+    }
+    return blob;
+  } finally {
+    try { videoEncoder?.close?.(); } catch {}
+    try { audioEncoder?.close?.(); } catch {}
   }
-  return blob;
 }

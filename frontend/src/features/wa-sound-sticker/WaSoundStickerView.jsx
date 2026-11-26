@@ -30,9 +30,14 @@ import {
   decodeMediaToAudioBuffer,
   extractWaveformPeaks,
   renderTrimmedAudioBuffer,
+  encodeTrimmedAudio,
   createSnippetPlayer
 } from './audioTrimmerEngine';
-import { buildWaWebpStickerBlob, validateSourceMediaDimensions } from './soundStickerComposer';
+import {
+  buildWaWebpStickerBlob,
+  composeMuxedStickerContainer,
+  validateSourceMediaDimensions
+} from './soundStickerComposer';
 import WaSoundStickerPreview from './WaSoundStickerPreview';
 import {
   getWaBackendUrl,
@@ -118,7 +123,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
-  const [detectedSchema, setDetectedSchema] = useState(null);
+  const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
+    try {
+      const raw = sessionId ? localStorage.getItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`) : null;
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
   const [copiedSchema, setCopiedSchema] = useState(false);
 
   const renderOptions = useMemo(
@@ -262,15 +274,25 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     sock.on('sound-sticker-calibration-armed', () => {
       if (unmounted) return;
       setCalibrationArmed(true);
-      onShowToast?.('Mode Kalibrasi aktif 2 menit: silakan teruskan 1 contoh stiker suara asli WA ke chat Anda sendiri.', 'info');
+      onShowToast?.('Deteksi format aktif 3 menit: teruskan 1 contoh stiker suara WA ke chat diri sendiri.', 'info');
     });
 
-    sock.on('sound-sticker-schema-detected', (schema) => {
+    const handleBlueprintCaptured = (payloadOrBlueprint) => {
       if (unmounted) return;
+      const bp = payloadOrBlueprint?.blueprint || payloadOrBlueprint;
+      if (!bp || typeof bp !== 'object') return;
       setCalibrationArmed(false);
-      setDetectedSchema(schema);
-      onShowToast?.('Skema stiker suara asli berhasil dideteksi!', 'success');
-    });
+      setSoundStickerBlueprint(bp);
+      try {
+        if (sessionId) {
+          localStorage.setItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`, JSON.stringify(bp));
+        }
+      } catch {}
+      onShowToast?.('Format Stiker Suara WA berhasil disalin dan dikalibrasi!', 'success');
+    };
+
+    sock.on('sound-sticker-blueprint-ready', handleBlueprintCaptured);
+    sock.on('sound-sticker-schema-detected', handleBlueprintCaptured);
 
     sock.on('sound-sticker-delivery-update', (upd) => {
       if (unmounted || !upd?.messageId) return;
@@ -635,9 +657,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setSendProgress({
         active: true,
         label: `Memotong Audio (${startSec.toFixed(1)}s – ${endSec.toFixed(1)}s)...`,
-        percent: 32
+        percent: 30
       });
-      await renderTrimmedAudioBuffer(audioBuffer, {
+      const trimmedAudio = await renderTrimmedAudioBuffer(audioBuffer, {
         startSec,
         endSec,
         volume,
@@ -645,7 +667,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       });
 
       const willAnimate = isVideoSource || motionEffect !== 'static';
-      setSendProgress({ active: true, label: 'Merakit Stiker 512×512 (WebP + EXIF)...', percent: 55 });
+      setSendProgress({ active: true, label: 'Merakit Stiker 512×512 (WebP + EXIF)...', percent: 50 });
       const webpBlob = await buildWaWebpStickerBlob({
         sourceMedia,
         isAnimated: willAnimate,
@@ -655,24 +677,62 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         onProgress: (p) => setSendProgress({
           active: true,
           label: `Merakit Paket Stiker (${p}%)...`,
-          percent: 55 + Math.round(p * 0.3)
+          percent: 50 + Math.round(p * 0.25)
         })
       });
 
-      if (!webpBlob || webpBlob.size > 1.4 * 1024 * 1024) {
-        throw new Error('Ukuran paket stiker melebihi batas aman 1.4 MB.');
+      if (!webpBlob || webpBlob.size <= 200 || webpBlob.size > 1024 * 1024) {
+        throw new Error('Ukuran stiker WebP tidak valid atau melebihi batas 1 MB.');
+      }
+
+      const stickerWebpBase64 = await blobToBase64String(webpBlob);
+      let audioM4aBase64;
+      let muxedMp4Base64;
+
+      const bpContainer = soundStickerBlueprint?.mediaInspection?.detectedContainer || '';
+      const bpMime = String(soundStickerBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
+      const needsMuxed = bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm');
+      const needsCustomAudio = (soundStickerBlueprint?.mediaInspection?.customChunks?.length || 0) > 0;
+
+      if (needsCustomAudio) {
+        setSendProgress({ active: true, label: 'Mengemas potongan suara M4A...', percent: 78 });
+        try {
+          const encodedAudio = await encodeTrimmedAudio(trimmedAudio);
+          if (encodedAudio?.blob && encodedAudio.ext === 'm4a' && encodedAudio.blob.size > 100) {
+            audioM4aBase64 = await blobToBase64String(encodedAudio.blob);
+          }
+        } catch {}
+      }
+
+      if (needsMuxed) {
+        setSendProgress({ active: true, label: 'Merakit kontainer stiker bersuara 512×512...', percent: 82 });
+        try {
+          const muxedBlob = await composeMuxedStickerContainer({
+            sourceMedia,
+            trimmedAudioBuffer: trimmedAudio,
+            renderOptions
+          });
+          if (muxedBlob && muxedBlob.size > 100) {
+            muxedMp4Base64 = await blobToBase64String(muxedBlob);
+          }
+        } catch {}
       }
 
       setSendProgress({ active: true, label: 'Mengirim ke Nomor WA Anda (stickerMessage)...', percent: 92 });
-      const stickerWebpBase64 = await blobToBase64String(webpBlob);
 
       socketRef.current.emit('send-self-sound-sticker', {
         sessionId,
         deviceToken,
         stickerWebpBase64,
+        ...(audioM4aBase64 ? { audioM4aBase64 } : {}),
+        ...(muxedMp4Base64 ? { muxedMp4Base64 } : {}),
+        durationSec: selectedDuration,
         isAnimated: willAnimate,
         width: 512,
-        height: 512
+        height: 512,
+        packName,
+        packAuthor: packPublisher,
+        blueprint: soundStickerBlueprint || undefined
       });
     } catch (err) {
       setSendProgress({ active: false, label: '', percent: 0 });
@@ -683,10 +743,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
   const handleArmCalibration = () => {
     if (connectionStatus !== 'connected' || !socketRef.current) {
-      onShowToast?.('Tautkan WhatsApp terlebih dahulu sebelum memulai kalibrasi.', 'error');
+      onShowToast?.('Tautkan WhatsApp terlebih dahulu sebelum memulai deteksi format.', 'error');
       return;
     }
-    setDetectedSchema(null);
     socketRef.current.emit('start-sound-sticker-calibration', { sessionId, deviceToken });
   };
 
@@ -1312,9 +1371,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     </span>
                   )}
                 </div>
-                {lastSendResult.waProtoSupportsAudio === false && (
+                {lastSendResult.note && (
                   <p className="text-[10px] text-neutral-800 leading-snug">
-                    Catatan protokol: `@whiskeysockets/baileys@6.7.24` mengirim <code className="font-mono">stickerMessage</code> native tanpa field suara bawaan WAProto. Gunakan kalibrasi di bawah bila ingin menyadap struktur stiker suara asli WA.
+                    {lastSendResult.note}
                   </p>
                 )}
               </div>
@@ -1349,44 +1408,73 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               <span>Kirim Stiker Suara ke WA Saya</span>
             </button>
 
-            {/* Kalibrasi Skema Stiker Suara Asli WA (Self-Chat Inspector) */}
+            {/* Kalibrasi Blueprint Stiker Suara WA (1x Saja Per Perangkat) */}
             <div className="pt-2 border-t-2 border-black space-y-2">
-              <button
-                type="button"
-                onClick={handleArmCalibration}
-                disabled={connectionStatus !== 'connected'}
-                className="w-full py-2 px-3 bg-yellow-100 hover:bg-yellow-200 disabled:opacity-45 border-2 border-black font-black text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Wrench className="w-3.5 h-3.5" />
-                <span>
-                  {calibrationArmed
-                    ? 'Menunggu 1 Contoh Stiker Suara di Chat Anda...'
-                    : 'Kalibrasi dari Contoh Stiker Suara Asli'}
-                </span>
-              </button>
-
-              {detectedSchema && (
-                <div className="p-2.5 bg-neutral-50 border-2 border-black space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-black text-[10px] uppercase text-emerald-800">
-                      Skema Stiker Terdeteksi (RAM Inspector):
+              {soundStickerBlueprint ? (
+                <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 bg-emerald-300 border border-black font-black text-[10px] uppercase text-black">
+                      Format Stiker Suara Terkalibrasi
                     </span>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await copyTextToClipboard(JSON.stringify(detectedSchema, null, 2));
-                        setCopiedSchema(true);
-                        setTimeout(() => setCopiedSchema(false), 1800);
-                      }}
-                      className="px-2 py-0.5 bg-white border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
-                    >
-                      {copiedSchema ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
-                      <span>{copiedSchema ? 'Tersalin' : 'Salin Skema'}</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await copyTextToClipboard(JSON.stringify(soundStickerBlueprint, null, 2));
+                          setCopiedSchema(true);
+                          setTimeout(() => setCopiedSchema(false), 1800);
+                        }}
+                        className="px-2 py-0.5 bg-white hover:bg-neutral-100 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                      >
+                        {copiedSchema ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedSchema ? 'Tersalin' : 'Salin Info Blueprint'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleArmCalibration}
+                        disabled={connectionStatus !== 'connected'}
+                        className="px-2 py-0.5 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border border-black font-bold text-[10px] cursor-pointer"
+                      >
+                        {calibrationArmed ? 'Menunggu...' : 'Kalibrasi Ulang'}
+                      </button>
+                    </div>
                   </div>
-                  <pre className="p-2 bg-white border border-black text-[10px] font-mono overflow-x-auto max-h-40">
-                    {JSON.stringify(detectedSchema, null, 2)}
-                  </pre>
+                  <div className="text-[10px] font-mono text-neutral-800 space-y-0.5">
+                    <div>
+                      Container: <b>{soundStickerBlueprint.mediaInspection?.detectedContainer || 'unknown'}</b> &bull; Mimetype:{' '}
+                      <b>{soundStickerBlueprint.stickerMeta?.mimetype || 'image/webp'}</b>
+                    </div>
+                    {soundStickerBlueprint.mediaInspection?.chunks?.length > 0 && (
+                      <div className="truncate">
+                        Chunks: {soundStickerBlueprint.mediaInspection.chunks.slice(0, 8).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-black text-[11px] uppercase text-black">
+                      Deteksi Format Stiker Suara WA (1x Saja)
+                    </span>
+                    <Wrench className="w-3.5 h-3.5 text-black shrink-0" />
+                  </div>
+                  <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
+                    Teruskan 1 contoh stiker suara dari chat WA ke chat &lsquo;Pesan Diri Sendiri&rsquo; Anda &mdash; web akan menyalin format aslinya otomatis!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleArmCalibration}
+                    disabled={connectionStatus !== 'connected'}
+                    className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Wrench className="w-3.5 h-3.5" />
+                    <span>
+                      {calibrationArmed
+                        ? 'Menunggu 1 Contoh Stiker Suara di Chat Anda...'
+                        : 'Mulai Deteksi Format'}
+                    </span>
+                  </button>
                 </div>
               )}
             </div>

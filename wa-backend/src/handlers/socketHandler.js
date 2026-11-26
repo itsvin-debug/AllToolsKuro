@@ -16,7 +16,7 @@ const {
 } = require('../services/contactsService');
 const { buildVaultPayload, downloadMediaStreamBuffer } = require('../services/vaultService');
 const { startBaileys } = require('./whatsappSessionHandler');
-const { registerStickerSenderHandler } = require('./stickerSenderHandler');
+const { registerStickerSenderHandler, attachCalibrationListener } = require('./stickerSenderHandler');
 
 function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
@@ -68,6 +68,7 @@ function registerSocketHandlers(io) {
           session.lastActive = Date.now();
 
           if (session.status === 'connected') {
+            attachCalibrationListener(io, sessionId, session);
             const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || '');
             const accountJid = session.accountJid || (phone ? `${phone}@s.whatsapp.net` : '');
             socket.emit('session-status', {
@@ -138,7 +139,8 @@ function registerSocketHandlers(io) {
         const sessionDir = getSessionDir(sessionId);
         if (isDirRegistered(sessionDir)) {
           writeOwnerHash(sessionDir, tokenHash);
-          await startBaileys(io, sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode, swMode, tokenHash);
+          const resumedSess = await startBaileys(io, sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode, swMode, tokenHash);
+          if (resumedSess) attachCalibrationListener(io, sessionId, resumedSess);
           return;
         }
 
@@ -148,7 +150,8 @@ function registerSocketHandlers(io) {
             time: Date.now(),
             text: 'Memulihkan sesi tertaut dari perangkat tanpa scan QR ulang...'
           });
-          await startBaileys(io, sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode, swMode, tokenHash);
+          const snapSess = await startBaileys(io, sessionId, targetNumber ? normalizePhone(targetNumber) : null, false, 'pairing', '', false, monitorMode, swMode, tokenHash);
+          if (snapSess) attachCalibrationListener(io, sessionId, snapSess);
           return;
         }
 
@@ -436,6 +439,7 @@ function registerSocketHandlers(io) {
           }
 
           if (session.status === 'connected') {
+            attachCalibrationListener(io, sessionId, session);
             const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || '');
             const accountJid = session.accountJid || (phone ? `${phone}@s.whatsapp.net` : '');
             socket.emit('session-status', {
@@ -510,6 +514,7 @@ function registerSocketHandlers(io) {
           tokenHash
         );
 
+        attachCalibrationListener(io, sessionId, session);
         socket.emit('session-status', { status: session.status, targetNumber: session.targetNumber, monitorMode: session.monitorMode, swMode: session.swMode });
         if (session.targetNumber) {
           socket.emit('target-synced', { targetNumber: session.targetNumber });
