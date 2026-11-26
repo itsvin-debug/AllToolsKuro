@@ -1,7 +1,7 @@
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 
 const TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
-const MAX_SAFE_MP4_BYTES = 4.5 * 1024 * 1024;
+const MAX_SAFE_MP4_BYTES = 1.5 * 1024 * 1024;
 
 function encodeUtf8(str) {
   if (TEXT_ENCODER) return TEXT_ENCODER.encode(str);
@@ -33,6 +33,25 @@ function readUint32LE(buf, offset) {
 
 function readFourCC(buf, offset) {
   return String.fromCharCode(buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]);
+}
+
+export function validateSourceMediaDimensions(sourceMedia) {
+  if (!sourceMedia) {
+    throw new Error('Visual foto atau video belum dipilih.');
+  }
+  const isVideoEl = typeof HTMLVideoElement !== 'undefined' && sourceMedia instanceof HTMLVideoElement;
+  if (isVideoEl) {
+    if (sourceMedia.readyState < 2 || !sourceMedia.videoWidth || !sourceMedia.videoHeight) {
+      throw new Error('Video belum siap dirender (dimensi 0×0). Coba pilih ulang berkas video.');
+    }
+    return { width: sourceMedia.videoWidth, height: sourceMedia.videoHeight, isVideo: true };
+  }
+  const w = sourceMedia.naturalWidth || sourceMedia.width || 0;
+  const h = sourceMedia.naturalHeight || sourceMedia.height || 0;
+  if (!w || !h || (sourceMedia.complete === false)) {
+    throw new Error('Gambar belum selesai dimuat atau rusak (dimensi 0×0).');
+  }
+  return { width: w, height: h, isVideo: false };
 }
 
 export function buildRiffChunk(fourCC, payloadBytes) {
@@ -198,7 +217,7 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
 }
 
 /**
- * Renderer Kotak 512x512 Terpadu (Dipakai bersama oleh Preview Chat WA, MP4 Composer, & WebP)
+ * Renderer Kotak 512x512 Terpadu (Dipakai oleh Live Preview Stiker Suara WA & Kompositor WebP)
  */
 export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 0) {
   if (!ctx) return;
@@ -210,68 +229,65 @@ export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 
     motionEffect = 'static', // 'static' | 'zoom' | 'bounce' | 'wobble'
     stickerText = '',
     textPosition = 'bottom', // 'bottom' | 'middle' | 'top'
-    textSize = 46, // 28..64
-    audioPulse = 0,
-    forVideoBackground = false
+    textSize = 46,
+    audioPulse = 0
   } = options;
 
   ctx.clearRect(0, 0, size, size);
 
   if (sourceMedia) {
-    const mediaW = sourceMedia.videoWidth || sourceMedia.naturalWidth || sourceMedia.width || size;
-    const mediaH = sourceMedia.videoHeight || sourceMedia.naturalHeight || sourceMedia.height || size;
-    const safeW = Math.max(1, mediaW);
-    const safeH = Math.max(1, mediaH);
+    const mediaW = sourceMedia.videoWidth || sourceMedia.naturalWidth || sourceMedia.width || 0;
+    const mediaH = sourceMedia.videoHeight || sourceMedia.naturalHeight || sourceMedia.height || 0;
+    if (mediaW > 0 && mediaH > 0) {
+      if (cropMode === 'contain' && bgStyle === 'blur') {
+        ctx.save();
+        const fillScale = Math.max(size / mediaW, size / mediaH) * 1.12;
+        const bgW = mediaW * fillScale;
+        const bgH = mediaH * fillScale;
+        ctx.filter = 'blur(18px) brightness(0.68)';
+        ctx.drawImage(sourceMedia, (size - bgW) * 0.5, (size - bgH) * 0.5, bgW, bgH);
+        ctx.restore();
+      } else if (bgStyle === 'solid') {
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, size, size);
+      }
 
-    // Latar kotak bila mode Fit (Contain) atau video opaque
-    if (cropMode === 'contain' && bgStyle === 'blur') {
+      const baseScale = cropMode === 'contain'
+        ? Math.min(size / mediaW, size / mediaH)
+        : Math.max(size / mediaW, size / mediaH);
+
+      let extraScale = 1;
+      let rotRad = 0;
+      let tx = 0;
+      let ty = 0;
+
+      if (motionEffect === 'zoom') {
+        extraScale = 1 + 0.08 * (0.5 - 0.5 * Math.cos(tSec * 2.0));
+      } else if (motionEffect === 'bounce') {
+        const pulse = Math.max(Math.abs(Math.sin(tSec * Math.PI * 2.4)) * 0.06, audioPulse * 0.09);
+        extraScale = 1 + pulse;
+        ty = -pulse * 36;
+      } else if (motionEffect === 'wobble') {
+        rotRad = Math.sin(tSec * 7.0) * 0.08;
+        tx = Math.cos(tSec * 5.6) * 8;
+        extraScale = 1.04;
+      }
+
+      const drawW = mediaW * baseScale * extraScale;
+      const drawH = mediaH * baseScale * extraScale;
+
       ctx.save();
-      const fillScale = Math.max(size / safeW, size / safeH) * 1.12;
-      const bgW = safeW * fillScale;
-      const bgH = safeH * fillScale;
-      ctx.filter = 'blur(18px) brightness(0.68)';
-      ctx.drawImage(sourceMedia, (size - bgW) * 0.5, (size - bgH) * 0.5, bgW, bgH);
+      ctx.translate(size * 0.5 + tx, size * 0.5 + ty);
+      if (rotRad !== 0) ctx.rotate(rotRad);
+      ctx.drawImage(sourceMedia, -drawW * 0.5, -drawH * 0.5, drawW, drawH);
       ctx.restore();
-    } else if (bgStyle === 'solid' || (forVideoBackground && bgStyle === 'transparent')) {
-      ctx.fillStyle = bgStyle === 'solid' ? bgColor : '#111827';
-      ctx.fillRect(0, 0, size, size);
     }
-
-    const baseScale = cropMode === 'contain'
-      ? Math.min(size / safeW, size / safeH)
-      : Math.max(size / safeW, size / safeH);
-
-    let extraScale = 1;
-    let rotRad = 0;
-    let tx = 0;
-    let ty = 0;
-
-    if (motionEffect === 'zoom') {
-      extraScale = 1 + 0.08 * (0.5 - 0.5 * Math.cos(tSec * 2.0));
-    } else if (motionEffect === 'bounce') {
-      const pulse = Math.max(Math.abs(Math.sin(tSec * Math.PI * 2.4)) * 0.06, audioPulse * 0.09);
-      extraScale = 1 + pulse;
-      ty = -pulse * 36;
-    } else if (motionEffect === 'wobble') {
-      rotRad = Math.sin(tSec * 7.0) * 0.08;
-      tx = Math.cos(tSec * 5.6) * 8;
-      extraScale = 1.04;
-    }
-
-    const drawW = safeW * baseScale * extraScale;
-    const drawH = safeH * baseScale * extraScale;
-
-    ctx.save();
-    ctx.translate(size * 0.5 + tx, size * 0.5 + ty);
-    if (rotRad !== 0) ctx.rotate(rotRad);
-    ctx.drawImage(sourceMedia, -drawW * 0.5, -drawH * 0.5, drawW, drawH);
-    ctx.restore();
-  } else if (forVideoBackground || bgStyle === 'solid') {
-    ctx.fillStyle = bgStyle === 'solid' ? bgColor : '#111827';
+  } else if (bgStyle === 'solid') {
+    ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, size, size);
   }
 
-  // Teks meme khas stiker WA (Kapital tebal, isi #ffffff, outline hitam >= 6px, drop shadow)
+  // Teks meme khas stiker WA (Kapital tebal, isi putih, outline hitam >= 6px, drop shadow)
   const cleanText = String(stickerText || '').trim().toUpperCase();
   if (cleanText) {
     ctx.save();
@@ -318,7 +334,7 @@ async function canvasToWebpBytes(canvas, quality) {
 }
 
 /**
- * Buat Blob Stiker WebP (Statis atau Animasi) 512x512 dengan EXIF WhatsApp
+ * Buat Blob Stiker WebP 512x512 (Statis/Animasi) dengan WhatsApp EXIF
  */
 export async function buildWaWebpStickerBlob({
   sourceMedia,
@@ -328,13 +344,12 @@ export async function buildWaWebpStickerBlob({
   packMeta = {},
   onProgress
 }) {
-  if (!sourceMedia) throw new Error('Visual foto atau video belum dimuat.');
+  const { isVideo: isVideoEl } = validateSourceMediaDimensions(sourceMedia);
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 512;
   const ctx = canvas.getContext('2d', { alpha: true });
 
-  const isVideoEl = typeof HTMLVideoElement !== 'undefined' && sourceMedia instanceof HTMLVideoElement;
   const needsAnim = Boolean(isAnimated && (isVideoEl || renderOptions.motionEffect !== 'static'));
 
   if (!needsAnim) {
@@ -395,30 +410,6 @@ export async function buildWaWebpStickerBlob({
   return bestBlob;
 }
 
-function computePerFrameAudioEnvelope(audioBuffer, frameCount) {
-  const levels = new Array(frameCount).fill(0);
-  if (!audioBuffer || audioBuffer.length === 0) return levels;
-  const ch = audioBuffer.getChannelData(0);
-  const blockSize = Math.max(1, Math.floor(ch.length / frameCount));
-  let maxVal = 0.001;
-
-  for (let f = 0; f < frameCount; f++) {
-    const start = f * blockSize;
-    const end = Math.min(ch.length, start + blockSize);
-    const step = Math.max(1, Math.floor((end - start) / 48));
-    let sum = 0;
-    let cnt = 0;
-    for (let i = start; i < end; i += step) {
-      sum += Math.abs(ch[i] || 0);
-      cnt++;
-    }
-    const avg = cnt > 0 ? sum / cnt : 0;
-    levels[f] = avg;
-    if (avg > maxVal) maxVal = avg;
-  }
-  return levels.map((v) => Math.min(1, v / maxVal));
-}
-
 function sanitizeVideoMeta(meta) {
   if (!meta || !meta.decoderConfig) return meta;
   const dc = meta.decoderConfig;
@@ -433,113 +424,78 @@ function sanitizeVideoMeta(meta) {
     matrix: rawCs.matrix || 'bt709',
     fullRange: typeof rawCs.fullRange === 'boolean' ? rawCs.fullRange : false
   };
-  return {
-    ...meta,
-    decoderConfig: {
-      ...dc,
-      colorSpace: safeCs
-    }
-  };
+  return { ...meta, decoderConfig: { ...dc, colorSpace: safeCs } };
 }
 
-async function selectSupportedVideoConfig(width, height, fps, bitrate) {
-  if (typeof window === 'undefined' || typeof window.VideoEncoder !== 'function' || typeof window.VideoFrame !== 'function') {
-    return null;
-  }
-  const codecs = ['avc1.42001f', 'avc1.4d002a', 'avc1.420028', 'avc1.64001f'];
-  const accelModes = ['prefer-hardware', 'no-preference', 'prefer-software'];
-  for (const hardwareAcceleration of accelModes) {
-    for (const codec of codecs) {
-      try {
-        const cfg = {
-          codec,
-          width,
-          height,
-          bitrate,
-          framerate: fps,
-          hardwareAcceleration,
-          avc: { format: 'avc' },
-          latencyMode: 'quality'
-        };
-        const res = await window.VideoEncoder.isConfigSupported(cfg);
-        if (res?.supported) return res.config || cfg;
-      } catch {}
-    }
-  }
-  return null;
-}
-
-async function selectSupportedAudioConfig(sampleRate, numberOfChannels) {
-  if (typeof window === 'undefined' || typeof window.AudioEncoder !== 'function' || typeof window.AudioData !== 'function') {
-    return null;
-  }
-  const candidates = [
-    { codec: 'mp4a.40.2', sampleRate, numberOfChannels, bitrate: 96000 },
-    { codec: 'mp4a.40.2', sampleRate: 44100, numberOfChannels, bitrate: 96000 }
-  ];
-  for (const cfg of candidates) {
-    try {
-      const res = await window.AudioEncoder.isConfigSupported(cfg);
-      if (res?.supported) return res.config || cfg;
-    } catch {}
-  }
-  return null;
-}
-
-async function encodeMp4WebCodecs({
+/**
+ * Kompositor Kontainer Audio+Visual 512x512 Ringan (Untuk jalur muxed apabila terkalibrasi)
+ */
+export async function composeMuxedStickerContainer({
   sourceMedia,
   trimmedAudioBuffer,
-  renderOptions,
-  fps,
-  videoBitrate,
+  renderOptions = {},
   onProgress
 }) {
-  const durSec = Math.max(0.5, Math.min(30, trimmedAudioBuffer.duration));
-  const numberOfChannels = Math.min(2, Math.max(1, trimmedAudioBuffer.numberOfChannels));
-  const vCfg = await selectSupportedVideoConfig(512, 512, fps, videoBitrate);
-  const aCfg = await selectSupportedAudioConfig(trimmedAudioBuffer.sampleRate, numberOfChannels);
-  if (!vCfg || !aCfg) return null;
+  const { isVideo: isVideoEl } = validateSourceMediaDimensions(sourceMedia);
+  if (!trimmedAudioBuffer) throw new Error('Audio potongan belum tersedia.');
+  if (typeof window.VideoEncoder !== 'function' || typeof window.AudioEncoder !== 'function') {
+    throw new Error('WebCodecs encoder belum tersedia di browser ini.');
+  }
+
+  const durSec = Math.max(0.5, Math.min(15, trimmedAudioBuffer.duration));
+  const fps = 24;
+  const bitrate = Math.max(200_000, Math.min(600_000, Math.floor((1.2 * 1024 * 1024 * 8) / durSec) - 96_000));
+  const channels = Math.min(2, Math.max(1, trimmedAudioBuffer.numberOfChannels));
+
+  const vSupport = await window.VideoEncoder.isConfigSupported({
+    codec: 'avc1.42001f',
+    width: 512,
+    height: 512,
+    bitrate,
+    framerate: fps,
+    avc: { format: 'avc' }
+  });
+  const aSupport = await window.AudioEncoder.isConfigSupported({
+    codec: 'mp4a.40.2',
+    sampleRate: trimmedAudioBuffer.sampleRate,
+    numberOfChannels: channels,
+    bitrate: 96000
+  });
+  if (!vSupport?.supported || !aSupport?.supported) {
+    throw new Error('Perangkat tidak mendukung encoder H.264/AAC.');
+  }
 
   const target = new Mp4ArrayBufferTarget();
   const muxer = new Mp4Muxer({
     target,
     video: { codec: 'avc', width: 512, height: 512 },
-    audio: { codec: 'aac', numberOfChannels: aCfg.numberOfChannels, sampleRate: aCfg.sampleRate },
+    audio: { codec: 'aac', numberOfChannels: channels, sampleRate: trimmedAudioBuffer.sampleRate },
     fastStart: 'in-memory'
   });
 
-  let encodeError = null;
   const videoEncoder = new window.VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, sanitizeVideoMeta(meta)),
-    error: (e) => { encodeError = e; }
+    error: () => {}
   });
-  videoEncoder.configure(vCfg);
+  videoEncoder.configure(vSupport.config);
 
   const audioEncoder = new window.AudioEncoder({
     output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-    error: (e) => { encodeError = e; }
+    error: () => {}
   });
-  audioEncoder.configure(aCfg);
+  audioEncoder.configure(aSupport.config);
 
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 512;
   const ctx = canvas.getContext('2d', { alpha: false });
-
-  const isVideoEl = typeof HTMLVideoElement !== 'undefined' && sourceMedia instanceof HTMLVideoElement;
-  const srcVideoDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0
-    ? sourceMedia.duration
-    : durSec;
-
   const totalFrames = Math.max(1, Math.round(durSec * fps));
-  const levels = computePerFrameAudioEnvelope(trimmedAudioBuffer, totalFrames);
-  const frameDurationUs = Math.round(1_000_000 / fps);
+  const frameUs = Math.round(1_000_000 / fps);
+  const srcDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0 ? sourceMedia.duration : durSec;
 
   for (let i = 0; i < totalFrames; i++) {
-    if (encodeError) break;
     const tSec = i / fps;
     if (isVideoEl) {
-      const targetT = srcVideoDur > 0.1 ? (tSec % srcVideoDur) : 0;
       await new Promise((resolve) => {
         let done = false;
         const finish = () => {
@@ -550,209 +506,48 @@ async function encodeMp4WebCodecs({
           }
         };
         sourceMedia.addEventListener('seeked', finish, { once: true });
-        sourceMedia.currentTime = targetT;
-        setTimeout(finish, 150);
+        sourceMedia.currentTime = tSec % srcDur;
+        setTimeout(finish, 140);
       });
     }
-
-    renderStickerCanvasFrame(
-      ctx,
-      sourceMedia,
-      { ...renderOptions, audioPulse: levels[i] || 0, forVideoBackground: true },
-      tSec
-    );
-
-    const frame = new window.VideoFrame(canvas, {
-      timestamp: Math.round(tSec * 1_000_000),
-      duration: frameDurationUs
-    });
-    while (videoEncoder.encodeQueueSize > 8 && !encodeError) {
-      await new Promise((r) => setTimeout(r, 4));
-    }
-    videoEncoder.encode(frame, { keyFrame: i % (fps * 2) === 0 });
+    renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, bgStyle: 'solid' }, tSec);
+    const frame = new window.VideoFrame(canvas, { timestamp: Math.round(tSec * 1_000_000), duration: frameUs });
+    videoEncoder.encode(frame, { keyFrame: i % 48 === 0 });
     frame.close();
-
-    if (i % 4 === 0) {
-      onProgress?.(Math.min(88, Math.round((i / totalFrames) * 85)));
-    }
+    if (i % 6 === 0) onProgress?.(Math.min(85, Math.round((i / totalFrames) * 80)));
   }
 
   const chData = [];
-  for (let c = 0; c < aCfg.numberOfChannels; c++) {
+  for (let c = 0; c < channels; c++) {
     chData.push(trimmedAudioBuffer.getChannelData(Math.min(c, trimmedAudioBuffer.numberOfChannels - 1)));
   }
   const totalSamples = trimmedAudioBuffer.length;
-  const chunkSamples = 1024;
-  for (let off = 0; off < totalSamples; off += chunkSamples) {
-    if (encodeError) break;
-    const count = Math.min(chunkSamples, totalSamples - off);
-    const planar = new Float32Array(count * aCfg.numberOfChannels);
-    for (let c = 0; c < aCfg.numberOfChannels; c++) {
-      planar.set(chData[c].subarray(off, off + count), c * count);
-    }
-    const audioData = new window.AudioData({
+  for (let off = 0; off < totalSamples; off += 1024) {
+    const count = Math.min(1024, totalSamples - off);
+    const planar = new Float32Array(count * channels);
+    for (let c = 0; c < channels; c++) planar.set(chData[c].subarray(off, off + count), c * count);
+    const ad = new window.AudioData({
       format: 'f32-planar',
-      sampleRate: aCfg.sampleRate,
+      sampleRate: trimmedAudioBuffer.sampleRate,
       numberOfFrames: count,
-      numberOfChannels: aCfg.numberOfChannels,
-      timestamp: Math.round((off / aCfg.sampleRate) * 1_000_000),
+      numberOfChannels: channels,
+      timestamp: Math.round((off / trimmedAudioBuffer.sampleRate) * 1_000_000),
       data: planar
     });
-    audioEncoder.encode(audioData);
-    audioData.close();
+    audioEncoder.encode(ad);
+    ad.close();
   }
 
   await videoEncoder.flush();
   await audioEncoder.flush();
   videoEncoder.close();
   audioEncoder.close();
-
-  if (encodeError) throw encodeError;
   muxer.finalize();
   onProgress?.(100);
-  return new Blob([target.buffer], { type: 'video/mp4' });
-}
 
-async function encodeFallbackMediaRecorder({
-  sourceMedia,
-  trimmedAudioBuffer,
-  renderOptions,
-  onProgress
-}) {
-  const durSec = Math.max(0.5, Math.min(30, trimmedAudioBuffer.duration));
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d', { alpha: false });
-
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  const actx = new AudioCtx();
-  const dest = actx.createMediaStreamDestination();
-  const src = actx.createBufferSource();
-  src.buffer = trimmedAudioBuffer;
-  src.connect(dest);
-
-  const canvasStream = canvas.captureStream(30);
-  const combinedStream = new MediaStream([
-    ...canvasStream.getVideoTracks(),
-    ...dest.stream.getAudioTracks()
-  ]);
-
-  const mimeCandidates = ['video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-  const mimeType = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
-
-  const recorder = new MediaRecorder(combinedStream, {
-    mimeType,
-    videoBitsPerSecond: 700000,
-    audioBitsPerSecond: 96000
-  });
-  const chunks = [];
-  recorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) chunks.push(e.data);
-  };
-
-  const isVideoEl = typeof HTMLVideoElement !== 'undefined' && sourceMedia instanceof HTMLVideoElement;
-  if (isVideoEl) {
-    try {
-      sourceMedia.currentTime = 0;
-      sourceMedia.loop = true;
-      await sourceMedia.play();
-    } catch {}
+  const blob = new Blob([target.buffer], { type: 'video/mp4' });
+  if (blob.size > MAX_SAFE_MP4_BYTES) {
+    throw new Error('Kontainer stiker melebihi batas 1.5 MB.');
   }
-
-  const levels = computePerFrameAudioEnvelope(trimmedAudioBuffer, Math.max(10, Math.round(durSec * 30)));
-  let rafId = 0;
-  const startedAt = performance.now();
-
-  return await new Promise((resolve, reject) => {
-    recorder.onerror = (err) => {
-      cancelAnimationFrame(rafId);
-      try { actx.close(); } catch {}
-      reject(err?.error || new Error('MediaRecorder gagal merekam stiker bersuara.'));
-    };
-    recorder.onstop = () => {
-      cancelAnimationFrame(rafId);
-      if (isVideoEl) {
-        try { sourceMedia.pause(); } catch {}
-      }
-      try { actx.close(); } catch {}
-      onProgress?.(100);
-      resolve(new Blob(chunks, { type: mimeType.split(';')[0] }));
-    };
-
-    const drawTick = () => {
-      const elapsed = (performance.now() - startedAt) / 1000;
-      const idx = Math.min(levels.length - 1, Math.max(0, Math.floor(elapsed * 30)));
-      renderStickerCanvasFrame(
-        ctx,
-        sourceMedia,
-        { ...renderOptions, audioPulse: levels[idx] || 0, forVideoBackground: true },
-        elapsed
-      );
-      onProgress?.(Math.min(95, Math.round((elapsed / durSec) * 90)));
-      if (elapsed < durSec) {
-        rafId = requestAnimationFrame(drawTick);
-      }
-    };
-
-    recorder.start(250);
-    src.start(0);
-    rafId = requestAnimationFrame(drawTick);
-
-    setTimeout(() => {
-      try { src.stop(); } catch {}
-      if (recorder.state !== 'inactive') recorder.stop();
-    }, Math.round(durSec * 1000) + 120);
-  });
-}
-
-/**
- * Kompositor 1-File Stiker Kotak 512x512 Bersuara (MP4 30 FPS H.264+AAC <= 4.5 MB, dengan Fallback MediaRecorder)
- */
-export async function composeSoundStickerMp4({
-  sourceMedia,
-  trimmedAudioBuffer,
-  renderOptions = {},
-  onProgress
-}) {
-  if (!sourceMedia) throw new Error('Visual foto atau video belum dimuat.');
-  if (!trimmedAudioBuffer) throw new Error('Audio potongan belum tersedia.');
-
-  const durSec = Math.max(0.5, Math.min(30, trimmedAudioBuffer.duration));
-  const fps = 30;
-  const maxTotalBits = 4.0 * 1024 * 1024 * 8;
-  const safeBitrate = Math.max(260_000, Math.min(1_250_000, Math.floor(maxTotalBits / durSec) - 110_000));
-
-  try {
-    let mp4Blob = await encodeMp4WebCodecs({
-      sourceMedia,
-      trimmedAudioBuffer,
-      renderOptions,
-      fps,
-      videoBitrate: safeBitrate,
-      onProgress
-    });
-
-    if (mp4Blob && mp4Blob.size > MAX_SAFE_MP4_BYTES) {
-      mp4Blob = await encodeMp4WebCodecs({
-        sourceMedia,
-        trimmedAudioBuffer,
-        renderOptions,
-        fps: 24,
-        videoBitrate: Math.max(220_000, Math.floor(safeBitrate * 0.55)),
-        onProgress
-      });
-    }
-
-    if (mp4Blob && mp4Blob.size > 0) return mp4Blob;
-  } catch {
-    // Fallback mulus ke MediaRecorder jika browser menolak WebCodecs
-  }
-
-  return encodeFallbackMediaRecorder({
-    sourceMedia,
-    trimmedAudioBuffer,
-    renderOptions,
-    onProgress
-  });
+  return blob;
 }

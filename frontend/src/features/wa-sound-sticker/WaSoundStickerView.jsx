@@ -10,7 +10,6 @@ import {
   Play,
   Square,
   Send,
-  Download,
   Smartphone,
   QrCode,
   CheckCircle2,
@@ -22,23 +21,21 @@ import {
   RefreshCw,
   LogOut,
   ShieldCheck,
-  Info
+  Info,
+  Wrench
 } from 'lucide-react';
-import { downloadBlob } from '../../shared/utils/fileDownload';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { isValidPairingPhone, formatPairingCodeDisplay } from '../../shared/utils/waPhoneUtils';
 import {
   decodeMediaToAudioBuffer,
   extractWaveformPeaks,
   renderTrimmedAudioBuffer,
-  encodeTrimmedAudio,
   createSnippetPlayer
 } from './audioTrimmerEngine';
-import { buildWaWebpStickerBlob, composeSoundStickerMp4 } from './soundStickerComposer';
+import { buildWaWebpStickerBlob, validateSourceMediaDimensions } from './soundStickerComposer';
 import WaSoundStickerPreview from './WaSoundStickerPreview';
 import {
   getWaBackendUrl,
-  normalizeWaPhone,
   getOrCreateDeviceCredentials,
   getSavedPairingPhone,
   setSavedPairingPhone,
@@ -46,7 +43,8 @@ import {
   loadDeviceAuthSnapshotLocal,
   saveDeviceAuthSnapshotLocal,
   clearDeviceAuthSnapshotLocal,
-  blobToBase64String
+  blobToBase64String,
+  normalizeWaPhone
 } from './deviceSessionHelper';
 
 const MAX_VISUAL_FILE_BYTES = 25 * 1024 * 1024;
@@ -75,7 +73,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [motionEffect, setMotionEffect] = useState('static'); // 'static' | 'zoom' | 'bounce' | 'wobble'
   const [stickerText, setStickerText] = useState('');
   const [textPosition, setTextPosition] = useState('bottom'); // 'bottom' | 'middle' | 'top'
-  const [textSize, setTextSize] = useState(46); // 28..64 px
+  const [textSize, setTextSize] = useState(46);
   const [packName, setPackName] = useState('Kuro Sound Sticker');
   const [packPublisher, setPackPublisher] = useState('Kuro Studio');
 
@@ -99,8 +97,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const visualInputRef = useRef(null);
   const audioInputRef = useRef(null);
 
-  // ─── 3. OPSI TAMBAHAN & STATUS KONEKSI WA PER-PERANGKAT ───
-  const [includeFavoriteWebp, setIncludeFavoriteWebp] = useState(false);
+  // ─── 3. KONEKSI WA TERISOLASI PER-PERANGKAT & KALIBRASI SKEMA ───
   const [{ sessionId, deviceToken }] = useState(() => getOrCreateDeviceCredentials());
   const backendUrl = useMemo(() => getWaBackendUrl(), []);
   const socketRef = useRef(null);
@@ -118,8 +115,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [hasSavedAuth, setHasSavedAuth] = useState(() => hasSavedDeviceLink(sessionId));
 
   const [sendProgress, setSendProgress] = useState({ active: false, label: '', percent: 0 });
-  const [lastSendSuccess, setLastSendSuccess] = useState(null);
-  const [downloadingKey, setDownloadingKey] = useState('');
+  const [lastSendResult, setLastSendResult] = useState(null);
+  const [calibrationArmed, setCalibrationArmed] = useState(false);
+  const [detectedSchema, setDetectedSchema] = useState(null);
+  const [copiedSchema, setCopiedSchema] = useState(false);
 
   const renderOptions = useMemo(
     () => ({
@@ -134,7 +133,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     [cropMode, bgStyle, bgColor, isVideoSource, motionEffect, stickerText, textPosition, textSize]
   );
 
-  // Bersihkan resource URL & pemutar saat keluar
   useEffect(() => {
     trimPlayerRef.current = createSnippetPlayer();
     return () => {
@@ -148,7 +146,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     };
   }, []);
 
-  // ─── KONEKSI SOCKET.IO TERISOLASI PER-PERANGKAT ───
+  // ─── KONEKSI SOCKET.IO PER-PERANGKAT ───
   useEffect(() => {
     if (!sessionId || !deviceToken) return undefined;
     let unmounted = false;
@@ -260,13 +258,26 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setSendProgress({ active: false, label: '', percent: 0 });
     });
 
+    sock.on('sound-sticker-calibration-armed', () => {
+      if (unmounted) return;
+      setCalibrationArmed(true);
+      onShowToast?.('Mode Kalibrasi aktif 2 menit: silakan teruskan 1 contoh stiker suara asli WA ke chat Anda sendiri.', 'info');
+    });
+
+    sock.on('sound-sticker-schema-detected', (schema) => {
+      if (unmounted) return;
+      setCalibrationArmed(false);
+      setDetectedSchema(schema);
+      onShowToast?.('Skema stiker suara asli berhasil dideteksi!', 'success');
+    });
+
     sock.on('sound-sticker-result', (res) => {
       if (unmounted) return;
       setSendProgress({ active: false, label: '', percent: 0 });
       if (res?.ok) {
-        setLastSendSuccess(res);
+        setLastSendResult(res);
         setWaError(null);
-        onShowToast?.('Stiker Suara berhasil masuk ke chat WA Anda sendiri!', 'success');
+        onShowToast?.('Stiker terkirim ke WA Anda via jalur native stickerMessage!', 'success');
       } else {
         const errText = res?.error || 'Gagal mengirim stiker ke WhatsApp.';
         setWaError(errText);
@@ -281,7 +292,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     };
   }, [backendUrl, sessionId, deviceToken, onShowToast]);
 
-  // ─── HANDLE UNGGAH FOTO / VIDEO (LANGKAH 1) ───
+  // ─── HANDLE UNGGAH VISUAL (FOTO / VIDEO) ───
   const handleSelectVisualFile = async (file) => {
     if (!file) return;
     if (file.size > MAX_VISUAL_FILE_BYTES) {
@@ -318,6 +329,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           videoEl.onerror = () => { clearTimeout(timer); reject(new Error('Browser gagal memuat video ini.')); };
         });
 
+        validateSourceMediaDimensions(videoEl);
         setSourceMedia(videoEl);
         setIsVideoSource(true);
         setVisualVideoFile(file);
@@ -339,6 +351,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           imgEl.onload = resolve;
           imgEl.onerror = () => reject(new Error('Gagal memuat file foto.'));
         });
+        if (imgEl.decode) {
+          await imgEl.decode().catch(() => {});
+        }
+        validateSourceMediaDimensions(imgEl);
 
         setSourceMedia(imgEl);
         setIsVideoSource(false);
@@ -358,7 +374,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
-  // ─── HANDLE UNGGAH / EKSTRAK AUDIO (LANGKAH 2) ───
+  // ─── HANDLE UNGGAH / EKSTRAK AUDIO ───
   const loadAudioSource = async (file, labelPrefix = '') => {
     if (!file) return;
     if (file.size > MAX_AUDIO_FILE_BYTES) {
@@ -385,24 +401,21 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setTrimMode(decoded.duration <= capSec ? 'full' : 'cut');
       setStartSec(0);
       setEndSec(decoded.duration <= capSec ? safeFullEnd : initialCutEnd);
-      onShowToast?.(`Audio berhasil dimuat (${decoded.duration.toFixed(1)} detik).`, 'success');
+      onShowToast?.(`Sound dimuat (${decoded.duration.toFixed(1)} detik).`, 'success');
     } catch (err) {
-      onShowToast?.(err.message || 'Gagal memproses file audio.', 'error');
+      onShowToast?.(err.message || 'Gagal memproses file sound.', 'error');
     } finally {
       setIsDecodingAudio(false);
     }
   };
 
-  const applyFullModeBounds = useCallback(
-    (buf, use15sCap) => {
-      if (!buf) return;
-      const cap = use15sCap ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
-      const clampedEnd = Number(Math.min(buf.duration, cap).toFixed(1));
-      setStartSec(0);
-      setEndSec(Math.max(0.2, clampedEnd));
-    },
-    []
-  );
+  const applyFullModeBounds = useCallback((buf, use15sCap) => {
+    if (!buf) return;
+    const cap = use15sCap ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
+    const clampedEnd = Number(Math.min(buf.duration, cap).toFixed(1));
+    setStartSec(0);
+    setEndSec(Math.max(0.2, clampedEnd));
+  }, []);
 
   const handleChangeTrimMode = (mode) => {
     setTrimMode(mode);
@@ -442,7 +455,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     [startSec, endSec]
   );
 
-  // Gambar Canvas Waveform Visual Interaktif
+  // Gambar Waveform Audio Interaktif
   useEffect(() => {
     const canvas = waveformCanvasRef.current;
     if (!canvas) return;
@@ -457,7 +470,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       ctx.fillStyle = '#9ca3af';
       ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Unggah audio atau klik "Pakai Suara Asli dari Video"', w * 0.5, h * 0.54);
+      ctx.fillText('Unggah sound atau klik "Pakai Suara Asli dari Video"', w * 0.5, h * 0.54);
       return;
     }
 
@@ -579,72 +592,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     setConnectionStatus('disconnected');
   };
 
-  // ─── BUILDER & PENGIRIMAN 1-FILE STIKER SUARA 512x512 ───
-  const buildOutputAssets = useCallback(
-    async ({ needMp4 = false, needWebp = false, needAudio = false, onStage }) => {
-      let mp4Blob = null;
-      let webpBlob = null;
-      let audioEnc = null;
-      let trimmedBuf = null;
-
-      if (needMp4 || needAudio) {
-        if (!audioBuffer) {
-          throw new Error('Silakan masukkan Audio/Sound di Langkah 2 terlebih dahulu.');
-        }
-        onStage?.(`Memotong Audio (${startSec.toFixed(1)}s – ${endSec.toFixed(1)}s)...`, 25);
-        trimmedBuf = await renderTrimmedAudioBuffer(audioBuffer, {
-          startSec,
-          endSec,
-          volume,
-          fadeSmooth
-        });
-      }
-
-      if (needMp4 && trimmedBuf) {
-        onStage?.('Merakit Stiker 512×512 Bersuara...', 45);
-        mp4Blob = await composeSoundStickerMp4({
-          sourceMedia,
-          trimmedAudioBuffer: trimmedBuf,
-          renderOptions,
-          onProgress: (p) => onStage?.(`Merakit Stiker 512×512 Bersuara (${p}%)...`, 45 + Math.round(p * 0.35))
-        });
-      }
-
-      if (needWebp) {
-        onStage?.('Membuat versi Stiker WebP 512×512...', 82);
-        const animDur = audioBuffer ? Math.min(5, selectedDuration) : 3.5;
-        webpBlob = await buildWaWebpStickerBlob({
-          sourceMedia,
-          isAnimated: isVideoSource || motionEffect !== 'static',
-          durationSec: animDur,
-          renderOptions,
-          packMeta: { packName, publisher: packPublisher }
-        });
-      }
-
-      if (needAudio && trimmedBuf) {
-        onStage?.('Mengencode Potongan Sound...', 70);
-        audioEnc = await encodeTrimmedAudio(trimmedBuf);
-      }
-
-      return { mp4Blob, webpBlob, audioEnc };
-    },
-    [
-      audioBuffer,
-      startSec,
-      endSec,
-      volume,
-      fadeSmooth,
-      sourceMedia,
-      renderOptions,
-      selectedDuration,
-      isVideoSource,
-      motionEffect,
-      packName,
-      packPublisher
-    ]
-  );
-
+  // ─── KIRIM NATIVE STIKER WA (ZERO VIDEO / ZERO AUDIO MESSAGE) ───
   const handleSendToSelfWa = async () => {
     if (sendProgress.active) return;
     if (!sourceMedia) {
@@ -661,75 +609,68 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
 
     setWaError(null);
-    setLastSendSuccess(null);
-    setSendProgress({ active: true, label: 'Memotong Audio...', percent: 15 });
+    setLastSendResult(null);
+    setSendProgress({ active: true, label: 'Memvalidasi Visual 512×512...', percent: 15 });
 
     try {
-      const { mp4Blob, webpBlob } = await buildOutputAssets({
-        needMp4: true,
-        needWebp: includeFavoriteWebp,
-        onStage: (label, percent) => setSendProgress({ active: true, label, percent })
+      validateSourceMediaDimensions(sourceMedia);
+
+      setSendProgress({
+        active: true,
+        label: `Memotong Audio (${startSec.toFixed(1)}s – ${endSec.toFixed(1)}s)...`,
+        percent: 32
+      });
+      await renderTrimmedAudioBuffer(audioBuffer, {
+        startSec,
+        endSec,
+        volume,
+        fadeSmooth
       });
 
-      if (!mp4Blob || mp4Blob.size > 4.5 * 1024 * 1024) {
-        throw new Error('Ukuran Stiker Suara melebihi 4.5 MB. Perpendek durasi potongan audio.');
-      }
-      if (webpBlob && webpBlob.size > 1.2 * 1024 * 1024) {
-        throw new Error('Versi stiker WebP melebihi batas 1.2 MB.');
+      const willAnimate = isVideoSource || motionEffect !== 'static';
+      setSendProgress({ active: true, label: 'Merakit Stiker 512×512 (WebP + EXIF)...', percent: 55 });
+      const webpBlob = await buildWaWebpStickerBlob({
+        sourceMedia,
+        isAnimated: willAnimate,
+        durationSec: Math.min(5, selectedDuration),
+        renderOptions,
+        packMeta: { packName, publisher: packPublisher },
+        onProgress: (p) => setSendProgress({
+          active: true,
+          label: `Merakit Paket Stiker (${p}%)...`,
+          percent: 55 + Math.round(p * 0.3)
+        })
+      });
+
+      if (!webpBlob || webpBlob.size > 1.4 * 1024 * 1024) {
+        throw new Error('Ukuran paket stiker melebihi batas aman 1.4 MB.');
       }
 
-      setSendProgress({ active: true, label: 'Mengirim ke Chat WA Anda...', percent: 94 });
-      const videoMp4Base64 = await blobToBase64String(mp4Blob);
-      const stickerWebpBase64 = webpBlob ? await blobToBase64String(webpBlob) : '';
+      setSendProgress({ active: true, label: 'Mengirim ke Nomor WA Anda (stickerMessage)...', percent: 92 });
+      const stickerWebpBase64 = await blobToBase64String(webpBlob);
 
       socketRef.current.emit('send-self-sound-sticker', {
         sessionId,
         deviceToken,
-        videoMp4Base64,
         stickerWebpBase64,
-        includeFavoriteWebp: Boolean(includeFavoriteWebp && stickerWebpBase64),
-        caption: stickerText ? `${stickerText.toUpperCase()} — ${packName}` : ''
+        isAnimated: willAnimate,
+        width: 512,
+        height: 512
       });
     } catch (err) {
       setSendProgress({ active: false, label: '', percent: 0 });
-      setWaError(err.message || 'Gagal menyiapkan berkas untuk WA.');
-      onShowToast?.(err.message || 'Gagal menyiapkan stiker suara.', 'error');
+      setWaError(err.message || 'Gagal menyiapkan stiker untuk WhatsApp.');
+      onShowToast?.(err.message || 'Gagal menyiapkan stiker.', 'error');
     }
   };
 
-  const handleLocalDownload = async (kind) => {
-    if (downloadingKey) return;
-    if ((kind === 'mp4' || kind === 'webp') && !sourceMedia) {
-      onShowToast?.('Pilih Foto atau Video terlebih dahulu.', 'error');
+  const handleArmCalibration = () => {
+    if (connectionStatus !== 'connected' || !socketRef.current) {
+      onShowToast?.('Tautkan WhatsApp terlebih dahulu sebelum memulai kalibrasi.', 'error');
       return;
     }
-    if ((kind === 'mp4' || kind === 'audio') && !audioBuffer) {
-      onShowToast?.('Masukkan Audio/Sound terlebih dahulu.', 'error');
-      return;
-    }
-
-    setDownloadingKey(kind);
-    try {
-      const { mp4Blob, webpBlob, audioEnc } = await buildOutputAssets({
-        needMp4: kind === 'mp4',
-        needWebp: kind === 'webp',
-        needAudio: kind === 'audio'
-      });
-
-      const stamp = Date.now();
-      if (kind === 'mp4' && mp4Blob) {
-        downloadBlob(mp4Blob, `kuro_sound_sticker_${stamp}.mp4`);
-      } else if (kind === 'webp' && webpBlob) {
-        downloadBlob(webpBlob, `kuro_sticker_${stamp}.webp`);
-      } else if (kind === 'audio' && audioEnc?.blob) {
-        downloadBlob(audioEnc.blob, `kuro_sound_trim_${stamp}.${audioEnc.ext}`);
-      }
-      onShowToast?.('Berkas berhasil diunduh ke perangkat Anda!', 'success');
-    } catch (err) {
-      onShowToast?.(err.message || 'Gagal mengunduh berkas.', 'error');
-    } finally {
-      setDownloadingKey('');
-    }
+    setDetectedSchema(null);
+    socketRef.current.emit('start-sound-sticker-calibration', { sessionId, deviceToken });
   };
 
   return (
@@ -757,7 +698,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </span>
             </div>
             <p className="text-xs text-neutral-700 font-semibold mt-0.5">
-              Buat stiker kotak 1:1 (512&times;512) bersuara dengan teks meme &amp; potongan detik presisi, lalu kirim langsung ke WA sendiri.
+              Buat Stiker Suara kotak 1:1 (512&times;512) dengan teks meme &amp; potongan detik presisi, cek live chat WA, lalu kirim langsung ke WA Anda.
             </p>
           </div>
         </div>
@@ -773,7 +714,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* ─── KOLOM KIRI: INPUT VISUAL & PEMOTONG SOUND ─── */}
         <div className="lg:col-span-7 space-y-5 min-w-0">
-          {/* LANGKAH 1: VISUAL 512x512 + TEKS MEME */}
+          {/* LANGKAH 1 */}
           <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
               <div className="flex items-center gap-2">
@@ -781,12 +722,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   Langkah 1
                 </span>
                 <h2 className="font-black text-sm uppercase text-black">
-                  Visual Kotak 1:1 &amp; Teks Meme
+                  Visual Stiker Kotak 1:1 &amp; Teks Meme
                 </h2>
               </div>
               {visualFileMeta && (
                 <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black">
-                  {visualFileMeta.kind === 'video' ? 'VIDEO' : 'FOTO'}
+                  {visualFileMeta.kind === 'video' ? 'VIDEO' : 'FOTO'} ({visualFileMeta.width}&times;{visualFileMeta.height})
                 </span>
               )}
             </div>
@@ -804,7 +745,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih Foto (JPG/PNG/WebP) atau Video (MP4/WebM/MOV)'}
               </span>
               <span className="text-[11px] font-semibold text-neutral-600">
-                1:1 Persegi 512&times;512 px &bull; Diproses 100% di perangkat Anda (maks 25 MB)
+                1:1 Persegi 512&times;512 px &bull; Diproses 100% di browser Anda (maks 25 MB)
               </span>
             </button>
             <input
@@ -816,7 +757,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             />
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              {/* Framing 1:1 */}
               <div className="space-y-1.5">
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
                   Framing 1:1:
@@ -843,7 +783,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </div>
               </div>
 
-              {/* Latar Fit / Kotak */}
               <div className="space-y-1.5">
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
                   Latar Belakang Kotak:
@@ -856,7 +795,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   >
                     <option value="solid">Latar Warna Solid</option>
                     <option value="blur">Latar Blur Otomatis (Fit)</option>
-                    <option value="transparent">Transparan (Khusus .webp)</option>
+                    <option value="transparent">Transparan</option>
                   </select>
                   {bgStyle === 'solid' && (
                     <input
@@ -870,7 +809,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </div>
               </div>
 
-              {/* Efek Gerak jika Foto */}
               {!isVideoSource && (
                 <div className="space-y-1.5">
                   <label className="font-black uppercase text-[10px] text-neutral-700 block">
@@ -889,7 +827,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </div>
               )}
 
-              {/* Teks Meme Gaya WA */}
               <div className={`space-y-1.5 ${isVideoSource ? 'sm:col-span-2' : ''}`}>
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
                   Teks Meme Stiker WA (Putih Outline Hitam):
@@ -935,7 +872,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
               <div className="space-y-1">
                 <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Nama Pack Stiker:
+                  Nama Pack WA:
                 </label>
                 <input
                   type="text"
@@ -961,7 +898,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             </div>
           </section>
 
-          {/* LANGKAH 2: AUDIO & PEMOTONG DETIK PRESISI */}
+          {/* LANGKAH 2 */}
           <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
               <div className="flex items-center gap-2">
@@ -1013,7 +950,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               )}
             </div>
 
-            {/* Sakelar 2 Mode: Full Sound vs Atur Detik (Potong) */}
             <div className="grid grid-cols-2 border-2 border-black bg-white">
               <button
                 type="button"
@@ -1039,7 +975,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               <div className="p-2.5 bg-amber-50 border border-black text-[11px] font-semibold flex items-center justify-between gap-2 flex-wrap">
                 <span className="flex items-center gap-1.5">
                   <Info className="w-4 h-4 text-amber-700 shrink-0" />
-                  Audio lebih dari 15 detik. Batasi otomatis 15s agar ringan &amp; cepat dikirim?
+                  Audio lebih dari 15 detik. Batasi otomatis 15s agar stiker ringan &amp; cepat?
                 </span>
                 <label className="flex items-center gap-1.5 font-black cursor-pointer shrink-0">
                   <input
@@ -1057,7 +993,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            {/* Waveform Interaktif */}
             <div className="border-2 border-black bg-neutral-50 overflow-hidden">
               <canvas
                 ref={waveformCanvasRef}
@@ -1186,7 +1121,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           </section>
         </div>
 
-        {/* ─── KOLOM KANAN: LIVE PREVIEW STIKER SUARA WA & KIRIM ─── */}
+        {/* ─── KOLOM KANAN: LIVE PREVIEW & KIRIM KE WA SAYA ─── */}
         <div className="lg:col-span-5 space-y-5 min-w-0">
           <WaSoundStickerPreview
             sourceMedia={sourceMedia}
@@ -1200,7 +1135,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             renderOptions={renderOptions}
           />
 
-          {/* LANGKAH 4: KONEKSI WA PER PERANGKAT & KIRIM / UNDUH */}
+          {/* LANGKAH 4 */}
           <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
               <div className="flex items-center gap-2">
@@ -1208,7 +1143,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   Langkah 4
                 </span>
                 <h3 className="font-black text-xs sm:text-sm uppercase text-black">
-                  Kirim ke WA Saya &amp; Unduh
+                  Kirim Stiker Suara ke WA Saya
                 </h3>
               </div>
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1220,7 +1155,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <div className="flex items-center gap-2 min-w-0">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                     <span className="font-black text-xs text-black truncate">
-                      WA Terhubung &bull; +{connectedPhone} &mdash; Siap Kirim
+                      WA Terhubung &bull; +{connectedPhone}
                     </span>
                   </div>
                   <button
@@ -1233,7 +1168,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </button>
                 </div>
                 <p className="text-[11px] font-semibold text-neutral-700">
-                  Dikirim sebagai 1 objek kotak 1:1 bersuara langsung ke chat Anda sendiri.
+                  Pengiriman terkunci ke nomor WA Anda sendiri via jalur native <code className="font-mono">stickerMessage</code>.
                 </p>
               </div>
             ) : (
@@ -1340,16 +1275,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            <label className="flex items-center justify-between gap-2 px-2.5 py-2 bg-neutral-50 border border-black text-[11px] font-bold cursor-pointer">
-              <span>Sertakan juga versi Stiker .webp untuk simpan ke Favorit WA</span>
-              <input
-                type="checkbox"
-                checked={includeFavoriteWebp}
-                onChange={(e) => setIncludeFavoriteWebp(e.target.checked)}
-                className="w-4 h-4 accent-black cursor-pointer"
-              />
-            </label>
-
             {waError && (
               <div className="p-2.5 bg-rose-100 border-2 border-rose-500 text-rose-950 text-[11px] font-bold flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -1357,10 +1282,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            {lastSendSuccess?.ok && (
-              <div className="p-2.5 bg-emerald-100 border-2 border-black text-emerald-950 text-[11px] font-bold flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                <span>Berhasil Masuk ke WA Anda! Buka chat &ldquo;Pesan Diri Sendiri&rdquo; di WhatsApp.</span>
+            {lastSendResult?.ok && (
+              <div className="p-2.5 bg-emerald-100 border-2 border-black text-emerald-950 text-[11px] font-semibold space-y-1">
+                <div className="font-black flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                  <span>Stiker terkirim ke chat WA Anda sendiri!</span>
+                </div>
+                {lastSendResult.waProtoSupportsAudio === false && (
+                  <p className="text-[10px] text-neutral-800 leading-snug">
+                    Catatan protokol: `@whiskeysockets/baileys@6.7.24` mengirim <code className="font-mono">stickerMessage</code> native tanpa field suara bawaan WAProto. Gunakan kalibrasi di bawah bila ingin menyadap struktur stiker suara asli WA.
+                  </p>
+                )}
               </div>
             )}
 
@@ -1382,6 +1314,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
+            {/* 1 TOMBOL AKSI UTAMA */}
             <button
               type="button"
               onClick={handleSendToSelfWa}
@@ -1392,41 +1325,46 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               <span>Kirim Stiker Suara ke WA Saya</span>
             </button>
 
+            {/* Kalibrasi Skema Stiker Suara Asli WA (Self-Chat Inspector) */}
             <div className="pt-2 border-t-2 border-black space-y-2">
-              <span className="text-[10px] font-black uppercase text-neutral-600 block">
-                Atau Unduh Lokal ke Perangkat Anda (0 Beban Server):
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleLocalDownload('mp4')}
-                  disabled={Boolean(downloadingKey) || !sourceMedia || !audioBuffer}
-                  className="py-2 px-2 bg-white hover:bg-cyan-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 shrink-0" />
-                  <span>{downloadingKey === 'mp4' ? 'Merakit...' : 'Stiker (.mp4)'}</span>
-                </button>
+              <button
+                type="button"
+                onClick={handleArmCalibration}
+                disabled={connectionStatus !== 'connected'}
+                className="w-full py-2 px-3 bg-yellow-100 hover:bg-yellow-200 disabled:opacity-45 border-2 border-black font-black text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Wrench className="w-3.5 h-3.5" />
+                <span>
+                  {calibrationArmed
+                    ? 'Menunggu 1 Contoh Stiker Suara di Chat Anda...'
+                    : 'Kalibrasi dari Contoh Stiker Suara Asli'}
+                </span>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={() => handleLocalDownload('webp')}
-                  disabled={Boolean(downloadingKey) || !sourceMedia}
-                  className="py-2 px-2 bg-white hover:bg-yellow-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 shrink-0" />
-                  <span>{downloadingKey === 'webp' ? 'Memproses...' : 'Stiker (.webp)'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleLocalDownload('audio')}
-                  disabled={Boolean(downloadingKey) || !audioBuffer}
-                  className="py-2 px-2 bg-white hover:bg-emerald-100 disabled:opacity-40 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-[11px] flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 shrink-0" />
-                  <span>{downloadingKey === 'audio' ? 'Memotong...' : 'Sound (.m4a)'}</span>
-                </button>
-              </div>
+              {detectedSchema && (
+                <div className="p-2.5 bg-neutral-50 border-2 border-black space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-black text-[10px] uppercase text-emerald-800">
+                      Skema Stiker Terdeteksi (RAM Inspector):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await copyTextToClipboard(JSON.stringify(detectedSchema, null, 2));
+                        setCopiedSchema(true);
+                        setTimeout(() => setCopiedSchema(false), 1800);
+                      }}
+                      className="px-2 py-0.5 bg-white border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedSchema ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedSchema ? 'Tersalin' : 'Salin Skema'}</span>
+                    </button>
+                  </div>
+                  <pre className="p-2 bg-white border border-black text-[10px] font-mono overflow-x-auto max-h-40">
+                    {JSON.stringify(detectedSchema, null, 2)}
+                  </pre>
+                </div>
+              )}
             </div>
           </section>
         </div>

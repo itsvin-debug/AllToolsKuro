@@ -2,17 +2,24 @@ const baileysModule = require('@whiskeysockets/baileys');
 const { sessions } = require('../state/sessionStore');
 const { verifyDeviceOwner, emitToDevice } = require('../services/deviceAuthService');
 
+const {
+  prepareWAMessageMedia,
+  generateWAMessageFromContent,
+  downloadContentFromMessage,
+  jidNormalizedUser: baileysJidNorm
+} = baileysModule;
+
 const jidNormalizedUser =
-  baileysModule.jidNormalizedUser ||
+  baileysJidNorm ||
   ((jid = '') => {
     const clean = String(jid || '').trim();
     const userPart = clean.split('@')[0].split(':')[0];
     return userPart ? `${userPart}@s.whatsapp.net` : '';
   });
 
-const MAX_VIDEO_BYTES = 5 * 1024 * 1024;
-const MAX_WEBP_BYTES = 1.2 * 1024 * 1024;
+const MAX_STICKER_BYTES = 1.5 * 1024 * 1024;
 const RATE_LIMIT_MS = 4000;
+const CALIBRATION_WINDOW_MS = 120 * 1000;
 
 const lastStickerSendAt = new Map();
 
@@ -42,24 +49,171 @@ function decodeBoundedBase64(rawInput, maxBytes, label) {
   return buf;
 }
 
+function summarizeNonBufferFields(obj) {
+  if (!obj || typeof obj !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === null || v === undefined) continue;
+    if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
+      out[k] = `<Bytes:${v.length}>`;
+    } else if (typeof v === 'object') {
+      if (typeof v.toNumber === 'function') {
+        out[k] = v.toNumber();
+      } else if (k === 'contextInfo') {
+        out[k] = Object.keys(v);
+      } else {
+        out[k] = summarizeNonBufferFields(v);
+      }
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function inspectMagicAndChunks(buf) {
+  if (!buf || buf.length === 0) return { magicHex: '', magicAscii: '', containers: [] };
+  const head = buf.subarray(0, Math.min(32, buf.length));
+  const magicHex = head.toString('hex');
+  const magicAscii = Array.from(head, (b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+
+  const containers = [];
+  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+    let off = 12;
+    while (off + 8 <= buf.length && containers.length < 40) {
+      const fcc = buf.toString('ascii', off, off + 4);
+      const sz = buf.readUInt32LE(off + 4);
+      containers.push(`${fcc}:${sz}`);
+      off += 8 + sz + (sz % 2);
+    }
+  } else if (buf.length >= 12 && buf.toString('ascii', 4, 8) === 'ftyp') {
+    let off = 0;
+    while (off + 8 <= buf.length && containers.length < 40) {
+      const sz = buf.readUInt32BE(off);
+      const box = buf.toString('ascii', off + 4, off + 8);
+      if (sz < 8) break;
+      containers.push(`${box}:${sz}`);
+      off += sz;
+    }
+  }
+
+  return { magicHex, magicAscii, totalBytes: buf.length, containers };
+}
+
+function attachCalibrationListener(io, sessionId, session) {
+  const sock = session?.sock;
+  if (!sock || session._calibrationHookSock === sock) return;
+  session._calibrationHookSock = sock;
+
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    try {
+      const curSession = sessions.get(sessionId);
+      if (!curSession || !curSession.calibrationArmedUntil || Date.now() > curSession.calibrationArmedUntil) {
+        return;
+      }
+      if (!Array.isArray(messages) || messages.length === 0) return;
+
+      const selfJid = curSession.sock?.user?.id ? jidNormalizedUser(curSession.sock.user.id) : '';
+
+      for (const msg of messages) {
+        if (!msg?.message || !msg?.key) continue;
+        const remoteNorm = jidNormalizedUser(msg.key.remoteJid || '');
+        if (!msg.key.fromMe || (selfJid && remoteNorm !== selfJid)) continue;
+
+        const msgKeys = Object.keys(msg.message);
+        const stickerNode = msg.message.stickerMessage || msg.message.lottieStickerMessage?.message?.stickerMessage;
+        const mediaTarget = stickerNode || msg.message.videoMessage || msg.message.documentMessage;
+        if (!stickerNode && !msgKeys.some((k) => k.toLowerCase().includes('sticker'))) {
+          continue;
+        }
+
+        curSession.calibrationArmedUntil = 0;
+
+        let binarySummary = null;
+        if (mediaTarget && typeof downloadContentFromMessage === 'function') {
+          let dlBuf = null;
+          try {
+            const stream = await downloadContentFromMessage(mediaTarget, stickerNode ? 'sticker' : 'document');
+            const chunks = [];
+            let size = 0;
+            for await (const chunk of stream) {
+              if (size < 256 * 1024) chunks.push(chunk);
+              size += chunk.length;
+            }
+            dlBuf = Buffer.concat(chunks);
+            binarySummary = inspectMagicAndChunks(dlBuf);
+          } catch (dlErr) {
+            binarySummary = { error: dlErr.message };
+          } finally {
+            dlBuf = null;
+          }
+        }
+
+        const schemaReport = {
+          capturedAt: Date.now(),
+          baileysVersion: '6.7.24',
+          waProtoHasStickerAudioField: false,
+          messageKeys: msgKeys,
+          stickerFields: summarizeNonBufferFields(stickerNode || msg.message),
+          binarySummary
+        };
+
+        emitToDevice(io, sessionId, 'sound-sticker-schema-detected', schemaReport);
+        break;
+      }
+    } catch (err) {
+      console.warn(`[Calibration ${sessionId}] Error:`, err.message);
+    }
+  });
+}
+
 /**
- * Handler Socket.io Terisolasi & Zero-Disk untuk Stiker Suara Kotak 1:1 (Target Terkunci ke Diri Sendiri)
- * Audit WAProto (@whiskeysockets/baileys@6.7.24):
- * IStickerMessage belum memiliki field audio/sound dan memaksa mimetype 'image/webp'.
- * Pengiriman 1-file kotak 512x512 MP4 bersuara (video 1:1 gifPlayback:false ptv:false) menjaga objek tunggal bersuara di WA.
+ * Handler Socket.io Khusus Stiker Suara WA (Native `stickerMessage` + Kalibrasi Skema Zero-Disk)
+ * DILARANG mengirim videoMessage maupun audioMessage terpisah.
+ *
+ * Hasil Audit WAProto (@whiskeysockets/baileys@6.7.24):
+ * IStickerMessage pada WAProto/index.d.ts hanya memiliki field:
+ * url, fileSha256, fileEncSha256, mediaKey, mimetype, height, width, directPath,
+ * fileLength, mediaKeyTimestamp, firstFrameLength, firstFrameSidecar, isAnimated,
+ * pngThumbnail, contextInfo, stickerSentTs, isAvatar, isAiSticker, isLottie, accessibilityLabel.
+ * Belum ada field audio/sound pada IStickerMessage di versi 6.7.24 ini.
  */
 function registerStickerSenderHandler(io, socket) {
+  socket.on('start-sound-sticker-calibration', (payload) => {
+    try {
+      const { sessionId, deviceToken } = payload || {};
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'connected' || !session.sock?.user?.id) {
+        return emitToDevice(io, sessionId, 'sound-sticker-result', {
+          ok: false,
+          error: 'Hubungkan WhatsApp terlebih dahulu sebelum memulai kalibrasi skema.'
+        });
+      }
+
+      session.calibrationArmedUntil = Date.now() + CALIBRATION_WINDOW_MS;
+      attachCalibrationListener(io, sessionId, session);
+
+      emitToDevice(io, sessionId, 'sound-sticker-calibration-armed', {
+        armedUntil: session.calibrationArmedUntil
+      });
+    } catch (err) {
+      console.error('Error start-sound-sticker-calibration:', err.message);
+    }
+  });
+
   socket.on('send-self-sound-sticker', async (payload) => {
-    let videoBuf = null;
     let stickerBuf = null;
 
     const {
       sessionId,
       deviceToken,
-      videoMp4Base64,
-      stickerWebpBase64 = '',
-      includeFavoriteWebp = false,
-      caption = ''
+      stickerWebpBase64,
+      isAnimated = false,
+      width = 512,
+      height = 512
     } = payload || {};
 
     try {
@@ -70,7 +224,7 @@ function registerStickerSenderHandler(io, socket) {
       if (!session || session.status !== 'connected' || !session.sock || !session.sock.user?.id) {
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
-          error: 'Perangkat WhatsApp belum tertaut aktif. Hubungkan WhatsApp Anda terlebih dahulu.'
+          error: 'Perangkat WhatsApp belum tertaut aktif. Tautkan WhatsApp Anda terlebih dahulu.'
         });
       }
 
@@ -84,7 +238,6 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
 
-      // Target pengiriman terkunci mutlak ke nomor pemilik perangkat sendiri
       const selfJid = jidNormalizedUser(session.sock.user.id);
       if (!selfJid || !selfJid.endsWith('@s.whatsapp.net')) {
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
@@ -93,35 +246,42 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
 
-      const safeCaption = String(caption || '').slice(0, 300).trim();
-      videoBuf = decodeBoundedBase64(videoMp4Base64, MAX_VIDEO_BYTES, 'stiker suara 512x512 MP4');
+      stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_STICKER_BYTES, 'stiker WebP 512x512');
 
-      // Kirim 1 file kotak persegi 512x512 MP4 bersuara (bukan bulat PTV dan bukan Voice Note terpisah)
-      const sentVideoMsg = await session.sock.sendMessage(selfJid, {
-        video: videoBuf,
-        mimetype: 'video/mp4',
-        gifPlayback: false,
-        ptv: false,
-        caption: safeCaption
-      });
-      videoBuf = null;
+      // Kirim murni melalui jalur native `stickerMessage` (prepareWAMessageMedia + generateWAMessageFromContent + relayMessage)
+      const mediaMsg = await prepareWAMessageMedia(
+        {
+          sticker: stickerBuf,
+          mimetype: 'image/webp',
+          isAnimated: Boolean(isAnimated),
+          width: Number(width) || 512,
+          height: Number(height) || 512
+        },
+        {
+          upload: session.sock.waUploadToServer,
+          mediaTypeOverride: 'sticker'
+        }
+      );
+      stickerBuf = null;
 
-      if (includeFavoriteWebp && stickerWebpBase64) {
-        stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_WEBP_BYTES, 'versi stiker WebP');
-        await session.sock.sendMessage(
-          selfJid,
-          { sticker: stickerBuf },
-          sentVideoMsg ? { quoted: sentVideoMsg } : undefined
-        );
-        stickerBuf = null;
+      if (mediaMsg?.stickerMessage) {
+        mediaMsg.stickerMessage.isAnimated = Boolean(isAnimated);
+        mediaMsg.stickerMessage.width = Number(width) || 512;
+        mediaMsg.stickerMessage.height = Number(height) || 512;
+        mediaMsg.stickerMessage.stickerSentTs = Date.now();
       }
+
+      const waMsg = generateWAMessageFromContent(selfJid, mediaMsg, { userJid: selfJid });
+      await session.sock.relayMessage(selfJid, waMsg.message, { messageId: waMsg.key.id });
 
       session.lastActive = Date.now();
       lastStickerSendAt.set(sessionId, Date.now());
 
       emitToDevice(io, sessionId, 'sound-sticker-result', {
         ok: true,
-        deliveryMode: includeFavoriteWebp && stickerWebpBase64 ? 'square-mp4+webp' : 'square-mp4',
+        protocol: 'native-stickerMessage',
+        waProtoSupportsAudio: false,
+        needsSchemaCalibration: true,
         selfJid,
         sentAt: Date.now()
       });
@@ -130,11 +290,10 @@ function registerStickerSenderHandler(io, socket) {
       if (sessionId) {
         emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
-          error: err.message || 'Gagal mengirim stiker suara ke WhatsApp.'
+          error: err.message || 'Gagal mengirim stiker ke WhatsApp.'
         });
       }
     } finally {
-      videoBuf = null;
       stickerBuf = null;
     }
   });
