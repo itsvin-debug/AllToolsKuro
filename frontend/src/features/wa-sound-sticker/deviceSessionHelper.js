@@ -1,3 +1,5 @@
+import { normalizePairingPhone } from '../../shared/utils/waPhoneUtils';
+
 const DB_NAME = 'AllToolsKuro_WaVault';
 const DB_VERSION = 5;
 const DEVICE_AUTH_STORE = 'wa_device_auth';
@@ -15,14 +17,7 @@ export function getWaBackendUrl() {
 }
 
 export function normalizeWaPhone(raw) {
-  if (!raw) return '';
-  let digits = String(raw).replace(/\D/g, '');
-  if (digits.startsWith('0')) {
-    digits = '62' + digits.slice(1);
-  } else if (digits.startsWith('8')) {
-    digits = '62' + digits;
-  }
-  return digits;
+  return normalizePairingPhone(raw);
 }
 
 function generateDeviceId() {

@@ -16,12 +16,18 @@ function getDeviceRoom(sessionId) {
 function normalizePhone(raw) {
   if (!raw) return '';
   let digits = String(raw).replace(/\D/g, '');
-  if (digits.startsWith('0')) {
+  if (digits.startsWith('620')) {
+    digits = '62' + digits.slice(3);
+  } else if (digits.startsWith('0')) {
     digits = '62' + digits.slice(1);
   } else if (digits.startsWith('8')) {
     digits = '62' + digits;
   }
   return digits;
+}
+
+function isValidPairingPhone(digits) {
+  return typeof digits === 'string' && digits.length >= 9 && digits.length <= 15 && /^\d+$/.test(digits);
 }
 
 function argbToHex(argb) {
@@ -52,6 +58,7 @@ module.exports = {
   hashDeviceToken,
   getDeviceRoom,
   normalizePhone,
+  isValidPairingPhone,
   argbToHex,
   withTimeout,
   toCleanBuffer

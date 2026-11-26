@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const { normalizePhone } = require('../utils/common');
+const { normalizePhone, isValidPairingPhone } = require('../utils/common');
 const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir, unpackAuthSnapshot } = require('../utils/authFiles');
 const { sessions, globalMediaDownloadQueue } = require('../state/sessionStore');
 const {
@@ -471,15 +471,37 @@ function registerSocketHandlers(io) {
           }
         }
 
+        if (authMethod === 'pairing') {
+          const cleanPairingPhone = normalizePhone(pairingPhone);
+          if (!isValidPairingPhone(cleanPairingPhone)) {
+            socket.emit('session-error', {
+              message: 'Nomor WA untuk Kode Pairing tidak valid. Gunakan awalan 628xxx atau 08xxx (9–15 digit).'
+            });
+            return;
+          }
+        }
+
+        // Bersihkan folder auth belum terdaftar agar setiap permintaan pairing/QR baru mulai dari key bersih 100%
+        const sessionDir = getSessionDir(sessionId);
+        const alreadyRegistered = isDirRegistered(sessionDir);
+        const shouldCleanAuth = Boolean(forceNew) || !alreadyRegistered;
+
+        if (session?.isInitializing && Date.now() - (session.initStartTime || 0) < 6000 && !forceNew) {
+          socket.emit('session-status', { status: session.status || 'connecting' });
+          return;
+        }
+
         if (authMethod === 'qr') {
           socket.emit('session-status', { status: 'generating_qr', targetNumber: session?.targetNumber || targetNumber || '' });
+        } else {
+          socket.emit('session-status', { status: 'connecting', targetNumber: session?.targetNumber || targetNumber || '' });
         }
 
         session = await startBaileys(
           io,
           sessionId,
           targetNumber,
-          Boolean(forceNew),
+          shouldCleanAuth,
           authMethod,
           pairingPhone,
           Boolean(forceNew),
@@ -510,6 +532,12 @@ function registerSocketHandlers(io) {
             clearTimeout(session.reconnectTimer);
             session.reconnectTimer = null;
           }
+          if (session.pairingTimer) {
+            clearTimeout(session.pairingTimer);
+            session.pairingTimer = null;
+          }
+          session.pairingCode = null;
+          session.pairingCodeRequested = false;
           if (session.authSyncTimer) clearTimeout(session.authSyncTimer);
           if (session.contactsSyncTimer) clearTimeout(session.contactsSyncTimer);
           try {

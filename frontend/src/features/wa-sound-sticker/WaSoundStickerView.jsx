@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { downloadBlob } from '../../shared/utils/fileDownload';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
+import { isValidPairingPhone, formatPairingCodeDisplay } from '../../shared/utils/waPhoneUtils';
 import {
   decodeMediaToAudioBuffer,
   extractWaveformPeaks,
@@ -110,6 +111,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [authMethod, setAuthMethod] = useState('pairing');
   const [pairingPhone, setPairingPhone] = useState(() => getSavedPairingPhone());
   const [pairingCode, setPairingCode] = useState('');
+  const [isRequestingPairing, setIsRequestingPairing] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
   const [waError, setWaError] = useState(null);
@@ -192,22 +194,32 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       const st = data.status || 'disconnected';
       setConnectionStatus(st);
       if (st === 'connected') {
+        setIsRequestingPairing(false);
         setConnectedPhone(data.phone || '');
         setPairingCode('');
         setQrCodeDataUrl('');
         setWaError(null);
         setHasSavedAuth(true);
+      } else if (st === 'pairing_ready' && data.code) {
+        setIsRequestingPairing(false);
+        setPairingCode(String(data.code));
+        setWaError(null);
       } else if (st === 'disconnected') {
+        setIsRequestingPairing(false);
         setConnectedPhone('');
+        setPairingCode('');
         if (data.reason === 'explicit_logout') {
           clearDeviceAuthSnapshotLocal(sessionId);
           setHasSavedAuth(false);
+        } else if (data.reason === 'pairing_expired' && data.message) {
+          setWaError(data.message);
         }
       }
     });
 
     sock.on('pairing-code', (data) => {
       if (unmounted || !data?.code) return;
+      setIsRequestingPairing(false);
       setPairingCode(String(data.code));
       setConnectionStatus('pairing_ready');
       setWaError(null);
@@ -215,6 +227,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     const handleQrPayload = async (data) => {
       if (unmounted) return;
+      setIsRequestingPairing(false);
       if (data?.qrDataUrl) {
         setQrCodeDataUrl(data.qrDataUrl);
         setConnectionStatus('qr_ready');
@@ -242,6 +255,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     sock.on('session-error', (data) => {
       if (unmounted) return;
+      setIsRequestingPairing(false);
       setWaError(data?.message || 'Terjadi gangguan pada koneksi WhatsApp.');
       setSendProgress({ active: false, label: '', percent: 0 });
     });
@@ -525,13 +539,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     setWaError(null);
     if (method === 'pairing') {
+      if (isRequestingPairing) return;
       const clean = normalizeWaPhone(pairingPhone);
-      if (clean.length < 9 || clean.length > 16) {
-        onShowToast?.('Masukkan nomor WA valid diawali 628xxx atau 08xxx.', 'error');
+      if (!isValidPairingPhone(clean)) {
+        onShowToast?.('Masukkan nomor WA valid diawali 628xxx atau 08xxx (9–15 digit).', 'error');
         return;
       }
       setSavedPairingPhone(clean);
-      setConnectionStatus('pairing_ready');
+      setIsRequestingPairing(true);
+      setPairingCode('');
+      setConnectionStatus('connecting');
       sock.emit('start-session', {
         sessionId,
         deviceToken,
@@ -540,6 +557,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         forceNew: true
       });
     } else {
+      setIsRequestingPairing(false);
       setQrCodeDataUrl('');
       setConnectionStatus('generating_qr');
       sock.emit('start-session', {
@@ -1265,28 +1283,41 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       <button
                         type="button"
                         onClick={() => handleStartPairing('pairing')}
-                        className="px-3 py-2 bg-yellow-300 hover:bg-yellow-400 border-2 border-black font-black text-xs cursor-pointer shrink-0"
+                        disabled={isRequestingPairing || !socketConnected}
+                        className="px-3 py-2 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 border-2 border-black font-black text-xs cursor-pointer shrink-0 flex items-center gap-1"
                       >
-                        Minta Kode
+                        {isRequestingPairing ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Meminta...</span>
+                          </>
+                        ) : (
+                          <span>Minta Kode</span>
+                        )}
                       </button>
                     </div>
                     {pairingCode && (
-                      <div className="p-2.5 bg-white border-2 border-black flex items-center justify-between gap-2">
-                        <span className="font-mono font-black text-base tracking-widest text-black">
-                          {pairingCode}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await copyTextToClipboard(pairingCode);
-                            setCopiedCode(true);
-                            setTimeout(() => setCopiedCode(false), 1800);
-                          }}
-                          className="px-2 py-1 bg-neutral-100 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
-                        >
-                          {copiedCode ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
-                          <span>{copiedCode ? 'Tersalin' : 'Salin'}</span>
-                        </button>
+                      <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2">
+                        <div className="flex items-center justify-between gap-2 bg-white border-2 border-black px-2.5 py-2">
+                          <span className="font-mono font-black text-lg tracking-widest text-black select-all">
+                            {formatPairingCodeDisplay(pairingCode)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await copyTextToClipboard(pairingCode);
+                              setCopiedCode(true);
+                              setTimeout(() => setCopiedCode(false), 1800);
+                            }}
+                            className="px-2 py-1 bg-emerald-300 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                          >
+                            {copiedCode ? <Check className="w-3 h-3 text-emerald-900" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedCode ? 'Tersalin' : 'Salin'}</span>
+                          </button>
+                        </div>
+                        <p className="text-[10px] font-semibold text-neutral-700 leading-snug">
+                          Buka WhatsApp HP &gt; <b>Perangkat Tertaut</b> &gt; <b>Tautkan Perangkat</b> &gt; <b>Tautkan dengan nomor telepon saja</b>, lalu ketik 8 karakter di atas.
+                        </p>
                       </div>
                     )}
                   </div>

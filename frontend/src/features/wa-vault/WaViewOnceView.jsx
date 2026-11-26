@@ -4,6 +4,11 @@ import QRCode from 'qrcode';
 import { downloadBase64 } from '../../shared/utils/fileDownload';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import {
+  normalizePairingPhone,
+  isValidPairingPhone,
+  formatPairingCodeDisplay
+} from '../../shared/utils/waPhoneUtils';
+import {
   ArrowLeft,
   ShieldCheck,
   QrCode,
@@ -101,14 +106,7 @@ const safeText = (val) => {
 
 // Helper normalisasi nomor WA ke format digit standar WhatsApp (628xxx)
 function normalizePhone(raw) {
-  if (!raw) return '';
-  let digits = String(raw).replace(/\D/g, '');
-  if (digits.startsWith('0')) {
-    digits = '62' + digits.slice(1);
-  } else if (digits.startsWith('8')) {
-    digits = '62' + digits;
-  }
-  return digits;
+  return normalizePairingPhone(raw);
 }
 
 function normalizeAccountKey(rawJid = '', phone = '') {
@@ -215,6 +213,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     return localStorage.getItem(STORAGE_PAIRING_PHONE) || '';
   });
   const [pairingCode, setPairingCode] = useState('');
+  const [isRequestingPairing, setIsRequestingPairing] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
   // Status pembuatan QR & Watchdog Timeout 15 Detik
@@ -597,6 +596,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
       if (status === 'connected') {
         clearQrWatchdog();
+        setIsRequestingPairing(false);
         setQrCodeDataUrl(null);
         setPairingCode('');
         setBackendError(null);
@@ -617,6 +617,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
         activeOwnerScopeRef.current = '';
       } else if (status === 'disconnected') {
         clearQrWatchdog();
+        setIsRequestingPairing(false);
         setQrCodeDataUrl(null);
         setPairingCode('');
         setConnectedPhone(null);
@@ -635,6 +636,10 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           setConfirmLogout(false);
           await clearAuthSnapshotOnly(deviceIdRef.current);
           triggerToast(message || 'Sesi WhatsApp dikeluarkan dari perangkat.', 'info');
+        } else if (reason === 'pairing_expired' || reason === 'pairing_request_failed') {
+          hasSavedAuthRef.current = false;
+          setHasSavedAuth(false);
+          if (message) triggerToast(message, 'info');
         } else if (reason === 'no_saved_auth') {
           hasSavedAuthRef.current = false;
           setHasSavedAuth(false);
@@ -648,6 +653,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     socket.on('logged_out', async (payload) => {
       clearQrWatchdog();
+      setIsRequestingPairing(false);
       hasSavedAuthRef.current = false;
       setHasSavedAuth(false);
       setConfirmLogout(false);
@@ -665,6 +671,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
       const code = safeText(payload?.code);
       if (code) {
         clearQrWatchdog();
+        setIsRequestingPairing(false);
         setPairingCode(code);
         setConnectionStatus('pairing_ready');
         setBackendError(null);
@@ -714,6 +721,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
 
     socket.on('session-error', (payload) => {
       clearQrWatchdog();
+      setIsRequestingPairing(false);
       const message = safeText(payload?.message) || 'Terjadi kendala pada sesi WhatsApp.';
       setBackendError(message);
       triggerToast(message, 'error');
@@ -861,20 +869,22 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
     });
   }
 
-  // Mulai Sesi WhatsApp
+  // Mulai Sesi WhatsApp (Selalu paksa key bersih saat meminta pairing/QR baru)
   const handleStartSession = (method = authMethod, forceNew = false) => {
     if (!socketRef.current || !socketRef.current.connected) {
       initSocketConnection();
     }
 
     if (method === 'pairing') {
+      if (isRequestingPairing) return;
       clearQrWatchdog();
-      const cleanPhone = normalizePhone(pairingPhone);
-      if (!cleanPhone || cleanPhone.length < 9) {
-        triggerToast('Masukkan nomor HP WhatsApp Anda yang valid (minimal 9 digit).', 'error');
+      const cleanPhone = normalizePairingPhone(pairingPhone);
+      if (!isValidPairingPhone(cleanPhone)) {
+        triggerToast('Masukkan nomor HP WhatsApp Anda yang valid (diawali 628xxx atau 08xxx, 9–15 digit).', 'error');
         return;
       }
       localStorage.setItem(STORAGE_PAIRING_PHONE, cleanPhone);
+      setIsRequestingPairing(true);
       setConnectionStatus('connecting');
       setBackendError(null);
       setPairingCode('');
@@ -886,11 +896,12 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           targetNumber: lockedTargetRef.current,
           authMethod: 'pairing',
           pairingPhone: cleanPhone,
-          forceNew
+          forceNew: true
         }));
       }
     } else {
       startQrWatchdog();
+      setIsRequestingPairing(false);
       setConnectionStatus('generating_qr');
       setBackendError(null);
       setQrCodeDataUrl(null);
@@ -901,7 +912,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
           swMode,
           targetNumber: lockedTargetRef.current,
           authMethod: 'qr',
-          forceNew
+          forceNew: Boolean(forceNew || true)
         }));
       }
     }
@@ -1535,9 +1546,7 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                           </span>
                           <div className="p-3 bg-white border-2 border-black rounded-xl shadow-[3px_3px_0px_#000] flex items-center justify-center gap-3">
                             <span className="font-mono text-2xl md:text-3xl font-black tracking-widest text-neutral-900 select-all">
-                              {pairingCode.length === 8
-                                ? `${pairingCode.slice(0, 4)}-${pairingCode.slice(4)}`
-                                : pairingCode}
+                              {formatPairingCodeDisplay(pairingCode)}
                             </span>
                             <button
                               type="button"
@@ -1592,11 +1601,11 @@ export default function WaViewOnceView({ onBack, onShowToast }) {
                             />
                             <button
                               type="button"
-                              onClick={() => handleStartSession('pairing')}
-                              disabled={connectionStatus === 'connecting' && !socketConnected}
+                              onClick={() => handleStartSession('pairing', true)}
+                              disabled={isRequestingPairing || (connectionStatus === 'connecting' && !socketConnected)}
                               className="w-full sm:w-auto justify-center px-4 py-2.5 sm:py-2 bg-emerald-400 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000] hover:bg-emerald-300 active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer"
                             >
-                              {connectionStatus === 'connecting' && !socketConnected ? (
+                              {isRequestingPairing || (connectionStatus === 'connecting' && !socketConnected) ? (
                                 <>
                                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                                   <span>Meminta...</span>

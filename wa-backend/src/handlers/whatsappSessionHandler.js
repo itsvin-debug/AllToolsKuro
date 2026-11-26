@@ -112,6 +112,7 @@ async function startBaileys(
       authSyncTimer: null,
       contactsSyncTimer: null,
       reconnectTimer: null,
+      pairingTimer: null,
       reconnectAttempt: 0,
       isInitializing: true,
       initStartTime: now,
@@ -128,8 +129,14 @@ async function startBaileys(
     if (monitorMode) session.monitorMode = monitorMode;
     if (swMode) session.swMode = swMode;
     if (pairingPhone) session.pairingPhone = normalizePhone(pairingPhone);
-    session.pairingCode = null;
-    session.pairingCodeRequested = false;
+    if (cleanAuth || forceNew) {
+      session.pairingCode = null;
+      session.pairingCodeRequested = false;
+    }
+    if (session.pairingTimer) {
+      clearTimeout(session.pairingTimer);
+      session.pairingTimer = null;
+    }
     if (session.reconnectTimer) {
       clearTimeout(session.reconnectTimer);
       session.reconnectTimer = null;
@@ -330,32 +337,46 @@ async function startBaileys(
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
+      // Tunggu event `qr` (tanda Noise handshake & pair-device IQ siap 100%) sebelum requestPairingCode, dan panggil HANYA 1x per sesi pairing
       if (
+        qr &&
         !sock.authState.creds.registered &&
         session.authMethod === 'pairing' &&
         session.pairingPhone &&
         !session.pairingCodeRequested
       ) {
         session.pairingCodeRequested = true;
-        setTimeout(async () => {
+        if (session.pairingTimer) clearTimeout(session.pairingTimer);
+        session.pairingTimer = setTimeout(async () => {
+          session.pairingTimer = null;
           try {
-            if (session.sock && !session.sock.authState.creds.registered) {
-              const code = await session.sock.requestPairingCode(session.pairingPhone);
+            if (session.sock === sock && !sock.authState.creds.registered) {
+              const rawCode = await sock.requestPairingCode(session.pairingPhone);
+              const code = String(rawCode || '').trim();
+              if (!code) throw new Error('Server WhatsApp mengembalikan kode pairing kosong.');
               session.pairingCode = code;
               session.status = 'pairing_ready';
               session.isInitializing = false;
               session.lastActive = Date.now();
               emitToDevice(io, sessionId, 'pairing-code', { code });
               emitToDevice(io, sessionId, 'session-status', { status: 'pairing_ready', code });
-              console.log(`[WA-VAULT][PAIRING-CODE] Sesi ${sessionId} kode: ${code}`);
+              console.log(`[WA-VAULT][PAIRING-CODE] Sesi ${sessionId} kode diterbitkan untuk ${session.pairingPhone}`);
             }
           } catch (err) {
             console.error(`[WA-VAULT][PAIRING-CODE-ERR] Sesi ${sessionId}:`, err.message);
             session.pairingCodeRequested = false;
+            session.pairingCode = null;
             session.isInitializing = false;
-            emitToDevice(io, sessionId, 'session-error', { message: 'Gagal membuat kode pairing: ' + err.message });
+            session.status = 'disconnected';
+            emitToDevice(io, sessionId, 'session-error', {
+              message: 'Gagal membuat kode pairing WhatsApp: ' + err.message
+            });
+            emitToDevice(io, sessionId, 'session-status', {
+              status: 'disconnected',
+              reason: 'pairing_request_failed'
+            });
           }
-        }, 2000);
+        }, 250);
       }
 
       if (qr && session.authMethod !== 'pairing') {
@@ -441,6 +462,10 @@ async function startBaileys(
 
       if (connection === 'close') {
         session.isInitializing = false;
+        if (session.pairingTimer) {
+          clearTimeout(session.pairingTimer);
+          session.pairingTimer = null;
+        }
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const isRestartRequired = statusCode === 515 || statusCode === DisconnectReason.restartRequired;
         const wasRegistered = Boolean(sock.authState?.creds?.registered) || isDirRegistered(sessionDir);
@@ -467,8 +492,19 @@ async function startBaileys(
             message: 'Perangkat diputuskan dari menu Perangkat Tertaut di WhatsApp HP.'
           });
           emitToDevice(io, sessionId, 'status', { status: 'disconnected', reason: 'unlinked_from_phone' });
+        } else if (!wasRegistered && session.authMethod === 'pairing' && session.pairingCode && !isRestartRequired) {
+          // Jangan pernah menimpa kode pairing aktif dengan kode baru diam-diam saat timeout/putus sementara
+          session.pairingCode = null;
+          session.pairingCodeRequested = false;
+          session.status = 'disconnected';
+          removeSessionDir(sessionId);
+          emitToDevice(io, sessionId, 'session-status', {
+            status: 'disconnected',
+            reason: 'pairing_expired',
+            message: 'Waktu tunggu kode pairing habis atau koneksi terputus. Klik "Minta Kode" untuk mendapatkan kode baru.'
+          });
         } else {
-          // Putus jaringan sementara (515, 503, 408, connectionClosed/Lost/timedOut) -> DILARANG hapus folder auth!
+          // Putus jaringan sementara atau 515 restartRequired -> DILARANG hapus folder auth!
           const backoffDelays = [2000, 5000, 10000];
           const delayMs = isRestartRequired
             ? 350
@@ -479,7 +515,7 @@ async function startBaileys(
           emitToDevice(io, sessionId, 'session-status', {
             status: session.status,
             statusCode,
-            message: 'Menyambungkan ulang otomatis...'
+            message: isRestartRequired ? 'Menyelesaikan penautan WhatsApp (515)...' : 'Menyambungkan ulang otomatis...'
           });
           emitToDevice(io, sessionId, 'status', { status: session.status });
 
