@@ -13,7 +13,10 @@ const {
   BAILEYS_VERSION,
   getGlobalSoundStickerSpec,
   promoteVerifiedBlueprintToGlobalSpec,
-  validateStickerMediaPayload
+  validateStickerMediaPayload,
+  isCalibrated,
+  getBlueprint,
+  getSummary
 } = require('../config/soundStickerSpec');
 const {
   rememberSentMessage,
@@ -456,6 +459,15 @@ function sanitizeBlueprint(raw) {
   return {
     capturedAt: Number(raw.capturedAt) || Date.now(),
     baileysVersion: typeof raw.baileysVersion === 'string' ? raw.baileysVersion.slice(0, 24) : BAILEYS_VERSION,
+    source: typeof raw.source === 'string' ? raw.source.slice(0, 32) : undefined,
+    stanzaMeta: raw.stanzaMeta && typeof raw.stanzaMeta === 'object'
+      ? {
+          type: String(raw.stanzaMeta.type || '').slice(0, 32),
+          mediatype: String(raw.stanzaMeta.mediatype || '').slice(0, 32),
+          childTags: Array.isArray(raw.stanzaMeta.childTags) ? raw.stanzaMeta.childTags.slice(0, 12).map(String) : [],
+          at: Number(raw.stanzaMeta.at) || undefined
+        }
+      : null,
     topLevelKeys: topKeys,
     wrapperChain: Array.isArray(raw.wrapperChain) ? raw.wrapperChain.slice(0, 8).map(String) : [],
     messageType,
@@ -690,20 +702,34 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         ? innerKeys
         : (msg.messageStubType ? [`stub:${msg.messageStubType}`] : ['empty-message']);
 
-      // Saat mode deteksi aktif, log SEMUA pesan masuk (notify/append, fromMe true/false, self-chat/bot/grup)
-      if (isArmed) {
+      const passiveUncalibrated = !isCalibrated();
+      // Saat mode deteksi aktif atau server belum terkalibrasi, log semua pesan masuk non-web-outgoing
+      if (isArmed || passiveUncalibrated) {
+        const textPreview = String(
+          innerMessage?.conversation || innerMessage?.extendedTextMessage?.text || ''
+        )
+          .trim()
+          .replace(/\s+/g, ' ')
+          .slice(0, 24);
+        const detail = textPreview
+          ? `Teks masuk: "${textPreview}"`
+          : msg.messageStubType
+            ? `Stub E2EE #${msg.messageStubType}`
+            : `${displayKeys.join(', ')} (${type || 'notify'})`;
         pushCalibrationLog(io, sessionId, curSession, {
           upsertType: type || 'notify',
           remoteJid: remoteRaw || participantRaw,
           fromMe: Boolean(msg.key.fromMe),
           wrapperChain,
           keys: displayKeys,
-          stubType: msg.messageStubType || null
+          stubType: msg.messageStubType || null,
+          passive: !isArmed,
+          detail
         });
       }
 
       if (!innerMessage || typeof innerMessage !== 'object') continue;
-      if (!isArmed && !isSelfOwner) continue;
+      if (!isArmed && !isSelfOwner && !passiveUncalibrated) continue;
 
       const dynamicMedia = scanDynamicMediaNode(innerMessage);
       const stickerNode =
@@ -825,6 +851,15 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       const rawBlueprint = {
         capturedAt: Date.now(),
         baileysVersion: BAILEYS_VERSION,
+        source: isArmed ? 'armed-capture' : 'passive-auto-capture',
+        stanzaMeta: lastCb
+          ? {
+              type: lastCb.type || '',
+              mediatype: lastCb.mediatype || '',
+              childTags: Array.isArray(lastCb.childTags) ? lastCb.childTags : [],
+              at: lastCb.at || Date.now()
+            }
+          : null,
         upsertType: type || 'notify',
         wrapperChain,
         topLevelKeys: innerKeys,
@@ -1574,11 +1609,38 @@ function emitSessionDiagnosticsReplay(socket, session) {
     });
   }
   if (Array.isArray(session.calibrationLogs) && session.calibrationLogs.length > 0) {
-    socket.emit('sound-sticker-calibration-history', session.calibrationLogs.slice(-20));
+    socket.emit('sound-sticker-calibration-history', session.calibrationLogs.slice(-25));
   }
   if (Array.isArray(session.deliveryTraces) && session.deliveryTraces.length > 0) {
-    socket.emit('sound-sticker-delivery-trace-history', session.deliveryTraces.slice(-20));
+    socket.emit('sound-sticker-delivery-trace-history', session.deliveryTraces.slice(-25));
   }
+}
+
+function buildCalibrationStatePayload(session) {
+  const armed = Boolean(
+    session?.calibratingSoundSticker &&
+      (!session.calibrationArmedUntil || Date.now() <= session.calibrationArmedUntil)
+  );
+  if (session?.calibratingSoundSticker && !armed) {
+    session.calibratingSoundSticker = false;
+    session.calibrationArmedUntil = 0;
+    syncCalibrationProtoObserver();
+  }
+  const linkedPhone = session?.phone || (session?.sock?.user?.id ? String(session.sock.user.id).split('@')[0].split(':')[0] : '');
+  const linkedLid = session?.sock?.user?.lid || session?.accountLid || null;
+  return {
+    ok: true,
+    connected: session?.status === 'connected',
+    calibrating: armed,
+    armedUntil: armed ? session.calibrationArmedUntil : 0,
+    linkedPhone: linkedPhone || '',
+    linkedLid,
+    baileysVersion: BAILEYS_VERSION,
+    logs: Array.isArray(session?.calibrationLogs) ? session.calibrationLogs.slice(-25) : [],
+    blueprint: session?.soundStickerBlueprint || getBlueprint() || null,
+    globalSpec: getSummary(),
+    serverTime: Date.now()
+  };
 }
 
 function registerStickerSenderHandler(io, socket) {
@@ -1615,12 +1677,24 @@ function registerStickerSenderHandler(io, socket) {
       attachCalibrationListener(io, sessionId, session);
       syncCalibrationProtoObserver();
 
+      const linkedPhone = session.phone || String(session.sock.user.id).split('@')[0].split(':')[0];
+      const linkedLid = session.sock?.user?.lid || null;
+
       emitToDevice(io, sessionId, 'sound-sticker-calibration-armed', {
         sessionId,
-        linkedPhone: session.phone || String(session.sock.user.id).split('@')[0].split(':')[0],
-        linkedLid: session.sock?.user?.lid || null,
+        linkedPhone,
+        linkedLid,
         baileysVersion: BAILEYS_VERSION,
         armedUntil: session.calibrationArmedUntil
+      });
+
+      pushCalibrationLog(io, sessionId, session, {
+        upsertType: 'armed',
+        remoteJid: `${linkedPhone}@s.whatsapp.net`,
+        fromMe: false,
+        wrapperChain: ['listener-ready'],
+        keys: [linkedPhone, linkedLid ? String(linkedLid).split('@')[0] : 'no-lid'],
+        detail: `Siap menyadap di +${linkedPhone} — teruskan 1 stiker audio dari HP lalu kembali ke tab ini`
       });
     } catch (err) {
       console.error('Error start-sound-sticker-calibration:', err.message);
@@ -1893,6 +1967,7 @@ module.exports = {
   registerStickerSenderHandler,
   attachCalibrationListener,
   emitSessionDiagnosticsReplay,
+  buildCalibrationStatePayload,
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,

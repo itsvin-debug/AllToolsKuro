@@ -182,6 +182,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const e2eeResetTimerRef = useRef(null);
   const e2eeTestTimerRef = useRef(null);
   const plainStickerTestTimerRef = useRef(null);
+  const lastSyncPullAtRef = useRef(0);
 
   const [socketConnected, setSocketConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
@@ -205,6 +206,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [calibrationArmed, setCalibrationArmed] = useState(false);
   const [calibrationMeta, setCalibrationMeta] = useState(null);
   const [calibrationLogs, setCalibrationLogs] = useState([]);
+  const [isSyncingCalibration, setIsSyncingCalibration] = useState(false);
   const [deliveryTraces, setDeliveryTraces] = useState([]);
   const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
     try {
@@ -270,6 +272,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         authSnapshot: snapshot || undefined
       });
       sock.emit('get-sound-sticker-spec', { sessionId, deviceToken });
+      sock.emit('sync-calibration-state', { sessionId, deviceToken });
       try {
         const storedBp =
           localStorage.getItem('kuro_global_sound_sticker_blueprint_v2') ||
@@ -396,12 +399,43 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     sock.on('sound-sticker-calibration-log', (entry) => {
       if (unmounted || !entry) return;
-      setCalibrationLogs((prev) => [...prev.slice(-19), entry]);
+      setCalibrationLogs((prev) => [...prev.slice(-24), entry]);
     });
 
     sock.on('sound-sticker-calibration-history', (items) => {
       if (unmounted || !Array.isArray(items) || items.length === 0) return;
-      setCalibrationLogs(items.slice(-20));
+      setCalibrationLogs(items.slice(-25));
+    });
+
+    sock.on('calibration-state-sync', (state) => {
+      if (unmounted || !state) return;
+      setIsSyncingCalibration(false);
+      if (state.globalSpec && typeof state.globalSpec === 'object') {
+        setGlobalSpec(state.globalSpec);
+      }
+      setCalibrationArmed(Boolean(state.calibrating));
+      if (state.linkedPhone || state.linkedLid || state.armedUntil) {
+        setCalibrationMeta((prev) => ({
+          ...(prev || {}),
+          linkedPhone: state.linkedPhone || prev?.linkedPhone || '',
+          linkedLid: state.linkedLid || prev?.linkedLid || null,
+          baileysVersion: state.baileysVersion || prev?.baileysVersion,
+          armedUntil: state.armedUntil || 0
+        }));
+      }
+      if (Array.isArray(state.logs)) {
+        setCalibrationLogs(state.logs.slice(-25));
+      }
+      if (state.blueprint && typeof state.blueprint === 'object') {
+        setSoundStickerBlueprint(state.blueprint);
+        try {
+          const serialized = JSON.stringify(state.blueprint);
+          localStorage.setItem('kuro_global_sound_sticker_blueprint_v2', serialized);
+          if (sessionId) {
+            localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, serialized);
+          }
+        } catch {}
+      }
     });
 
     sock.on('sound-sticker-delivery-trace', (trace) => {
@@ -538,8 +572,35 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       }
     });
 
+    const pullCalibrationStateOnReturn = () => {
+      if (unmounted) return;
+      const now = Date.now();
+      if (now - lastSyncPullAtRef.current < 1200) return;
+      lastSyncPullAtRef.current = now;
+      if (!sock.connected) {
+        sock.connect();
+        return;
+      }
+      sock.emit('sync-calibration-state', { sessionId, deviceToken });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        pullCalibrationStateOnReturn();
+      }
+    };
+
+    const handleWindowFocus = () => {
+      pullCalibrationStateOnReturn();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+
     return () => {
       unmounted = true;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
       if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
       if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
       if (plainStickerTestTimerRef.current) clearTimeout(plainStickerTestTimerRef.current);
@@ -1219,6 +1280,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
     setCalibrationLogs([]);
     socketRef.current.emit('start-sound-sticker-calibration', { sessionId, deviceToken });
+  };
+
+  const handleSyncCalibrationState = () => {
+    if (!socketRef.current) return;
+    setIsSyncingCalibration(true);
+    if (!socketRef.current.connected) {
+      socketRef.current.connect();
+    } else {
+      socketRef.current.emit('sync-calibration-state', { sessionId, deviceToken });
+    }
+    setTimeout(() => setIsSyncingCalibration(false), 3500);
   };
 
   const handleRefreshE2ee = () => {
@@ -2348,44 +2420,63 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       ? `Aktif Mendengarkan di +${calibrationMeta?.linkedPhone || connectedPhone} — Teruskan 1 Stiker Audio Sekarang!`
                       : "Teruskan 1 contoh stiker suara dari bot/chat ke 'Pesan Diri Sendiri' Anda — web menyalin format aslinya otomatis!"}
                   </p>
-                  <button
-                    type="button"
-                    onClick={handleArmCalibration}
-                    disabled={connectionStatus !== 'connected'}
-                    className={`w-full py-2 px-3 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] ${
-                      calibrationArmed ? 'bg-emerald-300 text-black' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
-                    }`}
-                  >
-                    {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" /> : <Wrench className="w-3.5 h-3.5 shrink-0" />}
-                    <span>
-                      {calibrationArmed
-                        ? 'Aktif Mendengarkan — Teruskan 1 Stiker Audio Sekarang!'
-                        : 'Mulai Deteksi Format'}
-                    </span>
-                  </button>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      onClick={handleArmCalibration}
+                      disabled={connectionStatus !== 'connected'}
+                      className={`flex-1 py-2 px-3 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px] ${
+                        calibrationArmed ? 'bg-emerald-300 text-black' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
+                      }`}
+                    >
+                      {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" /> : <Wrench className="w-3.5 h-3.5 shrink-0" />}
+                      <span>
+                        {calibrationArmed
+                          ? 'Aktif Mendengarkan — Teruskan 1 Stiker Audio Sekarang!'
+                          : 'Mulai Deteksi Format'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSyncCalibrationState}
+                      disabled={connectionStatus !== 'connected' || isSyncingCalibration}
+                      className="sm:w-auto py-2 px-3 bg-white hover:bg-neutral-100 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs text-black flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncingCalibration ? 'animate-spin' : ''}`} />
+                      <span>Tarik Log &amp; Cek Hasil</span>
+                    </button>
+                  </div>
 
                   {calibrationArmed && (
                     <p className="text-[11px] font-semibold text-emerald-900 bg-emerald-50 border border-black px-2 py-1.5 leading-snug">
-                      Kirim pesan apa saja atau teruskan 1 stiker audio (boleh di Pesan Diri Sendiri atau langsung dari chat bot <code className="font-mono">.stikeraudio</code>) &mdash; log akan langsung bergerak di bawah.
+                      Kirim pesan apa saja atau teruskan 1 stiker audio (boleh di Pesan Diri Sendiri atau langsung dari chat bot <code className="font-mono">.stikeraudio</code>) &mdash; saat kembali dari WA, log otomatis ditarik di bawah.
                     </p>
                   )}
 
-                  {(calibrationArmed || calibrationLogs.length > 0) && (
+                  {(calibrationArmed || calibrationLogs.length > 0 || connectionStatus === 'connected') && (
                     <div className="p-2 bg-white border border-black space-y-1 text-[10px] font-mono">
-                      <div className="font-black uppercase text-neutral-600">
-                        Log Aktivitas Masuk (Real-Time):
+                      <div className="font-black uppercase text-neutral-600 flex items-center justify-between gap-2">
+                        <span>Log Aktivitas Masuk (Real-Time):</span>
+                        <span className="text-[9px] font-bold text-neutral-500">{calibrationLogs.length}/25</span>
                       </div>
                       {calibrationLogs.length === 0 ? (
                         <div className="text-neutral-500">
-                          Menunggu pesan masuk dari HP Anda (notify / append / LID)...
+                          Menunggu pesan masuk dari HP Anda (notify / append / LID / WS stanza)...
                         </div>
                       ) : (
                         calibrationLogs.map((item, idx) => (
-                          <div key={`${item.at}-${idx}`} className="text-neutral-800 truncate">
-                            [{item.upsertType}] fromMe={String(Boolean(item.fromMe))}{' '}
-                            {item.remoteJid ? `${String(item.remoteJid).split('@')[0].slice(-8)} ` : ''}
-                            {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} ` : ''}
-                            keys={(item.keys || []).join(',') || 'raw-wire'}
+                          <div key={`${item.at}-${idx}`} className="text-neutral-800 break-words leading-snug border-t border-neutral-100 pt-1 first:border-t-0 first:pt-0">
+                            <span className="font-bold">[{item.upsertType}]</span>{' '}
+                            {item.detail ? (
+                              <span>{item.detail}</span>
+                            ) : (
+                              <span>
+                                fromMe={String(Boolean(item.fromMe))}{' '}
+                                {item.remoteJid ? `${String(item.remoteJid).split('@')[0].slice(-8)} ` : ''}
+                                {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} ` : ''}
+                                keys={(item.keys || []).join(',') || 'raw-wire'}
+                              </span>
+                            )}
                           </div>
                         ))
                       )}

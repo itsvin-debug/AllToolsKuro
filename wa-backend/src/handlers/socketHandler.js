@@ -17,7 +17,12 @@ const {
 const { buildVaultPayload, downloadMediaStreamBuffer } = require('../services/vaultService');
 const { startBaileys, syncCalibrationProtoObserver } = require('./whatsappSessionHandler');
 const { getGlobalSoundStickerSpec } = require('../config/soundStickerSpec');
-const { registerStickerSenderHandler, attachCalibrationListener, emitSessionDiagnosticsReplay } = require('./stickerSenderHandler');
+const {
+  registerStickerSenderHandler,
+  attachCalibrationListener,
+  emitSessionDiagnosticsReplay,
+  buildCalibrationStatePayload
+} = require('./stickerSenderHandler');
 
 function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
@@ -525,6 +530,19 @@ function registerSocketHandlers(io) {
       } catch (err) {
         console.error('Error start-session:', err.message);
         socket.emit('session-error', { message: 'Gagal menginisialisasi WhatsApp: ' + err.message });
+      }
+    });
+
+    socket.on('sync-calibration-state', (payload) => {
+      try {
+        const { sessionId, deviceToken } = payload || {};
+        const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+        if (!tokenHash) return;
+        joinExclusiveDeviceRoom(socket, sessionId);
+        const session = sessions.get(sessionId);
+        socket.emit('calibration-state-sync', buildCalibrationStatePayload(session));
+      } catch (err) {
+        console.error('Error sync-calibration-state:', err.message);
       }
     });
 

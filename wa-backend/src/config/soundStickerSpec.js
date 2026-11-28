@@ -113,6 +113,8 @@ function getGlobalSoundStickerSpec() {
   };
 }
 
+let activeBlueprintSnapshot = null;
+
 /**
  * Promosikan struktur protokol anonim hasil deteksi ke spec global (mendukung Jalur A, B, C, dan D).
  */
@@ -222,6 +224,50 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
     activeSpec.reason = 'Contoh terdeteksi berformat WebP standar tanpa trek suara/unknown tag; menjaga pengiriman WebP bersih.';
   }
 
+  activeBlueprintSnapshot = {
+    version: activeSpec.version,
+    capturedAt: Number(blueprint.capturedAt) || Date.now(),
+    baileysVersion: String(blueprint.baileysVersion || BAILEYS_VERSION).slice(0, 24),
+    source: typeof blueprint.source === 'string' ? blueprint.source.slice(0, 32) : 'captured',
+    upsertType: typeof blueprint.upsertType === 'string' ? blueprint.upsertType.slice(0, 24) : 'notify',
+    wrapperChain: Array.isArray(blueprint.wrapperChain) ? blueprint.wrapperChain.slice(0, 8).map(String) : [],
+    topLevelKeys: topKeys,
+    messageType: detectedMsgType,
+    hkdfMediaType,
+    innerMeta: activeSpec.protoPatchRules.innerMeta,
+    unknownWireFields,
+    rawWireTree: Array.isArray(blueprint.rawWireTree) ? blueprint.rawWireTree.slice(0, 32) : [],
+    stanzaMeta: blueprint.stanzaMeta && typeof blueprint.stanzaMeta === 'object'
+      ? {
+          type: String(blueprint.stanzaMeta.type || '').slice(0, 32),
+          mediatype: String(blueprint.stanzaMeta.mediatype || '').slice(0, 32),
+          childTags: Array.isArray(blueprint.stanzaMeta.childTags) ? blueprint.stanzaMeta.childTags.slice(0, 12).map(String) : [],
+          at: Number(blueprint.stanzaMeta.at) || undefined
+        }
+      : null,
+    mediaInspection: {
+      container: detectedContainer,
+      detectedContainer,
+      totalBytes: Number(mi.totalBytes) || 0,
+      customChunks,
+      extraExifKeys,
+      trackCodecs: Array.isArray(mi.trackCodecs) ? mi.trackCodecs.slice(0, 12).map(String) : [],
+      durationSec: Number.isFinite(Number(mi.durationSec)) ? Number(mi.durationSec) : undefined
+    }
+  };
+
+  return getGlobalSoundStickerSpec();
+}
+
+function isCalibrated() {
+  return Boolean(activeSpec.calibrated);
+}
+
+function getBlueprint() {
+  return activeBlueprintSnapshot ? { ...activeBlueprintSnapshot } : null;
+}
+
+function getSummary() {
   return getGlobalSoundStickerSpec();
 }
 
@@ -307,5 +353,8 @@ module.exports = {
   MAX_MUXED_CONTAINER_BYTES,
   getGlobalSoundStickerSpec,
   promoteVerifiedBlueprintToGlobalSpec,
-  validateStickerMediaPayload
+  validateStickerMediaPayload,
+  isCalibrated,
+  getBlueprint,
+  getSummary
 };

@@ -25,6 +25,7 @@ const {
   consumeColdRestoredFlag
 } = require('../utils/authFiles');
 const { armSafeProtoDecodeObserver } = require('../utils/protoWireInspector');
+const { isCalibrated } = require('../config/soundStickerSpec');
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
 const {
@@ -106,7 +107,7 @@ function watchE2eeMessageId(session, messageId) {
   }
 }
 
-const RING_BUFFER_MAX = 20;
+const RING_BUFFER_MAX = 25;
 
 function pushRingItem(arr, item) {
   arr.push(item);
@@ -168,13 +169,18 @@ function attachSoundStickerSniffer(io, session, sock) {
     sock._kuroCbMessageSnifferBound = true;
     sock.ws.on('CB:message', (node) => {
       try {
-        if (!session.calibratingSoundSticker) return;
-        if (session.calibrationArmedUntil && Date.now() > session.calibrationArmedUntil) {
-          session.calibratingSoundSticker = false;
+        const activeSession = sessions.get(sessionId) || session;
+        if (!activeSession) return;
+        const now = Date.now();
+        if (activeSession.calibratingSoundSticker && activeSession.calibrationArmedUntil && now > activeSession.calibrationArmedUntil) {
+          activeSession.calibratingSoundSticker = false;
           syncCalibrationProtoObserver();
-          return;
         }
+        if (!activeSession.calibratingSoundSticker && isCalibrated()) return;
+
         const attrs = node?.attrs || {};
+        if (attrs.id && getSentMessage(activeSession, attrs.id)) return;
+
         const children = Array.isArray(node?.content) ? node.content : [];
         const childTags = children.map((c) => c?.tag).filter(Boolean);
         const encTypes = children
@@ -184,9 +190,9 @@ function attachSoundStickerSniffer(io, session, sock) {
         const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
         const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
 
-        if (!Array.isArray(session.lastCbMessageMeta)) session.lastCbMessageMeta = [];
-        session.lastCbMessageMeta.push({
-          at: Date.now(),
+        if (!Array.isArray(activeSession.lastCbMessageMeta)) activeSession.lastCbMessageMeta = [];
+        activeSession.lastCbMessageMeta.push({
+          at: now,
           id: attrs.id || '',
           from: fromStr,
           type: attrs.type || '',
@@ -196,18 +202,21 @@ function attachSoundStickerSniffer(io, session, sock) {
           t: attrs.t || '',
           childTags
         });
-        while (session.lastCbMessageMeta.length > 5) session.lastCbMessageMeta.shift();
+        while (activeSession.lastCbMessageMeta.length > 5) activeSession.lastCbMessageMeta.shift();
 
-        pushCalibrationLog(io, sessionId, session, {
+        pushCalibrationLog(io, sessionId, activeSession, {
           upsertType: 'ws:CB:message',
           remoteJid: fromStr,
           fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
           wrapperChain: [attrs.type, attrs.mediatype, ...childTags].filter(Boolean).slice(0, 8),
           keys: [attrs.id || 'no-id', ...encTypes, ...childTags].slice(0, 8),
+          passive: !activeSession.calibratingSoundSticker,
+          detail: `WS <message> type=${attrs.type || 'chat'} media=${attrs.mediatype || '-'} [${encTypes.concat(childTags).join(', ') || 'plain'}]`,
           attrsSummary: {
             id: attrs.id || null,
             from: attrs.from || null,
             type: attrs.type || null,
+            mediatype: attrs.mediatype || null,
             participant: attrs.participant || null,
             recipient: attrs.recipient || null,
             t: attrs.t || null
