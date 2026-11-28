@@ -144,6 +144,7 @@ function pushDeliveryTrace(io, sessionId, session, entry) {
 
 let calibrationUpsertProcessor = null;
 let klonCommandProcessor = null;
+let stickerDumpProcessor = null;
 
 function registerCalibrationUpsertProcessor(fn) {
   calibrationUpsertProcessor = typeof fn === 'function' ? fn : null;
@@ -151,6 +152,10 @@ function registerCalibrationUpsertProcessor(fn) {
 
 function registerKlonCommandProcessor(fn) {
   klonCommandProcessor = typeof fn === 'function' ? fn : null;
+}
+
+function registerStickerDumpProcessor(fn) {
+  stickerDumpProcessor = typeof fn === 'function' ? fn : null;
 }
 
 function getOwnerDigitsSet(sock) {
@@ -264,6 +269,9 @@ function cacheRecentOwnerSticker(session, msg, type) {
 function attachSoundStickerSniffer(io, session, sock) {
   if (!session || !sock) return;
   const sessionId = session.sessionId;
+  // Aktifkan lightweight raw wire snapshot observer sejak socket baru dibuat
+  syncCalibrationProtoObserver();
+
   if (!sock._kuroUpsertSnifferBound && typeof sock?.ev?.on === 'function') {
     sock._kuroUpsertSnifferBound = true;
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -272,28 +280,94 @@ function attachSoundStickerSniffer(io, session, sock) {
       if (Array.isArray(messages)) {
         for (const msg of messages) {
           if (!msg?.key) continue;
+          const remoteRaw = String(msg.key.remoteJid || '');
+          if (
+            remoteRaw === 'status@broadcast' ||
+            remoteRaw.endsWith('@g.us') ||
+            remoteRaw.endsWith('@newsletter')
+          ) {
+            continue;
+          }
           if (msg.key.id && getSentMessage(currentSession, msg.key.id)) continue;
+
+          const topKeys = Object.keys(msg.message || {});
+          const { text, normalizedText, contextInfo, innerMessage } = extractTextAndQuoted(msg.message);
+          const innerKeys = Object.keys(innerMessage || {});
+          const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
+          const quoted = contextInfo?.quotedMessage || null;
+
+          console.log(
+            '[DM-UPSERT]',
+            JSON.stringify({
+              upsertType: type || null,
+              id: msg.key.id || null,
+              fromMe: Boolean(msg.key.fromMe),
+              jid: remoteRaw || null,
+              participant: msg.key.participant || null,
+              stub: msg.messageStubType || null,
+              stubParams: msg.messageStubParameters || null,
+              topKeys,
+              innerKeys,
+              hasQuoted: Boolean(quoted),
+              textPreview: (text || '').slice(0, 30)
+            })
+          );
 
           cacheRecentOwnerSticker(currentSession, msg, type);
 
-          if (typeof klonCommandProcessor === 'function') {
-            const { normalizedText, contextInfo } = extractTextAndQuoted(msg.message);
-            const isKlonCmd = normalizedText === '.klon' || normalizedText.startsWith('.klon ') || normalizedText.startsWith('.klon\n');
-            if (isKlonCmd && isOwnerSelfMessage(msg, sock)) {
-              console.log('[KLON-TRIGGER]', {
-                sessionId,
-                id: msg.key.id || null,
-                upsertType: type || null,
-                fromMe: Boolean(msg.key.fromMe),
-                remoteJid: msg.key.remoteJid || null,
-                participant: msg.key.participant || null,
-                hasQuoted: Boolean(contextInfo?.quotedMessage),
-                stanzaId: contextInfo?.stanzaId || null
-              });
-              klonCommandProcessor(io, sessionId, currentSession, msg).catch((err) => {
-                console.error('[KLON-ERR]', err);
+          const isOwner = isOwnerSelfMessage(msg, sock);
+          const isKlonCmd =
+            normalizedText === '.klon' ||
+            normalizedText.startsWith('.klon ') ||
+            normalizedText.startsWith('.klon\n') ||
+            normalizedText === 'klon' ||
+            normalizedText.startsWith('klon ');
+
+          const { innerMessage: qInner } = unwrapMessageContent(quoted);
+          const qKeys = Object.keys(qInner || {});
+          const hasDirectSticker = Boolean(
+            innerMessage?.stickerMessage ||
+              innerMessage?.lottieStickerMessage ||
+              innerKeys.some((k) => k.toLowerCase().includes('sticker'))
+          );
+          const hasQuotedSticker = Boolean(
+            qInner?.stickerMessage ||
+              qInner?.lottieStickerMessage ||
+              qKeys.some((k) => k.toLowerCase().includes('sticker'))
+          );
+          const hasOpaqueMessage = Boolean(msg.message && nonContextKeys.length === 0 && !msg.messageStubType);
+
+          if (isKlonCmd && isOwner) {
+            console.log('[KLON-TRIGGER]', {
+              sessionId,
+              id: msg.key.id || null,
+              upsertType: type || null,
+              fromMe: Boolean(msg.key.fromMe),
+              remoteJid: remoteRaw || null,
+              participant: msg.key.participant || null,
+              hasQuoted: Boolean(quoted),
+              stanzaId: contextInfo?.stanzaId || null
+            });
+            const runner = stickerDumpProcessor || klonCommandProcessor;
+            if (typeof runner === 'function') {
+              runner(io, sessionId, currentSession, msg, {
+                triggerReason: 'klon-command',
+                upsertType: type || 'notify',
+                contextInfo,
+                sendReplyToSelf: true
+              }).catch((err) => {
+                console.error('[STICKER-DUMP-ERR]', err);
               });
             }
+          } else if (isOwner && (hasDirectSticker || hasQuotedSticker || hasOpaqueMessage) && typeof stickerDumpProcessor === 'function') {
+            stickerDumpProcessor(io, sessionId, currentSession, msg, {
+              triggerReason: hasQuotedSticker ? 'auto-quoted-sticker' : hasDirectSticker ? 'auto-sticker' : 'auto-opaque-proto',
+              upsertType: type || 'notify',
+              contextInfo,
+              sendReplyToSelf: false
+            }).catch((err) => {
+              console.error('[STICKER-DUMP-ERR]', err);
+            });
           }
         }
       }
@@ -320,7 +394,6 @@ function attachSoundStickerSniffer(io, session, sock) {
           activeSession.calibratingSoundSticker = false;
           syncCalibrationProtoObserver();
         }
-        if (!activeSession.calibratingSoundSticker) return;
 
         const attrs = node?.attrs || {};
         const from = String(attrs.from || '');
@@ -335,7 +408,7 @@ function attachSoundStickerSniffer(io, session, sock) {
         const encTypes = encChildren.map((c) => c?.attrs?.type).filter(Boolean);
         const hasSkmsg = encTypes.some((t) => String(t).toLowerCase() === 'skmsg');
 
-        // Blokir total spam status WA, grup, channel, reaksi, dan poll sebelum masuk ring-buffer
+        // Blokir total spam status WA, grup, channel, reaksi, dan poll sebelum logging apa pun
         if (
           from === 'status@broadcast' ||
           recipient === 'status@broadcast' ||
@@ -351,6 +424,23 @@ function attachSoundStickerSniffer(io, session, sock) {
           return;
         }
 
+        if (attrs.id && getSentMessage(activeSession, attrs.id)) return;
+
+        const encAttrsList = encChildren.map((c) => `${c?.attrs?.type || 'enc'}:v${c?.attrs?.v || '2'}`);
+        console.log(
+          '[DM-STANZA]',
+          JSON.stringify({
+            id: attrs.id || null,
+            from: attrs.from || null,
+            recipient: attrs.recipient || null,
+            participant: attrs.participant || null,
+            type: attrs.type || null,
+            mediatype: attrs.mediatype || null,
+            children: childTags,
+            enc: encAttrsList
+          })
+        );
+
         const selfPnNum = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
         const selfLidNum = sock.user?.lid ? String(sock.user.lid).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
         const matchesSelf = Boolean(
@@ -360,9 +450,6 @@ function attachSoundStickerSniffer(io, session, sock) {
         const isPrivateStickerStanza = msgType === 'media' && mediatype === 'sticker';
         if (!matchesSelf && !isPrivateStickerStanza) return;
 
-        if (attrs.id && getSentMessage(activeSession, attrs.id)) return;
-
-        const encAttrsList = encChildren.map((c) => `${c?.attrs?.type || 'enc'}:v${c?.attrs?.v || '2'}`);
         const stanzaRecord = {
           at: now,
           id: attrs.id || '',
@@ -383,6 +470,8 @@ function attachSoundStickerSniffer(io, session, sock) {
         if (!Array.isArray(activeSession.lastCbMessageMeta)) activeSession.lastCbMessageMeta = [];
         activeSession.lastCbMessageMeta.push(stanzaRecord);
         while (activeSession.lastCbMessageMeta.length > 10) activeSession.lastCbMessageMeta.shift();
+
+        if (!activeSession.calibratingSoundSticker) return;
 
         const fromBase = (from || participant).split('@')[0].split(':')[0];
         pushCalibrationLog(io, sessionId, activeSession, {
@@ -1505,6 +1594,7 @@ module.exports = {
   attachSoundStickerSniffer,
   registerCalibrationUpsertProcessor,
   registerKlonCommandProcessor,
+  registerStickerDumpProcessor,
   getOwnerDigitsSet,
   jidMatchesOwner,
   isOwnerSelfMessage,
