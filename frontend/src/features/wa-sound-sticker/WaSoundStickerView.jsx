@@ -357,10 +357,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     sock.on('qr-code', handleQrPayload);
     sock.on('qr', handleQrPayload);
 
-    sock.on('auth-snapshot-sync', (data) => {
-      if (data?.snapshot && data.sessionId === sessionId) {
-        saveDeviceAuthSnapshotLocal(sessionId, deviceToken, data.snapshot);
+    sock.on('auth-snapshot-sync', async (data) => {
+      if (unmounted) return;
+      if (data?.snapshot?.files?.['creds.json'] && (!data.sessionId || data.sessionId === sessionId)) {
         setHasSavedAuth(true);
+        await saveDeviceAuthSnapshotLocal(sessionId, deviceToken, data.snapshot, data.updatedAt || Date.now());
       }
     });
 

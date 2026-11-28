@@ -15,7 +15,15 @@ const {
 
 const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/constants');
 const { isValidSessionId, normalizePhone } = require('../utils/common');
-const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir } = require('../utils/authFiles');
+const {
+  getSessionDir,
+  writeOwnerHash,
+  isDirRegistered,
+  removeSessionDir,
+  extractOwnIdentifiersFromCreds,
+  clearOwnSignalSessionFilesOnDisk,
+  consumeColdRestoredFlag
+} = require('../utils/authFiles');
 const { armSafeProtoDecodeObserver } = require('../utils/protoWireInspector');
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
@@ -383,6 +391,7 @@ async function startBaileys(
     }
 
     if (cleanAuth) {
+      session.restoredFromColdSnapshot = false;
       session.accountJid = '';
       session.accountLid = '';
       session.phone = '';
@@ -396,6 +405,10 @@ async function startBaileys(
       session.sentMessageStore?.clear();
       session.calibratingSoundSticker = false;
       session.calibrationArmedUntil = 0;
+      if (session._calibrationExpireTimer) {
+        clearTimeout(session._calibrationExpireTimer);
+        session._calibrationExpireTimer = null;
+      }
       session.lastRawWirePackets = [];
       session.calibrationLogs = [];
       session.deliveryTraces = [];
@@ -417,6 +430,9 @@ async function startBaileys(
     }
     if (session.tokenHash) {
       writeOwnerHash(sessionDir, session.tokenHash);
+    }
+    if (consumeColdRestoredFlag(sessionDir)) {
+      session.restoredFromColdSnapshot = true;
     }
 
     const version = await getWaVersion();
@@ -778,6 +794,41 @@ async function startBaileys(
         session.accountLid = accountLid;
         session.phone = phone;
 
+        if (session.restoredFromColdSnapshot) {
+          session.restoredFromColdSnapshot = false;
+          try {
+            const credsIds = extractOwnIdentifiersFromCreds(sock.authState?.creds);
+            const ownPhone = phone || credsIds.ownPhone;
+            const ownLidUser = (accountLid ? accountLid.split('@')[0].split(':')[0] : '') || credsIds.ownLidUser;
+            const { nullSessionMap } = clearOwnSignalSessionFilesOnDisk(sessionDir, ownPhone, ownLidUser);
+            for (let dev = 0; dev <= 5; dev++) {
+              if (ownPhone) nullSessionMap[`${ownPhone}.${dev}`] = null;
+              if (ownLidUser) {
+                nullSessionMap[`${ownLidUser}.${dev}`] = null;
+                nullSessionMap[`${ownLidUser}_1.${dev}`] = null;
+              }
+            }
+            session.msgRetryCounterCache?.flushAll?.();
+            if (typeof sock.authState?.keys?.set === 'function' && Object.keys(nullSessionMap).length > 0) {
+              await sock.authState.keys.set({ session: nullSessionMap }).catch(() => {});
+            }
+            const refreshTargets = [accountJid, ...(accountLid && accountLid !== accountJid ? [accountLid] : [])].filter(Boolean);
+            if (refreshTargets.length > 0) {
+              await sock.assertSessions(refreshTargets, true);
+            }
+            pushDeliveryTrace(io, sessionId, session, {
+              messageId: 'cold-boot',
+              phase: 'cold_boot_e2ee_refresh',
+              event: 'cold_snapshot_restore',
+              isError: false,
+              detail: 'Sesi pulih dari snapshot — kunci E2EE self-chat disegarkan otomatis'
+            });
+            console.log(`[WA-COLD-RESTORE ${sessionId}] Kunci E2EE self-chat disegarkan untuk ${refreshTargets.join(', ')}`);
+          } catch (coldErr) {
+            console.warn(`[WA-COLD-RESTORE ${sessionId}] Gagal refresh sesi:`, coldErr.message);
+          }
+        }
+
         emitToDevice(io, sessionId, 'session-status', {
           status: 'connected',
           phone,
@@ -833,6 +884,10 @@ async function startBaileys(
           }
           session.msgCache?.clear();
           session.sentMessageStore?.clear();
+          if (session._calibrationExpireTimer) {
+            clearTimeout(session._calibrationExpireTimer);
+            session._calibrationExpireTimer = null;
+          }
           removeSessionDir(sessionId);
           sessions.delete(sessionId);
           syncCalibrationProtoObserver();

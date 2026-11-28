@@ -544,6 +544,10 @@ function registerSocketHandlers(io) {
             clearTimeout(session.pairingTimer);
             session.pairingTimer = null;
           }
+          if (session._calibrationExpireTimer) {
+            clearTimeout(session._calibrationExpireTimer);
+            session._calibrationExpireTimer = null;
+          }
           session.pairingCode = null;
           session.pairingCodeRequested = false;
           if (session.authSyncTimer) clearTimeout(session.authSyncTimer);

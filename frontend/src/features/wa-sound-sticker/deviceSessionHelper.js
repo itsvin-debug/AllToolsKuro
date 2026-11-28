@@ -136,38 +136,50 @@ export async function loadDeviceAuthSnapshotLocal(deviceId) {
   }
 }
 
-export async function saveDeviceAuthSnapshotLocal(deviceId, deviceToken, snapshot) {
-  if (!deviceId || !snapshot) return;
+export async function saveDeviceAuthSnapshotLocal(deviceId, deviceToken, snapshot, updatedAt = Date.now()) {
+  if (!deviceId || !snapshot?.files?.['creds.json']) return false;
   try {
-    if (snapshot?.files?.['creds.json']) {
-      localStorage.setItem(`${LS_LINKED_PREFIX}${deviceId}`, '1');
-      const fullStr = JSON.stringify(snapshot);
-      if (fullStr.length <= MAX_LS_CREDS_CHARS) {
-        localStorage.setItem(`${LS_CREDS_PREFIX}${deviceId}`, fullStr);
+    localStorage.setItem(`${LS_LINKED_PREFIX}${deviceId}`, '1');
+    const fullStr = JSON.stringify(snapshot);
+    if (fullStr.length <= MAX_LS_CREDS_CHARS) {
+      localStorage.setItem(`${LS_CREDS_PREFIX}${deviceId}`, fullStr);
+    } else {
+      // Tetap perbarui creds.json agar localStorage tidak menahan snapshot awal yang usang saat > 148 KB
+      const compactStr = JSON.stringify({
+        version: 1,
+        createdAt: snapshot.createdAt || Date.now(),
+        files: { 'creds.json': snapshot.files['creds.json'] }
+      });
+      if (compactStr.length <= MAX_LS_CREDS_CHARS) {
+        localStorage.setItem(`${LS_CREDS_PREFIX}${deviceId}`, compactStr);
       }
     }
   } catch {}
 
   try {
     const db = await openAuthDatabase();
-    if (!db.objectStoreNames.contains(DEVICE_AUTH_STORE)) return;
-    await new Promise((resolve) => {
+    if (!db.objectStoreNames.contains(DEVICE_AUTH_STORE)) return false;
+    return await new Promise((resolve) => {
       const tx = db.transaction(DEVICE_AUTH_STORE, 'readwrite');
       const store = tx.objectStore(DEVICE_AUTH_STORE);
       const getReq = store.get(String(deviceId));
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+      tx.onabort = () => resolve(false);
       getReq.onsuccess = () => {
         const existing = getReq.result || {};
         store.put({
           deviceId: String(deviceId),
           deviceToken: String(deviceToken || existing.deviceToken || ''),
           snapshot,
-          updatedAt: Date.now()
+          updatedAt
         });
-        resolve();
       };
-      getReq.onerror = () => resolve();
+      getReq.onerror = () => resolve(false);
     });
-  } catch {}
+  } catch {
+    return false;
+  }
 }
 
 export async function clearDeviceAuthSnapshotLocal(deviceId) {

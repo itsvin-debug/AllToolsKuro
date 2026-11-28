@@ -3,6 +3,74 @@ const fs = require('fs');
 const { BACKEND_ROOT, AUTH_SESSIONS_DIR } = require('../config/constants');
 const { isValidSessionId } = require('./common');
 
+const coldRestoredSessionDirs = new Set();
+
+function normalizeJidUserPart(jid = '') {
+  return String(jid || '').trim().split('@')[0].split(':')[0];
+}
+
+function extractOwnIdentifiersFromCreds(parsedCreds) {
+  const me = parsedCreds?.me || {};
+  return {
+    ownPhone: normalizeJidUserPart(me.id || me.jid || ''),
+    ownLidUser: normalizeJidUserPart(me.lid || '')
+  };
+}
+
+function matchesSignalFileBoundary(text, prefix) {
+  if (!prefix) return false;
+  if (text === prefix) return true;
+  const boundary = text[prefix.length];
+  return text.startsWith(prefix) && (boundary === '.' || boundary === '-' || boundary === '_' || boundary === '@');
+}
+
+function isOwnSignalSessionFile(fname, ownPhone, ownLidUser) {
+  if (!fname || typeof fname !== 'string') return false;
+  if (fname === 'creds.json' || fname === '.owner.hash') return false;
+  if (!fname.endsWith('.json')) return false;
+  if (fname.startsWith('session-')) {
+    const body = fname.slice('session-'.length, -'.json'.length);
+    return matchesSignalFileBoundary(body, ownPhone) || matchesSignalFileBoundary(body, ownLidUser);
+  }
+  if (fname.startsWith('sender-key-')) {
+    const sepIdx = fname.indexOf('--');
+    if (sepIdx !== -1) {
+      const senderBody = fname.slice(sepIdx + 2, -'.json'.length);
+      return matchesSignalFileBoundary(senderBody, ownPhone) || matchesSignalFileBoundary(senderBody, ownLidUser);
+    }
+  }
+  return false;
+}
+
+function clearOwnSignalSessionFilesOnDisk(authDir, ownPhone, ownLidUser) {
+  const clearedFiles = [];
+  const nullSessionMap = {};
+  if (!authDir || !fs.existsSync(authDir)) {
+    return { clearedFiles, nullSessionMap };
+  }
+  const entries = fs.readdirSync(authDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !isOwnSignalSessionFile(entry.name, ownPhone, ownLidUser)) continue;
+    if (entry.name.startsWith('session-')) {
+      const bodyId = entry.name.slice('session-'.length, -'.json'.length);
+      if (bodyId) nullSessionMap[bodyId] = null;
+    }
+    try {
+      fs.unlinkSync(path.join(authDir, entry.name));
+      clearedFiles.push(entry.name);
+    } catch (_) {}
+  }
+  return { clearedFiles, nullSessionMap };
+}
+
+function consumeColdRestoredFlag(authDir) {
+  if (!authDir) return false;
+  const key = path.resolve(authDir);
+  if (!coldRestoredSessionDirs.has(key)) return false;
+  coldRestoredSessionDirs.delete(key);
+  return true;
+}
+
 function getSessionDir(sessionId) {
   if (!isValidSessionId(sessionId)) {
     throw new Error('ID sesi tidak valid.');
@@ -132,19 +200,22 @@ function packAuthSnapshot(authDir) {
   }
 }
 
-function unpackAuthSnapshot(authDir, snapshot, tokenHash) {
+function unpackAuthSnapshot(authDir, snapshot, tokenHash, metaOut = null) {
   if (!snapshot || typeof snapshot !== 'object' || !snapshot.files || typeof snapshot.files !== 'object') {
     return false;
   }
   const credsRaw = snapshot.files['creds.json'];
   if (!credsRaw || typeof credsRaw !== 'string') return false;
 
+  let parsedCreds = null;
   try {
-    const parsedCreds = JSON.parse(credsRaw);
+    parsedCreds = JSON.parse(credsRaw);
     if (!parsedCreds?.registered && !parsedCreds?.me) return false;
   } catch {
     return false;
   }
+
+  const { ownPhone, ownLidUser } = extractOwnIdentifiersFromCreds(parsedCreds);
 
   try {
     if (!fs.existsSync(authDir)) {
@@ -162,16 +233,35 @@ function unpackAuthSnapshot(authDir, snapshot, tokenHash) {
     }
 
     let restoredCount = 0;
+    const skippedOwnRatchets = [];
+
     for (const [fname, content] of Object.entries(snapshot.files)) {
       if (typeof fname !== 'string' || typeof content !== 'string') continue;
       if (fname !== path.basename(fname) || fname.includes('..') || !/^[a-zA-Z0-9._-]+\.json$/.test(fname)) {
+        continue;
+      }
+      // Jangan pulihkan ratchet Signal lama milik nomor pemilik sendiri agar cold-boot tidak memicu Bad MAC ("Menunggu pesan ini")
+      if (isOwnSignalSessionFile(fname, ownPhone, ownLidUser)) {
+        skippedOwnRatchets.push(fname);
         continue;
       }
       fs.writeFileSync(path.join(authDir, fname), content, 'utf8');
       restoredCount++;
     }
 
-    return restoredCount > 0 && fs.existsSync(path.join(authDir, 'creds.json'));
+    const ok = restoredCount > 0 && fs.existsSync(path.join(authDir, 'creds.json'));
+    if (ok) {
+      coldRestoredSessionDirs.add(path.resolve(authDir));
+      if (skippedOwnRatchets.length > 0) {
+        console.log(`[WA-SNAPSHOT] Skip ${skippedOwnRatchets.length} stale self ratchet (${skippedOwnRatchets.slice(0, 4).join(', ')})`);
+      }
+      if (metaOut && typeof metaOut === 'object') {
+        metaOut.skippedOwnRatchets = skippedOwnRatchets;
+        metaOut.ownPhone = ownPhone;
+        metaOut.ownLidUser = ownLidUser;
+      }
+    }
+    return ok;
   } catch (err) {
     console.warn('[WA-SNAPSHOT] Gagal unpack auth snapshot:', err.message);
     return false;
@@ -184,6 +274,10 @@ module.exports = {
   writeOwnerHash,
   isDirRegistered,
   removeSessionDir,
+  extractOwnIdentifiersFromCreds,
+  isOwnSignalSessionFile,
+  clearOwnSignalSessionFilesOnDisk,
+  consumeColdRestoredFlag,
   packAuthSnapshot,
   unpackAuthSnapshot
 };

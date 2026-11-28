@@ -8,7 +8,7 @@ const {
   joinExclusiveDeviceRoom,
   emitAuthSnapshotNow
 } = require('../services/deviceAuthService');
-const { getSessionDir } = require('../utils/authFiles');
+const { getSessionDir, clearOwnSignalSessionFilesOnDisk } = require('../utils/authFiles');
 const {
   BAILEYS_VERSION,
   getGlobalSoundStickerSpec,
@@ -814,6 +814,10 @@ function attachCalibrationListener(io, sessionId, session) {
 
         curSession.calibratingSoundSticker = false;
         curSession.calibrationArmedUntil = 0;
+        if (curSession._calibrationExpireTimer) {
+          clearTimeout(curSession._calibrationExpireTimer);
+          curSession._calibrationExpireTimer = null;
+        }
         syncCalibrationProtoObserver();
 
         const rawBlueprint = {
@@ -1422,30 +1426,6 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
   }
 }
 
-function isOwnSignalSessionFile(fname, ownPhone, ownLidUser) {
-  if (!fname || typeof fname !== 'string') return false;
-  if (fname === 'creds.json' || fname === '.owner.hash') return false;
-  if (!fname.endsWith('.json')) return false;
-  const matchesBoundary = (text, prefix) => {
-    if (!prefix) return false;
-    if (text === prefix) return true;
-    const boundary = text[prefix.length];
-    return text.startsWith(prefix) && (boundary === '.' || boundary === '-' || boundary === '_' || boundary === '@');
-  };
-  if (fname.startsWith('session-')) {
-    const body = fname.slice('session-'.length, -'.json'.length);
-    return matchesBoundary(body, ownPhone) || matchesBoundary(body, ownLidUser);
-  }
-  if (fname.startsWith('sender-key-')) {
-    const sepIdx = fname.indexOf('--');
-    if (sepIdx !== -1) {
-      const senderBody = fname.slice(sepIdx + 2, -'.json'.length);
-      return matchesBoundary(senderBody, ownPhone) || matchesBoundary(senderBody, ownLidUser);
-    }
-  }
-  return false;
-}
-
 async function performResetSelfE2eeKeys(io, sessionId, session) {
   const selfJid = jidNormalizedUser(session.sock.user.id);
   const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
@@ -1478,21 +1458,7 @@ async function performResetSelfE2eeKeys(io, sessionId, session) {
   const uniqueTargets = Array.from(targetSet);
 
   const sessionDir = getSessionDir(sessionId);
-  const clearedFiles = [];
-  const nullSessionMap = {};
-
-  if (sessionDir && fs.existsSync(sessionDir)) {
-    const entries = fs.readdirSync(sessionDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile() || !isOwnSignalSessionFile(entry.name, ownPhone, ownLidUser)) continue;
-      const bodyId = entry.name.slice('session-'.length, -'.json'.length);
-      if (bodyId) nullSessionMap[bodyId] = null;
-      try {
-        fs.unlinkSync(path.join(sessionDir, entry.name));
-        clearedFiles.push(entry.name);
-      } catch (_) {}
-    }
-  }
+  const { clearedFiles, nullSessionMap } = clearOwnSignalSessionFilesOnDisk(sessionDir, ownPhone, ownLidUser);
 
   for (const targetJid of uniqueTargets) {
     try {
@@ -1620,6 +1586,17 @@ function registerStickerSenderHandler(io, socket) {
 
       session.calibratingSoundSticker = true;
       session.calibrationArmedUntil = Date.now() + CALIBRATION_WINDOW_MS;
+      if (session._calibrationExpireTimer) {
+        clearTimeout(session._calibrationExpireTimer);
+      }
+      session._calibrationExpireTimer = setTimeout(() => {
+        session._calibrationExpireTimer = null;
+        if (session.calibratingSoundSticker) {
+          session.calibratingSoundSticker = false;
+          session.calibrationArmedUntil = 0;
+          syncCalibrationProtoObserver();
+        }
+      }, CALIBRATION_WINDOW_MS + 250);
       attachCalibrationListener(io, sessionId, session);
       syncCalibrationProtoObserver();
 
