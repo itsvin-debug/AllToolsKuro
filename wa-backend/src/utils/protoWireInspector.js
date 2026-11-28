@@ -983,6 +983,7 @@ function extractOpaqueInnerMessageTree(rawWireTree = []) {
 function installAudioStickerProtoExtension(protoObj = baileysProto) {
   if (!protoObj || protoObj.__kuroAudioStickerExtended) return protoObj;
   const MessageCls = protoObj.Message;
+  const DeviceSentCls = MessageCls?.DeviceSentMessage;
   const StickerCls = MessageCls?.StickerMessage;
   const AudioCls = MessageCls?.AudioMessage;
   const ContextCls = protoObj.ContextInfo;
@@ -1057,6 +1058,12 @@ function installAudioStickerProtoExtension(protoObj = baileysProto) {
     if (src.audioStickerMessage && typeof src.audioStickerMessage === 'object') {
       dst.audioStickerMessage = AudioCls.fromObject(src.audioStickerMessage);
     }
+    if (src.contextInfo && typeof src.contextInfo === 'object') {
+      const ctxHasMediaKey = Boolean(normalizeMediaKeyContext(src.contextInfo.mediaKeyContext));
+      if (ctxHasMediaKey) {
+        dst.contextInfo = ContextCls.fromObject(src.contextInfo);
+      }
+    }
     return dst;
   };
 
@@ -1079,10 +1086,17 @@ function installAudioStickerProtoExtension(protoObj = baileysProto) {
     if (message?.audioStickerMessage && typeof message.audioStickerMessage === 'object') {
       obj.audioStickerMessage = AudioCls.toObject(message.audioStickerMessage, options);
     }
+    if (message?.contextInfo?.mediaKeyContext) {
+      obj.contextInfo = ContextCls.toObject(message.contextInfo, options);
+    }
     return obj;
   };
   StickerCls.encode = function extendedStickerEncode(message, writer) {
-    const w = origStickEncode.call(this, message, writer);
+    const normalizedSticker =
+      message?.contextInfo?.mediaKeyContext && !Object.prototype.hasOwnProperty.call(message, 'contextInfo')
+        ? { ...message, contextInfo: message.contextInfo }
+        : message;
+    const w = origStickEncode.call(this, normalizedSticker, writer);
     if (message?.mediaKeyDomain !== undefined && message?.mediaKeyDomain !== null) {
       // field #24 wireType 0 -> 192
       w.uint32(192).int32(Number(message.mediaKeyDomain));
@@ -1110,17 +1124,23 @@ function installAudioStickerProtoExtension(protoObj = baileysProto) {
     return { message: MessageCls.fromObject(fp.message) };
   };
 
+  const preserveMessageCustomFields = (src, dst) => {
+    if (!src || !dst) return dst;
+    const normFp = normalizeFutureProof(src.audioStickerFutureProof);
+    if (normFp) dst.audioStickerFutureProof = normFp;
+    if (DeviceSentCls && src.deviceSentMessage?.message) {
+      dst.deviceSentMessage = DeviceSentCls.fromObject(src.deviceSentMessage);
+    }
+    return dst;
+  };
+
   MessageCls.create = function extendedMsgCreate(properties) {
     const inst = origMsgCreate.call(this, properties);
-    const norm = normalizeFutureProof(properties?.audioStickerFutureProof);
-    if (norm) inst.audioStickerFutureProof = norm;
-    return inst;
+    return preserveMessageCustomFields(properties, inst);
   };
   MessageCls.fromObject = function extendedMsgFromObject(object) {
     const inst = origMsgFromObject.call(this, object);
-    const norm = normalizeFutureProof(object?.audioStickerFutureProof);
-    if (norm) inst.audioStickerFutureProof = norm;
-    return inst;
+    return preserveMessageCustomFields(object, inst);
   };
   MessageCls.toObject = function extendedMsgToObject(message, options) {
     const obj = origMsgToObject.call(this, message, options);
@@ -1129,10 +1149,17 @@ function installAudioStickerProtoExtension(protoObj = baileysProto) {
         message: MessageCls.toObject(message.audioStickerFutureProof.message, options)
       };
     }
+    if (DeviceSentCls && message?.deviceSentMessage?.message) {
+      obj.deviceSentMessage = DeviceSentCls.toObject(message.deviceSentMessage, options);
+    }
     return obj;
   };
   MessageCls.encode = function extendedMsgEncode(message, writer) {
-    const w = origMsgEncode.call(this, message, writer);
+    const normalizedMsg =
+      message?.deviceSentMessage && !Object.prototype.hasOwnProperty.call(message, 'deviceSentMessage')
+        ? { ...message, deviceSentMessage: message.deviceSentMessage }
+        : message;
+    const w = origMsgEncode.call(this, normalizedMsg, writer);
     if (message?.audioStickerFutureProof?.message) {
       // field #134 wireType 2 -> (134 << 3) | 2 = 1074
       const wrap = w.uint32(1074).fork();
@@ -1142,6 +1169,45 @@ function installAudioStickerProtoExtension(protoObj = baileysProto) {
     }
     return w;
   };
+
+  // 4. Extensi proto.Message.DeviceSentMessage agar pembungkusan self-chat relayMessage tidak menjatuhkan #134
+  if (DeviceSentCls) {
+    const origDsmCreate = DeviceSentCls.create;
+    const origDsmFromObject = DeviceSentCls.fromObject;
+    const origDsmToObject = DeviceSentCls.toObject;
+    const origDsmEncode = DeviceSentCls.encode;
+
+    const preserveDsmInner = (src, dst) => {
+      if (!src || !dst) return dst;
+      if (src.message && typeof src.message === 'object') {
+        dst.message = MessageCls.fromObject(src.message);
+      }
+      return dst;
+    };
+
+    DeviceSentCls.create = function extendedDsmCreate(properties) {
+      const inst = origDsmCreate.call(this, properties);
+      return preserveDsmInner(properties, inst);
+    };
+    DeviceSentCls.fromObject = function extendedDsmFromObject(object) {
+      const inst = origDsmFromObject.call(this, object);
+      return preserveDsmInner(object, inst);
+    };
+    DeviceSentCls.toObject = function extendedDsmToObject(message, options) {
+      const obj = origDsmToObject.call(this, message, options);
+      if (message?.message && typeof message.message === 'object') {
+        obj.message = MessageCls.toObject(message.message, options);
+      }
+      return obj;
+    };
+    DeviceSentCls.encode = function extendedDsmEncode(message, writer) {
+      const payload =
+        message?.message && typeof message.message === 'object'
+          ? { ...message, message: MessageCls.fromObject(message.message) }
+          : message;
+      return origDsmEncode.call(this, payload, writer);
+    };
+  }
 
   protoObj.__kuroAudioStickerExtended = true;
   return protoObj;

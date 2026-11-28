@@ -643,7 +643,7 @@ async function startBaileys(
     // Pasang sniffer stiker audio pada socket baru (termasuk setelah cold-boot / 515 / reconnect)
     attachSoundStickerSniffer(io, session, sock);
 
-    // Monitor read-only stanza ACK & receipt (TANPA memodifikasi sock.signalRepository)
+    // Monitor ACK & receipt tanpa memicu double Closing session / retry loop pada self-LID
     if (typeof sock?.ws?.on === 'function') {
       sock.ws.on('CB:ack,class:message', (node) => {
         try {
@@ -665,52 +665,124 @@ async function startBaileys(
         } catch (_) {}
       });
 
-      sock.ws.on('CB:receipt', (node) => {
+      const origReceiptListeners = typeof sock.ws.rawListeners === 'function'
+        ? sock.ws.rawListeners('CB:receipt').slice()
+        : [];
+      if (origReceiptListeners.length > 0 && typeof sock.ws.removeAllListeners === 'function') {
+        sock.ws.removeAllListeners('CB:receipt');
+      }
+
+      const logReceiptTrace = (node) => {
+        const attrs = node?.attrs || {};
+        const msgId = String(attrs.id || '');
+        if (!msgId) return;
+
+        const isRecentOwn = Boolean(msgId === session.lastSentMessageId && Date.now() - (session.lastSentAt || 0) < 30000);
+        const isWatched = Boolean(session.watchedE2eeIds?.has(msgId) || getSentMessage(session, msgId) || isRecentOwn);
+        const rType = String(attrs.type || 'delivery');
+        const children = Array.isArray(node?.content) ? node.content : [];
+        const retryNode = children.find((c) => c?.tag === 'retry');
+        const retryCount = Number(retryNode?.attrs?.count || 1);
+
+        if (!isWatched && rType !== 'retry') return;
+
+        const cachedProto = getSentMessage(session, msgId);
+        if (rType === 'retry') {
+          const fromStr = String(attrs.participant || attrs.from || '');
+          const detail = `HP minta retry #${retryCount} (from=${fromStr.split('@')[0] || '-'}, cache=${cachedProto ? 'ADA' : 'KOSONG'})`;
+          console.warn(`[E2EE-RETRY ${sessionId}] id=${msgId} ${detail} recipient=${attrs.recipient || '-'}`);
+          pushDeliveryTrace(io, sessionId, session, {
+            messageId: msgId,
+            phase: 'retry_received',
+            event: 'retry_receipt',
+            retryCount,
+            hasCachedProto: Boolean(cachedProto),
+            isError: !cachedProto,
+            detail
+          });
+        } else if (isWatched) {
+          const phase =
+            rType === 'read' || rType === 'played'
+              ? 'read'
+              : rType === 'error'
+                ? 'decrypt_error'
+                : 'delivery_ack';
+          const eventLabel = rType === 'read' ? 'READ' : rType === 'played' ? 'PLAYED' : rType.toUpperCase();
+          pushDeliveryTrace(io, sessionId, session, {
+            messageId: msgId,
+            phase,
+            event: rType,
+            isError: rType === 'error',
+            detail: `CB:receipt ${eventLabel} dari ${String(attrs.from || '').split('@')[0]}`
+          });
+        }
+      };
+
+      sock.ws.on('CB:receipt', async (node) => {
+        let handledSelfLidRetry = false;
         try {
+          logReceiptTrace(node);
+
           const attrs = node?.attrs || {};
           const msgId = String(attrs.id || '');
-          if (!msgId) return;
+          const rType = String(attrs.type || '');
+          const senderStr = String(attrs.participant || attrs.from || '');
+          const { ownLidDigits, ownPnDigits } = getOwnerDigitsSet(sock);
+          const senderDigits = senderStr.split('@')[0].split(':')[0].replace(/\D/g, '');
+          const isSelfLidRetry = Boolean(
+            msgId &&
+              rType === 'retry' &&
+              senderStr.includes('@lid') &&
+              ownLidDigits &&
+              senderDigits === ownLidDigits
+          );
 
-          const isRecentOwn = Boolean(msgId === session.lastSentMessageId && Date.now() - (session.lastSentAt || 0) < 30000);
-          const isWatched = Boolean(session.watchedE2eeIds?.has(msgId) || getSentMessage(session, msgId) || isRecentOwn);
-          const rType = String(attrs.type || 'delivery');
-          const children = Array.isArray(node?.content) ? node.content : [];
-          const retryNode = children.find((c) => c?.tag === 'retry');
-          const retryCount = Number(retryNode?.attrs?.count || 1);
+          // Baileys 6.7.24 sendMessagesAgain memaksa assertSessions([ownLid], true) saat device undefined -> memicu loop Closing session
+          if (isSelfLidRetry) {
+            handledSelfLidRetry = true;
+            const cachedProto = getSentMessage(session, msgId);
+            const ackAttrs = {
+              id: msgId,
+              to: attrs.from,
+              class: 'receipt',
+              type: 'retry'
+            };
+            if (attrs.participant) ackAttrs.participant = attrs.participant;
+            if (attrs.recipient) ackAttrs.recipient = attrs.recipient;
+            await sock.sendNode({ tag: 'ack', attrs: ackAttrs }).catch(() => {});
 
-          if (!isWatched && rType !== 'retry') return;
+            const retryKey = `self_lid_retry:${msgId}`;
+            const prevCount = Number(session.msgRetryCounterCache?.get?.(retryKey) || 0);
+            const targetPnJid = attrs.recipient && attrs.recipient.endsWith('@s.whatsapp.net')
+              ? attrs.recipient
+              : ownPnDigits
+                ? `${ownPnDigits}@s.whatsapp.net`
+                : '';
 
-          const cachedProto = getSentMessage(session, msgId);
-          if (rType === 'retry') {
-            const fromStr = String(attrs.participant || attrs.from || '');
-            const detail = `HP minta retry #${retryCount} (from=${fromStr.split('@')[0] || '-'}, cache=${cachedProto ? 'ADA' : 'KOSONG'})`;
-            console.warn(`[E2EE-RETRY ${sessionId}] id=${msgId} ${detail} recipient=${attrs.recipient || '-'}`);
-            pushDeliveryTrace(io, sessionId, session, {
-              messageId: msgId,
-              phase: 'retry_received',
-              event: 'retry_receipt',
-              retryCount,
-              hasCachedProto: Boolean(cachedProto),
-              isError: !cachedProto,
-              detail
-            });
-          } else if (isWatched) {
-            const phase =
-              rType === 'read' || rType === 'played'
-                ? 'read'
-                : rType === 'error'
-                  ? 'decrypt_error'
-                  : 'delivery_ack';
-            const eventLabel = rType === 'read' ? 'READ' : rType === 'played' ? 'PLAYED' : rType.toUpperCase();
-            pushDeliveryTrace(io, sessionId, session, {
-              messageId: msgId,
-              phase,
-              event: rType,
-              isError: rType === 'error',
-              detail: `CB:receipt ${eventLabel} dari ${String(attrs.from || '').split('@')[0]}`
-            });
+            if (cachedProto && targetPnJid && prevCount < 1) {
+              session.msgRetryCounterCache?.set?.(retryKey, prevCount + 1);
+              const extraOpts = cachedProto.audioStickerFutureProof
+                ? { additionalAttributes: { type: 'media' } }
+                : {};
+              await sock.relayMessage(targetPnJid, cachedProto, {
+                messageId: msgId,
+                useUserDevicesCache: false,
+                ...extraOpts
+              }).catch((err) => {
+                console.warn(`[E2EE-RETRY ${sessionId}] Gagal retry tunggal id=${msgId}:`, err.message);
+              });
+            }
+            return;
           }
         } catch (_) {}
+
+        if (!handledSelfLidRetry) {
+          for (const listener of origReceiptListeners) {
+            try {
+              listener.call(sock.ws, node);
+            } catch (_) {}
+          }
+        }
       });
     }
 

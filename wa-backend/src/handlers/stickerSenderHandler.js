@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const baileysModule = require('@whiskeysockets/baileys');
 const { sessions } = require('../state/sessionStore');
 const {
@@ -2051,11 +2052,15 @@ async function sendNativeProto134AudioSticker({
       audioStickerMessage: audioObj
     };
 
+    const messageSecret = crypto.randomBytes(32);
     const protoMsg = proto.Message.fromObject({
       audioStickerFutureProof: {
         message: {
           stickerMessage: stickerObj
         }
+      },
+      messageContextInfo: {
+        messageSecret
       }
     });
 
@@ -2070,8 +2075,10 @@ async function sendNativeProto134AudioSticker({
     const f26 = f1?.subFields?.find((n) => n.field === 26);
     const f26Audio = f26?.subFields?.find((n) => n.field === 26);
     const audioMimeLeaf = f26Audio?.subFields?.find((n) => n.field === 2);
-    if (!f134 || !f1 || !f26 || !f26Audio || !String(audioMimeLeaf?.utf8 || '').includes('audio/ogg')) {
-      throw new Error('Validasi wire #134 -> #1 -> #26 (AudioMessage Ogg/Opus) gagal.');
+    const f35 = wireTree.find((n) => n.field === 35);
+    const f35Secret = f35?.subFields?.find((n) => n.field === 3);
+    if (!f134 || !f1 || !f26 || !f26Audio || !String(audioMimeLeaf?.utf8 || '').includes('audio/ogg') || !f35Secret || f35Secret.len !== 32) {
+      throw new Error('Validasi wire #134 -> #1 -> #26 + #35.3 (messageSecret 32B) gagal.');
     }
 
     const msgId =
@@ -2083,8 +2090,21 @@ async function sendNativeProto134AudioSticker({
     rememberSentMessage(session, msgId, protoMsg);
     watchE2eeMessageId(session, msgId);
 
+    console.log('[AUDIO-STICKER-WIRE]', JSON.stringify({
+      msgId,
+      targetJid: selfJid,
+      encodedLen: encodedBytes.length,
+      hasTag134: Boolean(f134),
+      hasTag26Audio: Boolean(f26Audio),
+      hasMsgSecret: Boolean(f35Secret && f35Secret.len === 32),
+      webpBytes: stickerWebpBuf.length,
+      oggBytes: oggOpusBuf.length,
+      isAnimated: Boolean(isAnimated)
+    }));
+
     await session.sock.relayMessage(selfJid, protoMsg, {
       messageId: msgId,
+      useUserDevicesCache: true,
       additionalAttributes: { type: 'media' }
     });
 
@@ -2304,6 +2324,9 @@ async function performResetSelfE2eeKeys(io, sessionId, session) {
 
   try {
     session.msgRetryCounterCache?.flushAll?.();
+    session.msgCache?.clear?.();
+    session.sentMessageStore?.clear?.();
+    session.watchedE2eeIds?.clear?.();
   } catch (_) {}
 
   if (typeof session.sock?.authState?.keys?.set === 'function') {
@@ -2316,6 +2339,8 @@ async function performResetSelfE2eeKeys(io, sessionId, session) {
       }
     } catch (_) {}
   }
+
+  emitAuthSnapshotNow(io, sessionId, session);
 
   // Soft-restart Baileys sambil menjaga creds.json agar state Signal/NodeCache/libsignal bersih 100%
   const { connected, session: freshSession } = await softRestartBaileysPreserveAuth(io, sessionId, 14000);
