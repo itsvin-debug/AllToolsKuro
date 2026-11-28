@@ -114,7 +114,7 @@ export default function StickerQueueList({
         <div className="p-4 border-2 border-dashed border-black bg-neutral-50 text-center space-y-1">
           <p className="font-black text-xs text-black">Antrean masih kosong</p>
           <p className="text-[11px] font-semibold text-neutral-600 leading-snug">
-            Rakit lewat <b>Video + Sound</b> lalu tekan <b>+ Tambah ke Antrean</b>, atau unggah banyak video sekaligus di tab <b>Video Bersuara Banyak</b>.
+            Rakit lewat <b>Foto/Video + Sound</b> lalu tekan <b>Tambah ke Antrean</b>, atau unggah banyak video sekaligus di tab <b>Multi Video</b>.
           </p>
         </div>
       ) : (
@@ -174,7 +174,11 @@ export default function StickerQueueList({
 
                     <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-mono font-bold text-neutral-700">
                       <span className="px-1.5 py-0.5 bg-white border border-black">
-                        {item.sourceKind === 'multi-video' ? 'Video Asli' : 'Video+Sound'}
+                        {item.sourceKind === 'multi-video'
+                          ? 'Multi Video'
+                          : item.visualKind === 'image'
+                            ? 'Foto+Sound'
+                            : 'Video+Sound'}
                       </span>
                       <span className="px-1.5 py-0.5 bg-white border border-black">
                         {clipDur}s
@@ -240,37 +244,99 @@ export default function StickerQueueList({
                 </div>
 
                 {isEditing && (
-                  <div className="p-2 bg-white border border-black grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
-                    <div className="sm:col-span-2">
-                      <label className="font-black text-[10px] uppercase block mb-0.5">
-                        Teks Meme Opsional:
-                      </label>
-                      <input
-                        type="text"
-                        maxLength={40}
-                        value={item.stickerText || ''}
-                        onChange={(e) => onUpdateItem?.(item.id, { stickerText: e.target.value })}
-                        placeholder="Kosongkan jika tanpa teks"
-                        className="w-full border border-black px-2 py-1 font-bold text-xs bg-white"
-                      />
+                  <div className="p-2.5 bg-white border border-black space-y-2 text-[11px]">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="font-black text-[10px] uppercase block mb-0.5">
+                          Mulai (s):
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          max={Math.max(0, (Number(item.totalDuration) || 8) - 0.5).toFixed(1)}
+                          value={Number(item.startSec ?? 0)}
+                          onChange={(e) => {
+                            const maxD = Math.max(0.5, Number(item.totalDuration) || 8);
+                            const nextStart = Math.max(0, Math.min(maxD - 0.5, Number(e.target.value) || 0));
+                            let nextEnd = Number(item.endSec ?? Math.min(maxD, nextStart + 5));
+                            if (nextEnd - nextStart < 0.5) nextEnd = Math.min(maxD, nextStart + 0.5);
+                            if (nextEnd - nextStart > 8) nextEnd = Math.min(maxD, nextStart + 8);
+                            const patch = {
+                              startSec: Number(nextStart.toFixed(1)),
+                              endSec: Number(nextEnd.toFixed(1)),
+                              status: 'ready',
+                              error: null
+                            };
+                            if (item.sourceKind === 'multi-video') {
+                              patch.videoStartSec = patch.startSec;
+                              patch.videoEndSec = patch.endSec;
+                            }
+                            onUpdateItem?.(item.id, patch);
+                          }}
+                          className="w-full border border-black px-2 py-1 font-mono font-bold text-xs bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="font-black text-[10px] uppercase block mb-0.5">
+                          Selesai (s):
+                        </label>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0.5"
+                          max={Math.max(1, Number(item.totalDuration) || 8).toFixed(1)}
+                          value={Number(item.endSec ?? 5)}
+                          onChange={(e) => {
+                            const maxD = Math.max(0.5, Number(item.totalDuration) || 8);
+                            const nextEnd = Math.max(0.5, Math.min(maxD, Number(e.target.value) || 5));
+                            let nextStart = Number(item.startSec ?? 0);
+                            if (nextEnd - nextStart < 0.5) nextStart = Math.max(0, nextEnd - 0.5);
+                            if (nextEnd - nextStart > 8) nextStart = Math.max(0, nextEnd - 8);
+                            const patch = {
+                              startSec: Number(nextStart.toFixed(1)),
+                              endSec: Number(nextEnd.toFixed(1)),
+                              status: 'ready',
+                              error: null
+                            };
+                            if (item.sourceKind === 'multi-video') {
+                              patch.videoStartSec = patch.startSec;
+                              patch.videoEndSec = patch.endSec;
+                            }
+                            onUpdateItem?.(item.id, patch);
+                          }}
+                          className="w-full border border-black px-2 py-1 font-mono font-bold text-xs bg-white"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="font-black text-[10px] uppercase block mb-0.5">
-                        Potong Selesai (s):
-                      </label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="0.5"
-                        max={Math.max(1, Number(item.totalDuration) || 15).toFixed(1)}
-                        value={item.endSec}
-                        onChange={(e) => {
-                          const maxD = Math.max(1, Number(item.totalDuration) || 15);
-                          const val = Math.max(0.5, Math.min(maxD, Number(e.target.value) || 5));
-                          onUpdateItem?.(item.id, { endSec: Number(val.toFixed(1)), status: 'ready', error: null });
-                        }}
-                        className="w-full border border-black px-2 py-1 font-mono font-bold text-xs bg-white"
-                      />
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                      <div className="sm:col-span-2">
+                        <label className="font-black text-[10px] uppercase block mb-0.5">
+                          Teks Meme Opsional:
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={40}
+                          value={item.stickerText || ''}
+                          onChange={(e) => onUpdateItem?.(item.id, { stickerText: e.target.value, status: 'ready', error: null })}
+                          placeholder="Kosongkan jika tanpa teks"
+                          className="w-full border border-black px-2 py-1 font-bold text-xs bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="font-black text-[10px] uppercase block mb-0.5">
+                          Framing 1:1:
+                        </label>
+                        <select
+                          value={item.cropMode || 'cover'}
+                          onChange={(e) => onUpdateItem?.(item.id, { cropMode: e.target.value, status: 'ready', error: null })}
+                          className="w-full border border-black px-2 py-1 font-bold text-xs bg-white cursor-pointer"
+                        >
+                          <option value="cover">Crop Penuh</option>
+                          <option value="contain">Pas (Fit)</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
                 )}

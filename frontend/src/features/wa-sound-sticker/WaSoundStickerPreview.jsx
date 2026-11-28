@@ -21,6 +21,8 @@ export default function WaSoundStickerPreview({
   waveformPeaks = [],
   startSec = 0,
   endSec = 0,
+  videoStartSec = 0,
+  videoEndSec = 0,
   volume = 1.0,
   fadeSmooth = true,
   renderOptions = {}
@@ -108,9 +110,11 @@ export default function WaSoundStickerPreview({
       if (isVideoSource && sourceMedia) {
         try {
           const vidDur = Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0 ? sourceMedia.duration : clipDuration;
+          const vBase = Math.max(0, Math.min(vidDur - 0.1, Number(videoStartSec) || 0));
+          const vSpan = Number(videoEndSec) > vBase ? Math.max(0.2, Number(videoEndSec) - vBase) : vidDur;
           sourceMedia.muted = true;
           sourceMedia.loop = true;
-          sourceMedia.currentTime = resumeOffset % vidDur;
+          sourceMedia.currentTime = (vBase + (resumeOffset % vSpan)) % vidDur;
           await sourceMedia.play();
         } catch {}
       }
@@ -151,7 +155,7 @@ export default function WaSoundStickerPreview({
         });
       }
     },
-    [sourceMedia, audioBuffer, clipDuration, isVideoSource, drawFrame, safeStartSec, safeEndSec, volume, fadeSmooth]
+    [sourceMedia, audioBuffer, clipDuration, isVideoSource, drawFrame, safeStartSec, safeEndSec, videoStartSec, videoEndSec, volume, fadeSmooth]
   );
 
   const handleToggleSound = () => {

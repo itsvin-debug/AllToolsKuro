@@ -41,11 +41,11 @@ import {
 import {
   validateSourceMediaDimensions,
   createSquareThumbnailDataUrl,
-  composeSoundVideoStage1,
   loadMediaElementFromFile,
   releaseMediaElement,
   buildStickerSendPayload,
-  createPlainTestStickerWebpBase64
+  createPlainTestStickerWebpBase64,
+  validateSelectedFile
 } from './soundStickerComposer';
 import WaSoundStickerPreview from './WaSoundStickerPreview';
 import StickerQueueList from './StickerQueueList';
@@ -63,9 +63,9 @@ import {
 
 const MAX_VISUAL_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_FILE_BYTES = 15 * 1024 * 1024;
-const RECOMMENDED_FULL_SEC = 15;
-const MAX_CLIP_DURATION_SEC = 30;
-const BATCH_DELAY_MS = 1500;
+const RECOMMENDED_FULL_SEC = 8;
+const MAX_CLIP_DURATION_SEC = 8;
+const BATCH_DELAY_MS = 900;
 
 function formatTimeSec(sec = 0) {
   const safe = Math.max(0, parseDecimalSafe(sec, 0));
@@ -119,12 +119,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [mobileTab, setMobileTab] = useState('create'); // 'create' | 'queue' | 'wa'
   const [inputMode, setInputMode] = useState('single'); // 'single' | 'multi'
 
-  // ─── 1. MODE A: VISUAL & SOUND (1-PER-1 -> ANTREAN) ───
+  // ─── 1. MODE A: FOTO/VIDEO & SOUND (1-PER-1 -> ANTREAN) ───
   const [visualFileMeta, setVisualFileMeta] = useState(null);
   const [visualFileObj, setVisualFileObj] = useState(null);
   const [sourceMedia, setSourceMedia] = useState(null);
   const [isVideoSource, setIsVideoSource] = useState(false);
   const [visualPreviewUrl, setVisualPreviewUrl] = useState('');
+  const [videoStartSec, setVideoStartSec] = useState(0);
+  const [videoEndSec, setVideoEndSec] = useState(8);
+  const [visualRejectError, setVisualRejectError] = useState('');
+  const [audioRejectError, setAudioRejectError] = useState('');
+  const [multiRejectError, setMultiRejectError] = useState('');
 
   const [cropMode, setCropMode] = useState('cover'); // 'cover' | 'contain'
   const [bgStyle, setBgStyle] = useState('solid'); // 'solid' | 'blur' | 'transparent'
@@ -473,17 +478,18 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   // ─── HANDLE UNGGAH VISUAL (MODE A) ───
   const handleSelectVisualFile = async (file) => {
     if (!file) return;
+    setVisualRejectError('');
     if (file.size > MAX_VISUAL_FILE_BYTES) {
-      onShowToast?.('Ukuran visual melebihi batas maksimal 25 MB.', 'error');
+      const msg = 'Ukuran visual melebihi batas maksimal 25 MB.';
+      setVisualRejectError(msg);
+      onShowToast?.(msg, 'error');
       return;
     }
 
-    const mime = String(file.type || '').toLowerCase();
-    const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
-    const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|heic|heif|bmp|avif)$/i.test(file.name);
-
-    if (!isVideo && !isImage) {
-      onShowToast?.('Format visual tidak didukung. Pilih foto (JPG/PNG/WebP) atau video (MP4/WebM/MOV).', 'error');
+    const check = validateSelectedFile(file, 'visual');
+    if (!check.ok) {
+      setVisualRejectError(check.error);
+      onShowToast?.(check.error, 'error');
       return;
     }
 
@@ -492,14 +498,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     try {
       const { mediaEl, objectUrl, isVideo: loadedVideo } = await loadMediaElementFromFile(file);
       activeVisualUrlRef.current = objectUrl;
+      const vidDur = loadedVideo ? Number(mediaEl.duration || 0) : 0;
       setVisualPreviewUrl(objectUrl);
       setSourceMedia(mediaEl);
       setVisualFileObj(file);
       setIsVideoSource(loadedVideo);
+      setVideoStartSec(0);
+      setVideoEndSec(loadedVideo && vidDur > 0 ? Number(Math.min(MAX_CLIP_DURATION_SEC, vidDur).toFixed(1)) : 8);
       setVisualFileMeta({
         name: file.name,
         kind: loadedVideo ? 'video' : 'image',
-        duration: loadedVideo ? Number(mediaEl.duration || 0) : 0,
+        duration: vidDur,
         width: loadedVideo ? mediaEl.videoWidth : mediaEl.naturalWidth,
         height: loadedVideo ? mediaEl.videoHeight : mediaEl.naturalHeight
       });
@@ -513,36 +522,46 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
+  const updateSafeVideoStart = (nextStart) => {
+    const total = Number(visualFileMeta?.duration) || 8;
+    const parsed = parseDecimalSafe(nextStart, 0);
+    const s = Number(Math.max(0, Math.min(Math.max(0, total - 0.5), parsed)).toFixed(1));
+    let e = parseDecimalSafe(videoEndSec, Math.min(total, s + 5));
+    if (e - s < 0.5) e = Number(Math.min(total, s + 0.5).toFixed(1));
+    if (e - s > MAX_CLIP_DURATION_SEC) e = Number(Math.min(total, s + MAX_CLIP_DURATION_SEC).toFixed(1));
+    setVideoStartSec(s);
+    setVideoEndSec(e);
+  };
+
+  const updateSafeVideoEnd = (nextEnd) => {
+    const total = Number(visualFileMeta?.duration) || 8;
+    const parsed = parseDecimalSafe(nextEnd, total);
+    const e = Number(Math.max(0.5, Math.min(total, parsed)).toFixed(1));
+    let s = parseDecimalSafe(videoStartSec, 0);
+    if (e - s < 0.5) s = Number(Math.max(0, e - 0.5).toFixed(1));
+    if (e - s > MAX_CLIP_DURATION_SEC) s = Number(Math.max(0, e - MAX_CLIP_DURATION_SEC).toFixed(1));
+    setVideoStartSec(s);
+    setVideoEndSec(e);
+  };
+
   // ─── HANDLE UNGGAH / EKSTRAK AUDIO (MODE A) ───
-  const loadAudioSource = async (file, labelPrefix = '') => {
+  const loadAudioSource = async (file, labelPrefix = '', { allowVideoSource = false } = {}) => {
     if (!file) return;
-    if (file.size > MAX_AUDIO_FILE_BYTES && labelPrefix === '') {
-      onShowToast?.('Ukuran file audio melebihi batas maksimal 15 MB.', 'error');
+    setAudioRejectError('');
+    if (file.size > MAX_AUDIO_FILE_BYTES && !allowVideoSource) {
+      const msg = 'Ukuran file audio melebihi batas maksimal 15 MB.';
+      setAudioRejectError(msg);
+      onShowToast?.(msg, 'error');
       return;
     }
 
-    const fileNameLower = String(file.name || '').toLowerCase();
-    const mimeLower = String(file.type || '').toLowerCase();
-    const isAllowedExt = /\.(mp3|m4a|wav|ogg|aac|opus|flac|amr|3gp|m4r|wma|mp4|webm|mov|m4v|mkv|avi)$/i.test(fileNameLower);
-    const isObviouslyRejected =
-      /\.(jpg|jpeg|png|webp|gif|bmp|svg|heic|pdf|apk|zip|rar|7z|doc|docx|xls|xlsx|ppt|pptx|txt|json|html|exe)$/i.test(fileNameLower) ||
-      mimeLower.startsWith('image/') ||
-      mimeLower === 'application/pdf' ||
-      mimeLower.includes('android.package-archive') ||
-      mimeLower.includes('zip');
-    const isMediaMime =
-      mimeLower.startsWith('audio/') ||
-      mimeLower.startsWith('video/') ||
-      mimeLower === '' ||
-      mimeLower === 'application/octet-stream' ||
-      mimeLower === 'application/ogg';
-
-    if (isObviouslyRejected || (!isAllowedExt && !isMediaMime)) {
-      onShowToast?.(
-        'File yang dipilih bukan file suara/audio. Silakan pilih file MP3, M4A, WAV, OGG, AAC, atau video MP4 dari File Manager.',
-        'error'
-      );
-      return;
+    if (!allowVideoSource) {
+      const check = validateSelectedFile(file, 'audio');
+      if (!check.ok) {
+        setAudioRejectError(check.error);
+        onShowToast?.(check.error, 'error');
+        return;
+      }
     }
 
     trimPlayerRef.current?.stop();
@@ -745,16 +764,26 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       const stagedMuxedBlob = null;
       const stagedMuxedExt = null;
 
+      const vStart = isVideoSource ? Math.max(0, Number(videoStartSec) || 0) : 0;
+      const vTotal = Number(visualFileMeta?.duration) || effectiveBounds.duration;
+      const vEnd = isVideoSource
+        ? Math.max(vStart + 0.5, Math.min(Math.max(vStart + 0.5, vTotal), Number(videoEndSec) || vTotal))
+        : effectiveBounds.duration;
+
       const itemId = `stk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const newItem = {
         id: itemId,
         title: visualFileMeta?.name || `Stiker #${stickerQueue.length + 1}`,
         sourceKind: 'composed',
+        visualKind: isVideoSource ? 'video' : 'image',
         visualFile: visualFileObj,
         audioFile: audioFileObj,
         audioBuffer,
         thumbnailUrl,
         totalDuration: audioBuffer.duration,
+        videoDuration: vTotal,
+        videoStartSec: vStart,
+        videoEndSec: vEnd,
         startSec: effectiveBounds.start,
         endSec: effectiveBounds.end,
         volume,
@@ -788,14 +817,30 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const handleSelectMultiVideos = async (fileList) => {
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
-    if (files.length > 10) {
+    setMultiRejectError('');
+
+    const validVideoFiles = [];
+    let rejectedCount = 0;
+    for (const f of files) {
+      const check = validateSelectedFile(f, 'video_only');
+      if (check.ok) validVideoFiles.push(f);
+      else rejectedCount++;
+    }
+
+    if (rejectedCount > 0) {
+      const rejectMsg = `Mode Multi Video hanya menerima file video. ${rejectedCount} file foto/audio ditolak otomatis.`;
+      setMultiRejectError(rejectMsg);
+      onShowToast?.(rejectMsg, 'error');
+    }
+    if (validVideoFiles.length === 0) return;
+
+    if (validVideoFiles.length > 10) {
       onShowToast?.('Maksimal 10 video per batch upload agar browser HP tetap ringan.', 'info');
     }
-    const chosen = files.slice(0, 10);
+    const chosen = validVideoFiles.slice(0, 10);
     setIsImportingMulti(true);
 
     const addedItems = [];
-    let firstVisualFile = null;
 
     for (const file of chosen) {
       if (file.size > MAX_VISUAL_FILE_BYTES) {
@@ -807,7 +852,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       try {
         const meta = await probeVideoMetadata(file);
         tempLoaded = await loadMediaElementFromFile(file);
-        const clipEnd = Number(Math.max(0.5, Math.min(meta.duration, multiMaxCapSec)).toFixed(1));
+        const capSec = Math.min(MAX_CLIP_DURATION_SEC, Number(multiMaxCapSec) || 8);
+        const clipEnd = Number(Math.max(0.5, Math.min(meta.duration, capSec)).toFixed(1));
         const itemRenderOpts = {
           cropMode,
           bgStyle: 'solid',
@@ -824,11 +870,15 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           id: itemId,
           title: file.name,
           sourceKind: 'multi-video',
+          visualKind: 'video',
           visualFile: file,
           audioFile: null,
           audioBuffer: null,
           thumbnailUrl: thumbUrl,
           totalDuration: meta.duration,
+          videoDuration: meta.duration,
+          videoStartSec: 0,
+          videoEndSec: clipEnd,
           startSec: 0,
           endSec: clipEnd,
           volume: 1.0,
@@ -845,8 +895,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           status: 'ready',
           error: null
         });
-
-        if (!firstVisualFile) firstVisualFile = file;
       } catch (err) {
         onShowToast?.(err.message || `Gagal memuat ${file.name}.`, 'error');
       } finally {
@@ -858,10 +906,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     if (addedItems.length > 0) {
       setStickerQueue((prev) => [...prev, ...addedItems]);
       onShowToast?.(`${addedItems.length} video bersuara masuk ke Antrean Stiker Audio!`, 'success');
-      if (firstVisualFile) {
-        handleSelectVisualFile(firstVisualFile);
-        loadAudioSource(firstVisualFile, '[Video] ').catch(() => {});
-      }
     }
   };
 
@@ -869,18 +913,23 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const handlePreviewQueueItem = async (item) => {
     if (!item?.visualFile) return;
     setCropMode(item.cropMode || 'cover');
+    setBgStyle(item.bgStyle || 'solid');
+    setBgColor(item.bgColor || '#111827');
     setStickerText(item.stickerText || '');
     setPackName(item.packName || 'Kuro Sound Sticker');
     setPackPublisher(item.packPublisher || 'Kuro Studio');
 
     await handleSelectVisualFile(item.visualFile);
+    if (item.videoStartSec !== undefined) setVideoStartSec(item.videoStartSec);
+    if (item.videoEndSec !== undefined) setVideoEndSec(item.videoEndSec);
+
     if (item.audioBuffer) {
       setAudioBuffer(item.audioBuffer);
       setWaveformPeaks(extractWaveformPeaks(item.audioBuffer, 96));
       setStartSec(item.startSec || 0);
       setEndSec(item.endSec || 5);
     } else {
-      await loadAudioSource(item.visualFile, '[Video] ');
+      await loadAudioSource(item.visualFile, '[Video] ', { allowVideoSource: true });
       setStartSec(item.startSec || 0);
       setEndSec(item.endSec || 5);
     }
@@ -962,15 +1011,25 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       return;
     }
 
+    const vStart = isVideoSource ? Math.max(0, Number(videoStartSec) || 0) : 0;
+    const vTotal = Number(visualFileMeta?.duration) || effectiveBounds.duration;
+    const vEnd = isVideoSource
+      ? Math.max(vStart + 0.5, Math.min(Math.max(vStart + 0.5, vTotal), Number(videoEndSec) || vTotal))
+      : effectiveBounds.duration;
+
     const tempItem = {
       id: `direct_${Date.now()}`,
       title: visualFileMeta?.name || 'Stiker Suara',
       sourceKind: 'composed',
+      visualKind: isVideoSource ? 'video' : 'image',
       visualFile: visualFileObj,
       audioFile: audioFileObj,
       audioBuffer,
       thumbnailUrl: createSquareThumbnailDataUrl(sourceMedia, renderOptions),
       totalDuration: audioBuffer.duration,
+      videoDuration: vTotal,
+      videoStartSec: vStart,
+      videoEndSec: vEnd,
       startSec: effectiveBounds.start,
       endSec: effectiveBounds.end,
       volume,
@@ -1314,44 +1373,50 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             <button
               type="button"
               onClick={() => setInputMode('single')}
-              className={`py-2.5 px-3 font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer ${
+              className={`py-2.5 px-2 sm:px-3 font-black text-[11px] sm:text-sm flex items-center justify-center gap-1 min-h-[44px] cursor-pointer whitespace-nowrap ${
                 inputMode === 'single' ? 'bg-yellow-300 text-black' : 'bg-white text-neutral-700 hover:bg-neutral-50'
               }`}
             >
-              <Sparkles className="w-4 h-4 shrink-0" />
-              <span className="truncate">Video + Sound</span>
+              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>Foto/Video + Sound</span>
             </button>
             <button
               type="button"
               onClick={() => setInputMode('multi')}
-              className={`py-2.5 px-3 font-black text-xs sm:text-sm border-l-2 border-black flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer ${
+              className={`py-2.5 px-2 sm:px-3 font-black text-[11px] sm:text-sm border-l-2 border-black flex items-center justify-center gap-1 min-h-[44px] cursor-pointer whitespace-nowrap ${
                 inputMode === 'multi' ? 'bg-cyan-300 text-black' : 'bg-white text-neutral-700 hover:bg-neutral-50'
               }`}
             >
-              <Layers className="w-4 h-4 shrink-0" />
-              <span className="truncate">Multi Video</span>
+              <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>Multi Video</span>
             </button>
           </div>
 
           {inputMode === 'single' ? (
             <>
-              {/* MODE A — INPUT VISUAL + OPSI 1:1 */}
+              {/* MODE A — LANGKAH 1: VISUAL STIKER (FOTO ATAU VIDEO) */}
               <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
-                <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-start justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="px-2 py-0.5 bg-yellow-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
-                      Mode A • 1
+                      Langkah 1
                     </span>
-                    <h2 className="font-black text-xs sm:text-sm uppercase text-black truncate">
-                      Pilih Foto atau Video (1:1)
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black leading-tight">
+                      Visual Stiker (Foto atau Video)
                     </h2>
                   </div>
                   {visualFileMeta && (
-                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black">
-                      {visualFileMeta.kind === 'video' ? 'VIDEO' : 'FOTO'} ({visualFileMeta.width}&times;{visualFileMeta.height})
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black shrink-0">
+                      {visualFileMeta.kind === 'video'
+                        ? `VIDEO • ${Number(visualFileMeta.duration || 0).toFixed(1)}s`
+                        : 'FOTO'} ({visualFileMeta.width}&times;{visualFileMeta.height})
                     </span>
                   )}
                 </div>
+
+                <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
+                  Pilih 1 foto (JPG/PNG/WebP) atau 1 video pendek (MP4/MOV/WebM) sebagai tampilan stiker 1:1. File audio otomatis ditolak.
+                </p>
 
                 <button
                   type="button"
@@ -1363,10 +1428,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     <Film className="w-5 h-5" />
                   </div>
                   <span className="font-black text-xs text-black break-all">
-                    {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih 1 Foto atau Video (MP4/WebM/JPG/PNG)'}
+                    {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih Foto (JPG/PNG/WebP) atau Video (MP4/MOV/WebM)'}
                   </span>
                   <span className="text-[11px] font-semibold text-neutral-600">
-                    Kotak 512&times;512 px &bull; Diproses lokal di perangkat (maks 25 MB)
+                    Kotak 1:1 otomatis &bull; Diproses lokal di HP (maks 25 MB)
                   </span>
                 </button>
                 <input
@@ -1380,6 +1445,82 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   }}
                   className="hidden"
                 />
+
+                {visualRejectError && (
+                  <div className="p-2.5 bg-rose-50 border-2 border-rose-600 text-[11px] font-bold text-rose-900 flex items-start gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                    <span>{visualRejectError}</span>
+                  </div>
+                )}
+
+                {isVideoSource && visualFileMeta?.duration > 0 && (
+                  <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="font-black text-[11px] uppercase text-black">
+                        Potong Durasi Video (Maks 8 Detik)
+                      </span>
+                      <span className="px-2 py-0.5 bg-white border border-black font-mono font-bold text-[10px]">
+                        Klip: {Math.max(0.5, videoEndSec - videoStartSec).toFixed(1)}s / {Number(visualFileMeta.duration).toFixed(1)}s
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="p-2 bg-white border border-black space-y-1">
+                        <div className="flex items-center justify-between font-black text-[11px]">
+                          <span>Mulai Video:</span>
+                          <span className="font-mono text-emerald-700">{formatTimeSec(videoStartSec)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateSafeVideoStart(videoStartSec - 0.5)}
+                            className="px-2 py-1 bg-neutral-100 hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            -0.5s
+                          </button>
+                          <DecimalSecInput
+                            ariaLabel="Detik mulai video"
+                            value={videoStartSec}
+                            onCommit={updateSafeVideoStart}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateSafeVideoStart(videoStartSec + 0.5)}
+                            className="px-2 py-1 bg-neutral-100 hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            +0.5s
+                          </button>
+                        </div>
+                      </div>
+                      <div className="p-2 bg-white border border-black space-y-1">
+                        <div className="flex items-center justify-between font-black text-[11px]">
+                          <span>Selesai Video:</span>
+                          <span className="font-mono text-emerald-700">{formatTimeSec(videoEndSec)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateSafeVideoEnd(videoEndSec - 0.5)}
+                            className="px-2 py-1 bg-neutral-100 hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            -0.5s
+                          </button>
+                          <DecimalSecInput
+                            ariaLabel="Detik selesai video"
+                            value={videoEndSec}
+                            onCommit={updateSafeVideoEnd}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateSafeVideoEnd(videoEndSec + 0.5)}
+                            className="px-2 py-1 bg-neutral-100 hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            +0.5s
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                   <div className="space-y-1">
@@ -1513,24 +1654,28 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 </div>
               </section>
 
-              {/* MODE A — INPUT SOUND & WAVEFORM TRIMMER */}
+              {/* MODE A — LANGKAH 2: SUARA STIKER (FILE AUDIO) */}
               <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
-                <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-start justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0 flex-wrap">
                     <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
-                      Mode A • 2
+                      Langkah 2
                     </span>
-                    <h2 className="font-black text-xs sm:text-sm uppercase text-black flex items-center gap-1.5 min-w-0">
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black flex items-center gap-1.5 leading-tight">
                       <Scissors className="w-4 h-4 shrink-0" />
-                      <span className="truncate">Sound &amp; Atur Detik Potongan</span>
+                      <span>Suara Stiker (File Audio)</span>
                     </h2>
                   </div>
                   {audioFileMeta && (
-                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-100 border border-black">
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-100 border border-black shrink-0">
                       Asli: {audioFileMeta.duration.toFixed(1)}s
                     </span>
                   )}
                 </div>
+
+                <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
+                  Pilih file suara (MP3/WAV/OGG/M4A/AAC) untuk audio stiker. Foto &amp; video otomatis ditolak di sini.
+                </p>
 
                 <div className="flex flex-col sm:flex-row gap-2">
                   <button
@@ -1541,7 +1686,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   >
                     {isDecodingAudio ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Music className="w-4 h-4 shrink-0" />}
                     <span className="truncate">
-                      {audioFileMeta ? `Ganti Sound (${audioFileMeta.name})` : 'Pilih File Audio (MP3/WAV/M4A/OGG)'}
+                      {audioFileMeta ? `Ganti Audio (${audioFileMeta.name})` : 'Pilih File Audio (MP3/WAV/OGG/M4A/AAC)'}
                     </span>
                   </button>
                   <input
@@ -1558,7 +1703,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   {isVideoSource && visualFileObj && (
                     <button
                       type="button"
-                      onClick={() => loadAudioSource(visualFileObj, '[Suara Video] ')}
+                      onClick={() => loadAudioSource(visualFileObj, '[Suara Video] ', { allowVideoSource: true })}
                       disabled={isDecodingAudio}
                       className="px-3 py-2.5 bg-yellow-300 hover:bg-yellow-400 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 min-h-[42px]"
                     >
@@ -1568,9 +1713,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   )}
                 </div>
 
-                <p className="text-[11px] font-semibold text-neutral-600 leading-snug">
-                  Pilih file sound dari File Manager / Unduhan (MP3, M4A, WAV, OGG, AAC, OPUS, atau ekstrak suara dari Video MP4/WebM).
-                </p>
+                {audioRejectError && (
+                  <div className="p-2.5 bg-rose-50 border-2 border-rose-600 text-[11px] font-bold text-rose-900 flex items-start gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                    <span>{audioRejectError}</span>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 border-2 border-black bg-white">
                   <button
@@ -1580,7 +1728,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       trimMode === 'full' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
                     }`}
                   >
-                    Full Sound
+                    Full (Maks 8s)
                   </button>
                   <button
                     type="button"
@@ -1597,7 +1745,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <div className="p-2.5 bg-amber-50 border border-black text-[11px] font-semibold flex items-center justify-between gap-2 flex-wrap">
                     <span className="flex items-center gap-1.5">
                       <Info className="w-4 h-4 text-amber-700 shrink-0" />
-                      Durasi &gt; 15s. Batasi 15s agar ukuran aman?
+                      Durasi &gt; 8s. Batasi 8s agar ukuran aman?
                     </span>
                     <label className="flex items-center gap-1.5 font-black cursor-pointer shrink-0">
                       <input
@@ -1610,7 +1758,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         }}
                         className="w-4 h-4 accent-black"
                       />
-                      <span>Batasi 15s</span>
+                      <span>Batasi 8s</span>
                     </label>
                   </div>
                 )}
@@ -1742,6 +1890,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 waveformPeaks={waveformPeaks}
                 startSec={effectiveBounds.start}
                 endSec={effectiveBounds.end}
+                videoStartSec={videoStartSec}
+                videoEndSec={videoEndSec}
                 volume={volume}
                 fadeSmooth={fadeSmooth}
                 renderOptions={renderOptions}
@@ -1825,8 +1975,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <span className="font-black text-xs sm:text-sm text-black">
                   {isImportingMulti ? 'Membaca video & membuat thumbnail 1:1...' : 'Pilih Banyak Video Bersuara Sekaligus'}
                 </span>
-                <span className="text-[11px] font-semibold text-neutral-700 max-w-md">
-                  Cocok jika video Anda sudah ada suaranya (MP4/WebM/MOV). Semua file langsung masuk ke Antrean Stiker Audio (crop 1:1 &amp; pertahankan audio asli).
+                <span className="text-[11px] font-semibold text-neutral-700 max-w-md leading-snug">
+                  Hanya menerima file VIDEO bersuara (MP4/WebM/MOV). Foto &amp; file audio otomatis ditolak. Durasi video &amp; audio otomatis seimbang dan tetap bisa diedit lagi di Antrean.
                 </span>
               </button>
               <input
@@ -1840,6 +1990,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 }}
                 className="hidden"
               />
+
+              {multiRejectError && (
+                <div className="p-2.5 bg-rose-50 border-2 border-rose-600 text-[11px] font-bold text-rose-900 flex items-start gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                  <span>{multiRejectError}</span>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
                 <div className="space-y-1">
@@ -1875,8 +2032,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   >
                     <option value={5}>Maksimal 5 detik</option>
                     <option value={8}>Maksimal 8 detik (Disarankan)</option>
-                    <option value={10}>Maksimal 10 detik</option>
-                    <option value={15}>Maksimal 15 detik</option>
                   </select>
                 </div>
 

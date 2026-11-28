@@ -6,7 +6,76 @@ import {
 } from './audioTrimmerEngine.js';
 
 const TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
-const MAX_SAFE_MP4_BYTES = 2.5 * 1024 * 1024;
+export const MAX_ANIMATED_WEBP_BYTES = 470 * 1024;
+
+/**
+ * Validasi ketat file unggahan (MIME + ekstensi) per kolom unggah di Mode A dan Mode B.
+ */
+export function validateSelectedFile(file, expectedKind = 'visual') {
+  if (!file || typeof file.name !== 'string') {
+    return { ok: false, kind: 'empty', error: 'File tidak valid atau kosong.' };
+  }
+
+  const nameLower = file.name.toLowerCase();
+  const mimeLower = String(file.type || '').toLowerCase();
+
+  const isImageExt = /\.(jpg|jpeg|png|webp|gif|heic|heif|bmp|avif)$/i.test(nameLower);
+  const isVideoExt = /\.(mp4|webm|mov|m4v|mkv|avi|3gp)$/i.test(nameLower);
+  const isAudioExt = /\.(mp3|wav|ogg|opus|m4a|aac|flac|amr|m4r|wma)$/i.test(nameLower);
+
+  const isImage = mimeLower.startsWith('image/') || isImageExt;
+  const isVideo = mimeLower.startsWith('video/') || isVideoExt;
+  const isAudio = (mimeLower.startsWith('audio/') || mimeLower === 'application/ogg' || isAudioExt) && !isVideo;
+
+  if (expectedKind === 'visual') {
+    if (isAudio) {
+      return {
+        ok: false,
+        kind: 'audio',
+        error: 'File audio tidak bisa dimasukkan di kolom Foto/Video. Masukkan di Langkah 2 (Suara Stiker).'
+      };
+    }
+    if (!isImage && !isVideo) {
+      return {
+        ok: false,
+        kind: 'other',
+        error: 'Format visual tidak didukung. Pilih foto (JPG/PNG/WebP) atau video (MP4/MOV/WebM).'
+      };
+    }
+    return { ok: true, kind: isVideo ? 'video' : 'image' };
+  }
+
+  if (expectedKind === 'audio') {
+    if (isImage || isVideo || mimeLower.startsWith('image/') || mimeLower.startsWith('video/')) {
+      return {
+        ok: false,
+        kind: isVideo ? 'video' : 'image',
+        error: 'Foto dan video tidak bisa dimasukkan di kolom Suara. Pilih file audio (MP3/WAV/OGG/M4A).'
+      };
+    }
+    if (!isAudio) {
+      return {
+        ok: false,
+        kind: 'other',
+        error: 'Format suara tidak didukung. Pilih file audio (MP3/WAV/OGG/M4A/AAC).'
+      };
+    }
+    return { ok: true, kind: 'audio' };
+  }
+
+  if (expectedKind === 'video_only') {
+    if (!isVideo) {
+      return {
+        ok: false,
+        kind: isImage ? 'image' : isAudio ? 'audio' : 'other',
+        error: 'Mode Multi Video hanya menerima file video (MP4/WebM/MOV).'
+      };
+    }
+    return { ok: true, kind: 'video' };
+  }
+
+  return { ok: false, kind: 'other', error: 'Jenis validasi file tidak dikenal.' };
+}
 
 function encodeUtf8(str) {
   if (TEXT_ENCODER) return TEXT_ENCODER.encode(str);
@@ -146,7 +215,7 @@ function assembleRiffWebp(chunkBuffers) {
   return riff;
 }
 
-export function validateWaWebpBinary(webpBytes, { expectAnimated, enforceStaticCap = false } = {}) {
+export function validateWaWebpBinary(webpBytes, { expectAnimated, enforceStaticCap = false, enforceAnimCap = true } = {}) {
   if (!webpBytes || webpBytes.length < 30) {
     throw new Error('Berkas WebP terlalu pendek atau tidak lengkap.');
   }
@@ -185,8 +254,8 @@ export function validateWaWebpBinary(webpBytes, { expectAnimated, enforceStaticC
   const vp8xFlags = vp8x.data[0];
   const vp8xWidth = (vp8x.data[4] | (vp8x.data[5] << 8) | (vp8x.data[6] << 16)) + 1;
   const vp8xHeight = (vp8x.data[7] | (vp8x.data[8] << 8) | (vp8x.data[9] << 16)) + 1;
-  if (vp8xWidth !== 512 || vp8xHeight !== 512 || (vp8xFlags & 0x08) === 0) {
-    throw new Error('Header VP8X wajib berukuran 512x512 dengan flag EXIF aktif.');
+  if (vp8xWidth !== vp8xHeight || vp8xWidth < 128 || vp8xWidth > 512 || (vp8xFlags & 0x08) === 0) {
+    throw new Error('Header VP8X wajib berukuran 1:1 (128-512 px) dengan flag EXIF aktif.');
   }
 
   const exif = chunks.find((c) => c.fourCC === 'EXIF');
@@ -211,7 +280,7 @@ export function validateWaWebpBinary(webpBytes, { expectAnimated, enforceStaticC
   if (expectAnimated === true && (!hasAnim || !hasAnmf || (vp8xFlags & 0x02) === 0)) {
     throw new Error('Stiker animasi wajib memiliki flag ANIM, chunk ANIM, dan minimal 1 frame ANMF.');
   }
-  if (isAnimated && webpBytes.length > 480 * 1024) {
+  if (isAnimated && enforceAnimCap && webpBytes.length > 480 * 1024) {
     throw new Error(`Ukuran WebP animasi (${(webpBytes.length / 1024).toFixed(1)} KB) melebihi batas aman 480 KB.`);
   }
   if (!isAnimated && enforceStaticCap && webpBytes.length > 100 * 1024) {
@@ -221,8 +290,8 @@ export function validateWaWebpBinary(webpBytes, { expectAnimated, enforceStaticC
   return chunks;
 }
 
-export function verifyWebpRiffIntegrity(webpBytes) {
-  return validateWaWebpBinary(webpBytes);
+export function verifyWebpRiffIntegrity(webpBytes, options = {}) {
+  return validateWaWebpBinary(webpBytes, options);
 }
 
 export function injectExifIntoStaticWebp(webpBytes, meta = {}) {
@@ -257,11 +326,13 @@ export function injectWhatsAppExifToWebp(webpBytes, packName = 'Kuro Sound Stick
   return injectExifIntoStaticWebp(webpBytes, { packName, publisher });
 }
 
-export function muxAnimatedWebp(framesPayload = [], meta = {}) {
+export function muxAnimatedWebp(framesPayload = [], meta = {}, canvasSize = 512, { enforceAnimCap = true } = {}) {
   if (!Array.isArray(framesPayload) || framesPayload.length === 0) {
     throw new Error('Minimal 1 frame diperlukan untuk membuat stiker animasi WebP.');
   }
 
+  const dim = Math.max(64, Math.min(512, Math.round(Number(canvasSize) || 512)));
+  const maxCoord = dim - 1;
   let hasAlpha = false;
   const anmfChunks = [];
 
@@ -279,8 +350,8 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
     const header = new Uint8Array(16);
     writeUint24LE(header, 0, 0);
     writeUint24LE(header, 3, 0);
-    writeUint24LE(header, 6, 511);
-    writeUint24LE(header, 9, 511);
+    writeUint24LE(header, 6, maxCoord);
+    writeUint24LE(header, 9, maxCoord);
     writeUint24LE(header, 12, Math.max(20, Math.round(frame.durationMs || 83)));
     header[15] = 0x03;
 
@@ -294,8 +365,8 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
 
   const vp8xPayload = new Uint8Array(10);
   vp8xPayload[0] = (hasAlpha ? 0x10 : 0x00) | 0x08 | 0x02;
-  writeUint24LE(vp8xPayload, 4, 511);
-  writeUint24LE(vp8xPayload, 7, 511);
+  writeUint24LE(vp8xPayload, 4, maxCoord);
+  writeUint24LE(vp8xPayload, 7, maxCoord);
 
   const animPayload = new Uint8Array([0, 0, 0, 0, 0, 0]);
   const exifPayload = buildWhatsAppExifPayload(meta);
@@ -306,8 +377,47 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
     ...anmfChunks,
     buildRiffChunk('EXIF', exifPayload)
   ]);
-  verifyWebpRiffIntegrity(out);
+  verifyWebpRiffIntegrity(out, { expectAnimated: true, enforceAnimCap });
   return out;
+}
+
+/**
+ * Pangkas frame secara merata sambil menjaga total durasi animasi bila pass terhemat masih melampaui maxBytes.
+ */
+export function fitAnimatedFramesWithinLimit(frames = [], meta = {}, canvasSize = 192, maxBytes = MAX_ANIMATED_WEBP_BYTES) {
+  let working = frames.map((f) => ({ ...f }));
+  let muxed = muxAnimatedWebp(working, meta, canvasSize, { enforceAnimCap: false });
+
+  while (muxed.byteLength > maxBytes && working.length > 2) {
+    const next = [];
+    for (let i = 0; i < working.length; i += 2) {
+      const a = working[i];
+      const b = working[i + 1];
+      next.push({
+        webpBytes: a.webpBytes,
+        durationMs: Math.min(2500, (a.durationMs || 100) + (b ? b.durationMs || 100 : 0))
+      });
+    }
+    if (next.length === working.length) break;
+    working = next;
+    muxed = muxAnimatedWebp(working, meta, canvasSize, { enforceAnimCap: false });
+  }
+
+  while (muxed.byteLength > maxBytes && working.length > 1) {
+    working = [
+      {
+        webpBytes: working[0].webpBytes,
+        durationMs: Math.min(2500, Math.round(working.reduce((s, f) => s + (f.durationMs || 100), 0)))
+      }
+    ];
+    muxed = muxAnimatedWebp(working, meta, canvasSize, { enforceAnimCap: false });
+  }
+
+  if (muxed.byteLength > maxBytes) {
+    throw new Error(`Ukuran WebP animasi (${(muxed.byteLength / 1024).toFixed(1)} KB) tetap melebihi batas ${(maxBytes / 1024).toFixed(0)} KB.`);
+  }
+  validateWaWebpBinary(muxed, { expectAnimated: true, enforceAnimCap: true });
+  return muxed;
 }
 
 /**
@@ -338,11 +448,12 @@ export function wrapStaticWebpToAnimatedWebp(staticWebpBytes, meta = {}) {
 }
 
 /**
- * Renderer Kotak 512x512 Terpadu (Dipakai oleh Live Preview Stiker Suara WA & Kompositor WebP)
+ * Renderer Kotak 1:1 Terpadu (Mendukung skala 192px..512px untuk kompresi adaptif maupun Live Preview)
  */
 export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 0) {
   if (!ctx) return;
-  const size = 512;
+  const size = Math.max(64, Number(options.canvasSize) || ctx.canvas?.width || 512);
+  const scale = size / 512;
   const {
     cropMode = 'cover', // 'cover' | 'contain'
     bgStyle = 'solid', // 'solid' | 'blur' | 'transparent'
@@ -365,7 +476,7 @@ export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 
         const fillScale = Math.max(size / mediaW, size / mediaH) * 1.12;
         const bgW = mediaW * fillScale;
         const bgH = mediaH * fillScale;
-        ctx.filter = 'blur(18px) brightness(0.68)';
+        ctx.filter = `blur(${Math.max(4, Math.round(18 * scale))}px) brightness(0.68)`;
         ctx.drawImage(sourceMedia, (size - bgW) * 0.5, (size - bgH) * 0.5, bgW, bgH);
         ctx.restore();
       } else if (bgStyle === 'solid') {
@@ -387,10 +498,10 @@ export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 
       } else if (motionEffect === 'bounce') {
         const pulse = Math.max(Math.abs(Math.sin(tSec * Math.PI * 2.4)) * 0.06, audioPulse * 0.09);
         extraScale = 1 + pulse;
-        ty = -pulse * 36;
+        ty = -pulse * 36 * scale;
       } else if (motionEffect === 'wobble') {
         rotRad = Math.sin(tSec * 7.0) * 0.08;
-        tx = Math.cos(tSec * 5.6) * 8;
+        tx = Math.cos(tSec * 5.6) * 8 * scale;
         extraScale = 1.04;
       }
 
@@ -408,12 +519,12 @@ export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 
     ctx.fillRect(0, 0, size, size);
   }
 
-  // Teks meme khas stiker WA (Kapital tebal, isi putih, outline hitam >= 6px, drop shadow)
+  // Teks meme khas stiker WA (Kapital tebal, isi putih, outline hitam, drop shadow)
   const cleanText = String(stickerText || '').trim().toUpperCase();
   if (cleanText) {
     ctx.save();
     const lines = cleanText.split(/\r?\n/).slice(0, 2);
-    const safeFontSize = Math.max(26, Math.min(68, Number(textSize) || 46));
+    const safeFontSize = Math.max(12, Math.round(Math.max(26, Math.min(68, Number(textSize) || 46)) * scale));
     ctx.font = `900 ${safeFontSize}px Impact, "Arial Black", system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -421,27 +532,27 @@ export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 
     ctx.miterLimit = 2;
 
     const lineStep = safeFontSize * 1.12;
-    let startY = size - 44 - (lines.length - 1) * lineStep;
+    let startY = size - 44 * scale - (lines.length - 1) * lineStep;
     if (textPosition === 'top') {
-      startY = 46;
+      startY = 46 * scale;
     } else if (textPosition === 'middle') {
       startY = size * 0.5 - ((lines.length - 1) * lineStep) * 0.5;
     }
 
-    const outlineWidth = Math.max(6, Math.round(safeFontSize * 0.22));
+    const outlineWidth = Math.max(3, Math.round(safeFontSize * 0.22));
     lines.forEach((line, idx) => {
       const y = startY + idx * lineStep;
       ctx.shadowColor = 'rgba(0, 0, 0, 0.72)';
-      ctx.shadowBlur = 6;
+      ctx.shadowBlur = Math.max(2, Math.round(6 * scale));
       ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 3;
+      ctx.shadowOffsetY = Math.max(1, Math.round(3 * scale));
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = outlineWidth;
-      ctx.strokeText(line, size * 0.5, y, size - 32);
+      ctx.strokeText(line, size * 0.5, y, size - 32 * scale);
 
       ctx.shadowColor = 'transparent';
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(line, size * 0.5, y, size - 32);
+      ctx.fillText(line, size * 0.5, y, size - 32 * scale);
     });
     ctx.restore();
   }
@@ -455,7 +566,7 @@ async function canvasToWebpBytes(canvas, quality) {
 }
 
 /**
- * Buat Blob Stiker WebP 512x512 (Statis/Animasi) dengan WhatsApp EXIF
+ * Buat Blob Stiker WebP 1:1 (Statis atau Animasi Adaptif <= 470 KB) dengan WhatsApp EXIF
  */
 export async function buildWaWebpStickerBlob({
   sourceMedia,
@@ -471,87 +582,108 @@ export async function buildWaWebpStickerBlob({
   canvas.height = 512;
   const ctx = canvas.getContext('2d', { alpha: true });
 
-  const needsAnim = Boolean(isAnimated && (isVideoEl || renderOptions.motionEffect !== 'static'));
+  try {
+    const needsAnim = Boolean(isAnimated && (isVideoEl || renderOptions.motionEffect !== 'static'));
 
-  if (!needsAnim) {
-    const staticQualities = [0.85, 0.72, 0.58, 0.44, 0.30, 0.20];
-    let bestStaticBytes = null;
-    for (let i = 0; i < staticQualities.length; i++) {
-      renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, 0);
-      const rawBytes = await canvasToWebpBytes(canvas, staticQualities[i]);
-      const finalBytes = injectExifIntoStaticWebp(rawBytes, packMeta);
-      bestStaticBytes = finalBytes;
-      if (finalBytes.byteLength <= 100 * 1024) break;
+    if (!needsAnim) {
+      const staticQualities = [0.85, 0.72, 0.58, 0.44, 0.30, 0.20];
+      let bestStaticBytes = null;
+      for (let i = 0; i < staticQualities.length; i++) {
+        renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, 0);
+        const rawBytes = await canvasToWebpBytes(canvas, staticQualities[i]);
+        const finalBytes = injectExifIntoStaticWebp(rawBytes, packMeta);
+        bestStaticBytes = finalBytes;
+        if (finalBytes.byteLength <= 100 * 1024) break;
+      }
+      validateWaWebpBinary(bestStaticBytes, { expectAnimated: false, enforceStaticCap: true });
+      onProgress?.(100);
+      return new Blob([bestStaticBytes], { type: 'image/webp' });
     }
-    validateWaWebpBinary(bestStaticBytes, { expectAnimated: false, enforceStaticCap: true });
-    onProgress?.(100);
-    return new Blob([bestStaticBytes], { type: 'image/webp' });
-  }
 
-  const clampedDur = Math.max(1, Math.min(5.0, Number(durationSec) || 3));
-  const videoTotalDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0
-    ? sourceMedia.duration
-    : clampedDur;
+    const rawStart = Math.max(0, Number(renderOptions.videoStartSec ?? 0));
+    const rawEnd = Number(renderOptions.videoEndSec ?? 0);
+    const clipDur = rawEnd > rawStart
+      ? Math.max(0.5, Math.min(8, rawEnd - rawStart))
+      : Math.max(0.5, Math.min(8, Number(durationSec) || 3));
+    const videoTotalDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0
+      ? sourceMedia.duration
+      : clipDur;
+    const seekBase = Math.min(Math.max(0, videoTotalDur - 0.1), rawStart);
 
-  const MAX_ANIM_TARGET_BYTES = 480 * 1024;
-  const encodePasses = [
-    { fps: 10, quality: 0.70, maxDur: 5.0 },
-    { fps: 8, quality: 0.55, maxDur: 4.5 },
-    { fps: 6, quality: 0.42, maxDur: 3.8 },
-    { fps: 5, quality: 0.30, maxDur: 2.8 }
-  ];
-  let bestBlob = null;
+    const encodePasses = [
+      { size: clipDur <= 3 ? 512 : 384, fps: 10, maxFrames: 50, quality: 0.58 },
+      { size: 320, fps: 8, maxFrames: 40, quality: 0.45 },
+      { size: 256, fps: 6, maxFrames: 32, quality: 0.35 },
+      { size: 224, fps: 5, maxFrames: 25, quality: 0.26 },
+      { size: 192, fps: 4, maxFrames: 20, quality: 0.20 }
+    ];
 
-  for (let pIdx = 0; pIdx < encodePasses.length; pIdx++) {
-    const pass = encodePasses[pIdx];
-    const passDur = Math.min(clampedDur, pass.maxDur);
-    const totalFrames = Math.max(4, Math.round(passDur * pass.fps));
-    const frameDurationMs = Math.round(1000 / pass.fps);
-    const frames = [];
+    let finalMuxed = null;
+    let lastFrames = [];
+    let lastPassSize = 192;
 
-    for (let i = 0; i < totalFrames; i++) {
-      const tSec = i / pass.fps;
-      if (isVideoEl) {
-        const seekTime = videoTotalDur > 0.1 ? (tSec % videoTotalDur) : 0;
-        await new Promise((resolve) => {
-          let done = false;
-          const finish = () => {
-            if (!done) {
-              done = true;
-              sourceMedia.removeEventListener('seeked', finish);
-              resolve();
-            }
-          };
-          sourceMedia.addEventListener('seeked', finish, { once: true });
-          sourceMedia.currentTime = seekTime;
-          setTimeout(finish, 180);
-        });
+    for (let pIdx = 0; pIdx < encodePasses.length; pIdx++) {
+      const pass = encodePasses[pIdx];
+      canvas.width = pass.size;
+      canvas.height = pass.size;
+      lastPassSize = pass.size;
+
+      const totalFrames = Math.min(pass.maxFrames, Math.max(2, Math.round(clipDur * pass.fps)));
+      const stepSec = clipDur / totalFrames;
+      const frameDurationMs = Math.max(40, Math.round(stepSec * 1000));
+      const frames = [];
+
+      for (let i = 0; i < totalFrames; i++) {
+        const tSec = i * stepSec;
+        if (isVideoEl) {
+          const seekTime = videoTotalDur > 0.1 ? (seekBase + (tSec % videoTotalDur)) % videoTotalDur : 0;
+          await new Promise((resolve) => {
+            let done = false;
+            const finish = () => {
+              if (!done) {
+                done = true;
+                sourceMedia.removeEventListener('seeked', finish);
+                resolve();
+              }
+            };
+            sourceMedia.addEventListener('seeked', finish, { once: true });
+            sourceMedia.currentTime = seekTime;
+            setTimeout(finish, 180);
+          });
+        }
+
+        renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, canvasSize: pass.size }, tSec);
+        const webpBytes = await canvasToWebpBytes(canvas, pass.quality);
+        frames.push({ webpBytes, durationMs: frameDurationMs });
+        onProgress?.(Math.min(92, Math.round(((i + 1) / totalFrames) * 85)));
       }
 
-      renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, tSec);
-      const webpBytes = await canvasToWebpBytes(canvas, pass.quality);
-      frames.push({ webpBytes, durationMs: frameDurationMs });
-      onProgress?.(Math.min(95, Math.round(((i + 1) / totalFrames) * 85)));
+      const muxed = muxAnimatedWebp(frames, packMeta, pass.size, { enforceAnimCap: false });
+      lastFrames = frames;
+      if (muxed.byteLength <= MAX_ANIMATED_WEBP_BYTES) {
+        validateWaWebpBinary(muxed, { expectAnimated: true });
+        finalMuxed = muxed;
+        break;
+      }
     }
 
-    const muxed = muxAnimatedWebp(frames, packMeta);
-    bestBlob = new Blob([muxed], { type: 'image/webp' });
-    if (bestBlob.size <= MAX_ANIM_TARGET_BYTES) {
-      validateWaWebpBinary(muxed, { expectAnimated: true });
-      break;
+    if (!finalMuxed && lastFrames.length > 0) {
+      finalMuxed = fitAnimatedFramesWithinLimit(lastFrames, packMeta, lastPassSize, MAX_ANIMATED_WEBP_BYTES);
     }
-  }
+    lastFrames = [];
 
-  if (!bestBlob || bestBlob.size <= 200) {
-    throw new Error('Hasil stiker WebP kosong atau gagal dikodekan.');
-  }
-  if (bestBlob.size > 480 * 1024) {
-    const kb = (bestBlob.size / 1024).toFixed(0);
-    throw new Error(`Ukuran stiker animasi (${kb} KB) masih melebihi batas aman 480 KB WhatsApp. Potong durasi menjadi 2-3 detik.`);
-  }
+    if (!finalMuxed || finalMuxed.byteLength <= 200) {
+      throw new Error('Hasil stiker WebP kosong atau gagal dikodekan.');
+    }
 
-  onProgress?.(100);
-  return bestBlob;
+    onProgress?.(100);
+    return new Blob([finalMuxed], { type: 'image/webp' });
+  } finally {
+    try {
+      canvas.width = 0;
+      canvas.height = 0;
+    } catch {}
+  }
 }
 
 function sanitizeVideoMeta(meta) {
@@ -988,6 +1120,11 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     const safeEnd = Math.max(safeStart + 0.3, Math.min(totalAudioDur, Number(item.endSec) || totalAudioDur));
     const durationSec = Math.max(0.5, Number((safeEnd - safeStart).toFixed(1)));
 
+    const videoClipStart = Math.max(0, Number(item.videoStartSec ?? safeStart) || 0);
+    const videoMaxDur = Number(item.videoDuration) || (isVideo && Number.isFinite(mediaEl?.duration) ? mediaEl.duration : durationSec);
+    const rawVideoEnd = Number(item.videoEndSec ?? (isVideo ? Math.min(videoMaxDur, videoClipStart + durationSec) : durationSec));
+    const videoClipEnd = Math.max(videoClipStart + 0.5, Math.min(Math.max(videoClipStart + 0.5, videoMaxDur), rawVideoEnd));
+
     const renderOptions = {
       cropMode: item.cropMode || 'cover',
       bgStyle: item.bgStyle || 'solid',
@@ -995,7 +1132,9 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       motionEffect: isVideo ? 'static' : item.motionEffect || 'static',
       stickerText: item.stickerText || '',
       textPosition: item.textPosition || 'bottom',
-      textSize: Number(item.textSize) || 46
+      textSize: Number(item.textSize) || 46,
+      videoStartSec: videoClipStart,
+      videoEndSec: videoClipEnd
     };
 
     const willAnimate = isVideo || renderOptions.motionEffect !== 'static';
@@ -1006,7 +1145,7 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     const rawWebpBlob = await buildWaWebpStickerBlob({
       sourceMedia: mediaEl,
       isAnimated: willAnimate,
-      durationSec: Math.min(5, durationSec),
+      durationSec: isVideo ? Math.min(8, videoClipEnd - videoClipStart) : Math.min(8, durationSec),
       renderOptions,
       packMeta,
       onProgress: (p) => onProgress?.(Math.min(72, Math.round(p * 0.72)))
@@ -1086,18 +1225,6 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
           audioMime = enc.mimeType || 'audio/mp4';
           if (enc.ext === 'ogg') audioOpusBase64 = audioBase64;
           else if (enc.ext === 'm4a') audioM4aBase64 = audioBase64;
-        }
-      } catch {}
-
-      onProgress?.(86);
-      try {
-        const muxed = item.stagedMuxedBlob
-          ? { blob: item.stagedMuxedBlob, ext: item.stagedMuxedExt || 'mp4' }
-          : await composeSoundVideoStage1({ sourceMedia: mediaEl, trimmedAudioBuffer: trimmedAudio, renderOptions });
-        if (muxed?.blob && muxed.blob.size > 100 && muxed.blob.size <= 2.5 * 1024 * 1024) {
-          const b64 = await blobToBase64Local(muxed.blob);
-          if (muxed.ext === 'webm') muxedWebmBase64 = b64;
-          else muxedMp4Base64 = b64;
         }
       } catch {}
     }
