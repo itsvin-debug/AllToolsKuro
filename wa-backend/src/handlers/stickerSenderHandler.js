@@ -460,14 +460,23 @@ function sanitizeBlueprint(raw) {
     capturedAt: Number(raw.capturedAt) || Date.now(),
     baileysVersion: typeof raw.baileysVersion === 'string' ? raw.baileysVersion.slice(0, 24) : BAILEYS_VERSION,
     source: typeof raw.source === 'string' ? raw.source.slice(0, 32) : undefined,
+    msgId: typeof raw.msgId === 'string' ? raw.msgId.slice(0, 64) : undefined,
+    upsertType: typeof raw.upsertType === 'string' ? raw.upsertType.slice(0, 24) : undefined,
+    fromMe: raw.fromMe !== undefined ? Boolean(raw.fromMe) : undefined,
+    remoteJid: typeof raw.remoteJid === 'string' ? raw.remoteJid.slice(0, 64) : undefined,
+    stubType: raw.stubType !== undefined && raw.stubType !== null ? raw.stubType : null,
     stanzaMeta: raw.stanzaMeta && typeof raw.stanzaMeta === 'object'
       ? {
+          id: raw.stanzaMeta.id ? String(raw.stanzaMeta.id).slice(0, 64) : undefined,
           type: String(raw.stanzaMeta.type || '').slice(0, 32),
           mediatype: String(raw.stanzaMeta.mediatype || '').slice(0, 32),
           childTags: Array.isArray(raw.stanzaMeta.childTags) ? raw.stanzaMeta.childTags.slice(0, 12).map(String) : [],
+          encAttrs: Array.isArray(raw.stanzaMeta.encAttrs) ? raw.stanzaMeta.encAttrs.slice(0, 8).map(String) : [],
           at: Number(raw.stanzaMeta.at) || undefined
         }
       : null,
+    innerKeys: Array.isArray(raw.innerKeys) ? raw.innerKeys.slice(0, 16).map(String) : [],
+    decryptErrors: raw.decryptErrors && typeof raw.decryptErrors === 'object' ? raw.decryptErrors : undefined,
     topLevelKeys: topKeys,
     wrapperChain: Array.isArray(raw.wrapperChain) ? raw.wrapperChain.slice(0, 8).map(String) : [],
     messageType,
@@ -671,9 +680,14 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       curSession.calibratingSoundSticker = false;
       syncCalibrationProtoObserver();
     }
+    if (!isArmed) return;
 
-    const selfPn = curSession.sock?.user?.id ? jidNormalizedUser(curSession.sock.user.id) : '';
-    const selfLid = curSession.sock?.user?.lid ? jidNormalizedUser(curSession.sock.user.lid) : '';
+    const selfPnNum = curSession.sock?.user?.id
+      ? String(curSession.sock.user.id).split('@')[0].split(':')[0].replace(/\D/g, '')
+      : '';
+    const selfLidNum = curSession.sock?.user?.lid
+      ? String(curSession.sock.user.lid).split('@')[0].split(':')[0].replace(/\D/g, '')
+      : '';
 
     for (const msg of messages) {
       if (!msg?.key) continue;
@@ -681,113 +695,154 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       const remoteRaw = String(msg.key.remoteJid || '');
       const remoteAlt = String(msg.key.remoteJidAlt || '');
       const participantRaw = String(msg.key.participant || '');
-      const remoteNorm = remoteRaw ? jidNormalizedUser(remoteRaw) : '';
-      const altNorm = remoteAlt ? jidNormalizedUser(remoteAlt) : '';
-      const participantNorm = participantRaw ? jidNormalizedUser(participantRaw) : '';
 
-      const isSelfOwner = Boolean(
-        msg.key.fromMe === true ||
-          (selfPn && (remoteNorm === selfPn || altNorm === selfPn || participantNorm === selfPn)) ||
-          (selfLid && (remoteNorm === selfLid || altNorm === selfLid || participantNorm === selfLid))
-      );
+      // Tolak status WA, grup, dan channel sebelum inspeksi apa pun
+      if (
+        remoteRaw === 'status@broadcast' ||
+        remoteRaw.endsWith('@g.us') ||
+        remoteRaw.endsWith('@newsletter')
+      ) {
+        continue;
+      }
 
-      // Jangan kalibrasi ulang dari pesan outgoing yang dikirim oleh web ini sendiri
+      // Abaikan stiker/teks keluar yang berasal dari sesi web ini sendiri
       if (msg.key.id && getSentMessage(curSession, msg.key.id)) {
         continue;
       }
 
+      const topKeys = Object.keys(msg.message || {});
       const { innerMessage, wrapperChain } = unwrapMessageContent(msg.message);
       const innerKeys = Object.keys(innerMessage || {});
-      const displayKeys = innerKeys.length > 0
-        ? innerKeys
-        : (msg.messageStubType ? [`stub:${msg.messageStubType}`] : ['empty-message']);
+      const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
 
-      const passiveUncalibrated = !isCalibrated();
-      // Saat mode deteksi aktif atau server belum terkalibrasi, log semua pesan masuk non-web-outgoing
-      if (isArmed || passiveUncalibrated) {
-        const textPreview = String(
-          innerMessage?.conversation || innerMessage?.extendedTextMessage?.text || ''
-        )
-          .trim()
-          .replace(/\s+/g, ' ')
-          .slice(0, 24);
-        const detail = textPreview
-          ? `Teks masuk: "${textPreview}"`
-          : msg.messageStubType
-            ? `Stub E2EE #${msg.messageStubType}`
-            : `${displayKeys.join(', ')} (${type || 'notify'})`;
-        pushCalibrationLog(io, sessionId, curSession, {
-          upsertType: type || 'notify',
-          remoteJid: remoteRaw || participantRaw,
-          fromMe: Boolean(msg.key.fromMe),
-          wrapperChain,
-          keys: displayKeys,
-          stubType: msg.messageStubType || null,
-          passive: !isArmed,
-          detail
-        });
+      const matchesSelf = Boolean(
+        msg.key.fromMe === true ||
+          (selfPnNum && (remoteRaw.includes(selfPnNum) || remoteAlt.includes(selfPnNum) || participantRaw.includes(selfPnNum))) ||
+          (selfLidNum && (remoteRaw.includes(selfLidNum) || remoteAlt.includes(selfLidNum) || participantRaw.includes(selfLidNum)))
+      );
+      const isPrivateSticker = Boolean(
+        innerMessage?.stickerMessage ||
+          innerMessage?.lottieStickerMessage ||
+          innerKeys.some((k) => k.toLowerCase().includes('sticker'))
+      );
+
+      if (!matchesSelf && !isPrivateSticker) {
+        continue;
       }
 
-      if (!innerMessage || typeof innerMessage !== 'object') continue;
-      if (!isArmed && !isSelfOwner && !passiveUncalibrated) continue;
+      const stubLabel = msg.messageStubType
+        ? `${msg.messageStubType}${msg.messageStubParameters?.length ? `(${msg.messageStubParameters.join(',')})` : ''}`
+        : '-';
+      const displayKeys = innerKeys.length > 0 ? innerKeys : (msg.messageStubType ? [`stub:${stubLabel}`] : ['empty-message']);
+
+      pushCalibrationLog(io, sessionId, curSession, {
+        upsertType: `SELF-UPSERT:${type || 'notify'}`,
+        remoteJid: remoteRaw || participantRaw,
+        fromMe: Boolean(msg.key.fromMe),
+        wrapperChain,
+        keys: displayKeys,
+        stubType: msg.messageStubType || null,
+        detail: `id=${msg.key.id || '-'} fromMe=${Boolean(msg.key.fromMe)} jid=${remoteRaw || participantRaw || '-'} stub=${stubLabel} topKeys=[${topKeys.join(',')}] innerKeys=[${innerKeys.join(',')}]`
+      });
 
       const dynamicMedia = scanDynamicMediaNode(innerMessage);
       const stickerNode =
-        innerMessage.stickerMessage ||
-        innerMessage.lottieStickerMessage?.message?.stickerMessage ||
+        innerMessage?.stickerMessage ||
+        innerMessage?.lottieStickerMessage?.message?.stickerMessage ||
         null;
       const ptvOrMedia =
-        innerMessage.ptvMessage ||
-        (isArmed
-          ? innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || dynamicMedia?.node
-          : null);
+        innerMessage?.ptvMessage ||
+        innerMessage?.videoMessage ||
+        innerMessage?.audioMessage ||
+        innerMessage?.documentMessage ||
+        dynamicMedia?.node ||
+        null;
       const mediaTarget = stickerNode || ptvOrMedia;
 
-      const globalFrames = getRecentRawWireFrames();
-      const latestSessionPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
-        ? curSession.lastRawWirePackets[curSession.lastRawWirePackets.length - 1]
-        : null;
-      const latestGlobalPacket = globalFrames.length > 0 ? globalFrames[globalFrames.length - 1] : null;
-      const latestRawPacket = latestSessionPacket || latestGlobalPacket;
+      const isTextOnly =
+        nonContextKeys.length > 0 &&
+        nonContextKeys.every((k) => k === 'conversation' || k === 'extendedTextMessage');
+      const isProtocolNoise =
+        !mediaTarget &&
+        !msg.messageStubType &&
+        nonContextKeys.length > 0 &&
+        nonContextKeys.every((k) => k === 'senderKeyDistributionMessage' || k === 'protocolMessage' || k === 'reactionMessage');
 
+      if ((isTextOnly || isProtocolNoise) && !stickerNode) {
+        continue;
+      }
+
+      const now = Date.now();
+      const recentStanzas = Array.isArray(curSession.recentSelfStanzas) ? curSession.recentSelfStanzas : [];
+      const fallbackStanzas = Array.isArray(curSession.lastCbMessageMeta) ? curSession.lastCbMessageMeta : [];
+      const matchedStanza =
+        recentStanzas.find((s) => msg.key.id && s.id === msg.key.id) ||
+        [...recentStanzas].reverse().find((s) => now - (s.at || 0) <= 15000) ||
+        [...fallbackStanzas].reverse().find((s) => now - (s.at || 0) <= 15000) ||
+        null;
+
+      let encodedBytesLen = 0;
       let encodedProtoWireTree = [];
       try {
-        if (proto?.Message?.encode) {
-          const bytes = proto.Message.encode(innerMessage).finish();
+        if (proto?.Message?.encode && (msg.message || innerMessage)) {
+          const bytes = proto.Message.encode(msg.message || innerMessage).finish();
+          encodedBytesLen = bytes.length;
           encodedProtoWireTree = inspectProtobufWire(bytes, 4);
         }
       } catch (_) {}
 
-      const rawWireTree = latestRawPacket?.wireTree?.length ? latestRawPacket.wireTree : encodedProtoWireTree;
+      const globalFrames = getRecentRawWireFrames();
+      const sessionFrames = Array.isArray(curSession.lastRawWirePackets) ? curSession.lastRawWirePackets : [];
+      const candidateFrames = [...sessionFrames, ...globalFrames].filter(
+        (f) => f && Array.isArray(f.wireTree) && f.wireTree.length > 0 && now - (f.capturedAt || f.at || 0) <= 5000
+      );
+      const meaningfulKeys = Array.from(
+        new Set([...topKeys, ...innerKeys].filter((k) => k && k !== 'messageContextInfo'))
+      );
+      const reversedFrames = [...candidateFrames].reverse();
+      const matchedWirePacket =
+        (meaningfulKeys.length > 0
+          ? reversedFrames.find((f) => meaningfulKeys.some((mk) => Array.isArray(f.decodedKeys) && f.decodedKeys.includes(mk)))
+          : null) ||
+        (encodedBytesLen > 0
+          ? [...candidateFrames].sort((a, b) => Math.abs((a.byteLength || 0) - encodedBytesLen) - Math.abs((b.byteLength || 0) - encodedBytesLen))[0]
+          : reversedFrames[0]) ||
+        null;
+
+      const rawWireTree = matchedWirePacket?.wireTree?.length ? matchedWirePacket.wireTree : encodedProtoWireTree;
       const unknownWireFields = diffUnknownWireFields(rawWireTree);
 
-      const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
-      const hasUnrecognizedWirePayload = isArmed && nonContextKeys.length === 0 && rawWireTree.length > 0;
-      const lastCb = Array.isArray(curSession.lastCbMessageMeta) && curSession.lastCbMessageMeta.length > 0
-        ? curSession.lastCbMessageMeta[curSession.lastCbMessageMeta.length - 1]
-        : null;
-      const looksLikeSticker =
-        Boolean(stickerNode) ||
-        innerKeys.some((k) => k.toLowerCase().includes('sticker')) ||
-        hasUnrecognizedWirePayload ||
-        Boolean(lastCb && lastCb.mediatype === 'sticker' && Date.now() - lastCb.at < 15000);
+      const hasOpaqueOrUnknownProto = Boolean(
+        nonContextKeys.length === 0 && (msg.message || (matchedWirePacket && matchedWirePacket.wireTree?.length))
+      );
 
-      if (!looksLikeSticker && !(isArmed && mediaTarget)) {
+      const shouldCaptureBlueprint = Boolean(
+        mediaTarget ||
+          stickerNode ||
+          msg.message?.deviceSentMessage ||
+          msg.messageStubType ||
+          unknownWireFields.length > 0 ||
+          hasOpaqueOrUnknownProto ||
+          (matchedStanza && matchedStanza.mediatype === 'sticker')
+      );
+
+      if (!shouldCaptureBlueprint) {
         continue;
       }
 
       let mediaInspection = null;
       let decryptedByMediaType = null;
+      const decryptErrors = {};
       if (mediaTarget) {
         let dlBuf = null;
         try {
           const naturalKind = stickerNode
             ? 'sticker'
-            : innerMessage.videoMessage || innerMessage.ptvMessage
+            : innerMessage?.videoMessage || innerMessage?.ptvMessage
               ? 'video'
-              : innerMessage.audioMessage
+              : innerMessage?.audioMessage
                 ? 'audio'
-                : innerMessage.imageMessage
+                : innerMessage?.imageMessage
                   ? 'image'
                   : 'document';
 
@@ -808,11 +863,14 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
                   decryptedByMediaType = kind;
                   break;
                 }
-              } catch (_) {}
+                decryptErrors[kind] = 'buffer kosong';
+              } catch (kindErr) {
+                decryptErrors[kind] = kindErr?.message || 'gagal dekripsi';
+              }
             }
           }
 
-          if ((!dlBuf || dlBuf.length === 0) && typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || innerMessage.ptvMessage || innerMessage.imageMessage)) {
+          if ((!dlBuf || dlBuf.length === 0) && typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage?.videoMessage || innerMessage?.audioMessage || innerMessage?.documentMessage || innerMessage?.ptvMessage || innerMessage?.imageMessage)) {
             try {
               dlBuf = await downloadMediaMessage(
                 { key: msg.key, message: innerMessage },
@@ -821,24 +879,26 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
                 { reuploadRequest: curSession.sock?.updateMediaMessage }
               );
               if (dlBuf && dlBuf.length > 0) decryptedByMediaType = naturalKind;
-            } catch (_) {}
+            } catch (dlMsgErr) {
+              decryptErrors.downloadMediaMessage = dlMsgErr?.message || 'gagal downloadMediaMessage';
+            }
           }
 
           if (dlBuf && dlBuf.length > 0) {
             mediaInspection = inspectMediaBufferMetadata(dlBuf);
           }
         } catch (dlErr) {
-          mediaInspection = { error: dlErr.message };
+          decryptErrors.fatal = dlErr?.message || 'error inspeksi media';
         } finally {
           dlBuf = null;
         }
       }
 
-      const primaryMsgType = nonContextKeys[0] || (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : 'stickerMessage');
-      const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || innerMessage[primaryMsgType] || innerMessage);
-      if (!isArmed && !isInterestingSoundBlueprint(innerKeys, wrapperChain, innerMeta, mediaInspection, rawWireTree)) {
-        continue;
-      }
+      const primaryMsgType =
+        nonContextKeys[0] ||
+        (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : null) ||
+        (msg.messageStubType ? `stub:${msg.messageStubType}` : 'stickerMessage');
+      const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || innerMessage?.[primaryMsgType] || innerMessage || {});
 
       curSession.calibratingSoundSticker = false;
       curSession.calibrationArmedUntil = 0;
@@ -851,28 +911,36 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       const rawBlueprint = {
         capturedAt: Date.now(),
         baileysVersion: BAILEYS_VERSION,
-        source: isArmed ? 'armed-capture' : 'passive-auto-capture',
-        stanzaMeta: lastCb
+        source: 'armed-capture',
+        msgId: msg.key.id || null,
+        upsertType: type || 'notify',
+        fromMe: Boolean(msg.key.fromMe),
+        remoteJid: remoteRaw || participantRaw || null,
+        stubType: msg.messageStubType || null,
+        stanzaMeta: matchedStanza
           ? {
-              type: lastCb.type || '',
-              mediatype: lastCb.mediatype || '',
-              childTags: Array.isArray(lastCb.childTags) ? lastCb.childTags : [],
-              at: lastCb.at || Date.now()
+              id: matchedStanza.id || null,
+              type: matchedStanza.type || '',
+              mediatype: matchedStanza.mediatype || '',
+              childTags: Array.isArray(matchedStanza.childTags) ? matchedStanza.childTags : [],
+              encAttrs: Array.isArray(matchedStanza.encAttrs) ? matchedStanza.encAttrs : [],
+              at: matchedStanza.at || Date.now()
             }
           : null,
-        upsertType: type || 'notify',
         wrapperChain,
-        topLevelKeys: innerKeys,
+        topLevelKeys: topKeys,
+        innerKeys,
         messageType: primaryMsgType,
         hkdfMediaType: decryptedByMediaType,
         decryptedByMediaType,
-        hasMessageContextInfo: Boolean(innerMessage.messageContextInfo || msg.message?.messageContextInfo),
+        hasMessageContextInfo: Boolean(innerMessage?.messageContextInfo || msg.message?.messageContextInfo),
         innerMeta,
         stickerMeta: innerMeta,
         unknownWireFields,
         unknownWireTags: unknownWireFields,
         rawWireTree,
         mediaInspection,
+        decryptErrors,
         messageKeys: innerKeys,
         stickerFields: innerMeta,
         binarySummary: mediaInspection
@@ -883,16 +951,17 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
 
       pushCalibrationLog(io, sessionId, curSession, {
-        upsertType: 'blueprint-captured',
+        upsertType: 'BLUEPRINT-CAPTURED',
         remoteJid: remoteRaw || participantRaw,
         fromMe: Boolean(msg.key.fromMe),
-        wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'unknown'].filter(Boolean),
+        wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'no-media'].filter(Boolean),
         keys: [
           `HKDF:${decryptedByMediaType || '-'}`,
           `mime:${innerMeta?.mimetype || '-'}`,
           `unknownTags:${unknownWireFields.length}`,
           ...(unknownWireFields.map((t) => `#${t.field}:${t.scope}`))
-        ]
+        ],
+        detail: `type=${primaryMsgType} hkdf=${decryptedByMediaType || '-'} container=${mediaInspection?.detectedContainer || 'none'} unknownTags=${unknownWireFields.length}${Object.keys(decryptErrors).length ? ` decryptErrs=${Object.keys(decryptErrors).length}` : ''}`
       });
 
       emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
@@ -1661,6 +1730,9 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
 
+      session.calibrationLogs = [];
+      session.recentSelfStanzas = [];
+      session.lastCbMessageMeta = [];
       session.calibratingSoundSticker = true;
       session.calibrationArmedUntil = Date.now() + CALIBRATION_WINDOW_MS;
       if (session._calibrationExpireTimer) {
@@ -1694,7 +1766,7 @@ function registerStickerSenderHandler(io, socket) {
         fromMe: false,
         wrapperChain: ['listener-ready'],
         keys: [linkedPhone, linkedLid ? String(linkedLid).split('@')[0] : 'no-lid'],
-        detail: `Siap menyadap di +${linkedPhone} — teruskan 1 stiker audio dari HP lalu kembali ke tab ini`
+        detail: `Mendengarkan KHUSUS chat Anda (+${linkedPhone}) — spam grup & status disaring`
       });
     } catch (err) {
       console.error('Error start-sound-sticker-calibration:', err.message);

@@ -221,6 +221,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   });
   const [copiedSchema, setCopiedSchema] = useState(false);
+  const [copiedLogs, setCopiedLogs] = useState(false);
 
   const renderOptions = useMemo(
     () => ({
@@ -2393,6 +2394,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     );
                   })()}
 
+                  <textarea
+                    readOnly
+                    rows={5}
+                    aria-label="Preview Blueprint JSON"
+                    value={JSON.stringify(soundStickerBlueprint, null, 2)}
+                    className="w-full p-2 bg-white border border-black font-mono text-[10px] leading-snug text-neutral-800 select-all resize-y"
+                  />
+
                   <button
                     type="button"
                     onClick={async () => {
@@ -2455,9 +2464,31 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
                   {(calibrationArmed || calibrationLogs.length > 0 || connectionStatus === 'connected') && (
                     <div className="p-2 bg-white border border-black space-y-1 text-[10px] font-mono">
-                      <div className="font-black uppercase text-neutral-600 flex items-center justify-between gap-2">
+                      <div className="font-black uppercase text-neutral-600 flex items-center justify-between gap-2 flex-wrap">
                         <span>Log Aktivitas Masuk (Real-Time):</span>
-                        <span className="text-[9px] font-bold text-neutral-500">{calibrationLogs.length}/25</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[9px] font-bold text-neutral-500">{calibrationLogs.length}/25</span>
+                          {calibrationLogs.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const text = calibrationLogs
+                                  .map((it) =>
+                                    `[${it.upsertType}] ${it.detail || `fromMe=${String(Boolean(it.fromMe))} keys=${(it.keys || []).join(',')}`}`
+                                  )
+                                  .join('\n');
+                                await copyTextToClipboard(text);
+                                setCopiedLogs(true);
+                                onShowToast?.('Log aktivitas tersalin!', 'success');
+                                setTimeout(() => setCopiedLogs(false), 1800);
+                              }}
+                              className="px-2 py-0.5 bg-neutral-100 hover:bg-yellow-200 border border-black font-black text-[9px] text-black flex items-center gap-1 cursor-pointer min-h-[24px]"
+                            >
+                              {copiedLogs ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
+                              <span>{copiedLogs ? 'Tersalin' : 'Salin Log'}</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {calibrationLogs.length === 0 ? (
                         <div className="text-neutral-500">

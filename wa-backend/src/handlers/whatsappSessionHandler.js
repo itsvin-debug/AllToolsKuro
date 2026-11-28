@@ -176,42 +176,78 @@ function attachSoundStickerSniffer(io, session, sock) {
           activeSession.calibratingSoundSticker = false;
           syncCalibrationProtoObserver();
         }
-        if (!activeSession.calibratingSoundSticker && isCalibrated()) return;
+        if (!activeSession.calibratingSoundSticker) return;
 
         const attrs = node?.attrs || {};
-        if (attrs.id && getSentMessage(activeSession, attrs.id)) return;
-
+        const from = String(attrs.from || '');
+        const recipient = String(attrs.recipient || '');
+        const participant = String(attrs.participant || '');
+        const msgType = String(attrs.type || '');
+        const mediatype = String(attrs.mediatype || '');
         const children = Array.isArray(node?.content) ? node.content : [];
         const childTags = children.map((c) => c?.tag).filter(Boolean);
-        const encTypes = children
-          .filter((c) => c?.tag === 'enc' && c?.attrs?.type)
-          .map((c) => `enc:${c.attrs.type}`);
-        const fromStr = String(attrs.from || attrs.participant || '');
-        const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
-        const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
+        const hasMulticast = childTags.includes('multicast');
+        const encChildren = children.filter((c) => c?.tag === 'enc');
+        const encTypes = encChildren.map((c) => c?.attrs?.type).filter(Boolean);
+        const hasSkmsg = encTypes.some((t) => String(t).toLowerCase() === 'skmsg');
 
-        if (!Array.isArray(activeSession.lastCbMessageMeta)) activeSession.lastCbMessageMeta = [];
-        activeSession.lastCbMessageMeta.push({
+        // Blokir total spam status WA, grup, channel, reaksi, dan poll sebelum masuk ring-buffer
+        if (
+          from === 'status@broadcast' ||
+          recipient === 'status@broadcast' ||
+          hasMulticast ||
+          hasSkmsg ||
+          from.endsWith('@g.us') ||
+          recipient.endsWith('@g.us') ||
+          from.endsWith('@newsletter') ||
+          recipient.endsWith('@newsletter') ||
+          msgType === 'reaction' ||
+          msgType === 'poll'
+        ) {
+          return;
+        }
+
+        const selfPnNum = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
+        const selfLidNum = sock.user?.lid ? String(sock.user.lid).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
+        const matchesSelf = Boolean(
+          (selfPnNum && (from.includes(selfPnNum) || recipient.includes(selfPnNum) || participant.includes(selfPnNum))) ||
+            (selfLidNum && (from.includes(selfLidNum) || recipient.includes(selfLidNum) || participant.includes(selfLidNum)))
+        );
+        const isPrivateStickerStanza = msgType === 'media' && mediatype === 'sticker';
+        if (!matchesSelf && !isPrivateStickerStanza) return;
+
+        if (attrs.id && getSentMessage(activeSession, attrs.id)) return;
+
+        const encAttrsList = encChildren.map((c) => `${c?.attrs?.type || 'enc'}:v${c?.attrs?.v || '2'}`);
+        const stanzaRecord = {
           at: now,
           id: attrs.id || '',
-          from: fromStr,
-          type: attrs.type || '',
-          mediatype: attrs.mediatype || '',
-          participant: attrs.participant || '',
-          recipient: attrs.recipient || '',
+          from,
+          recipient,
+          participant,
+          type: msgType,
+          mediatype,
           t: attrs.t || '',
-          childTags
-        });
-        while (activeSession.lastCbMessageMeta.length > 5) activeSession.lastCbMessageMeta.shift();
+          childTags,
+          encAttrs: encAttrsList
+        };
 
+        if (!Array.isArray(activeSession.recentSelfStanzas)) activeSession.recentSelfStanzas = [];
+        activeSession.recentSelfStanzas.push(stanzaRecord);
+        while (activeSession.recentSelfStanzas.length > 10) activeSession.recentSelfStanzas.shift();
+
+        if (!Array.isArray(activeSession.lastCbMessageMeta)) activeSession.lastCbMessageMeta = [];
+        activeSession.lastCbMessageMeta.push(stanzaRecord);
+        while (activeSession.lastCbMessageMeta.length > 10) activeSession.lastCbMessageMeta.shift();
+
+        const fromBase = (from || participant).split('@')[0].split(':')[0];
         pushCalibrationLog(io, sessionId, activeSession, {
-          upsertType: 'ws:CB:message',
-          remoteJid: fromStr,
-          fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
-          wrapperChain: [attrs.type, attrs.mediatype, ...childTags].filter(Boolean).slice(0, 8),
-          keys: [attrs.id || 'no-id', ...encTypes, ...childTags].slice(0, 8),
-          passive: !activeSession.calibratingSoundSticker,
-          detail: `WS <message> type=${attrs.type || 'chat'} media=${attrs.mediatype || '-'} [${encTypes.concat(childTags).join(', ') || 'plain'}]`,
+          upsertType: 'SELF-STANZA',
+          remoteJid: from || participant,
+          fromMe: Boolean(selfPnNum && fromBase && (fromBase === selfPnNum || fromBase === selfLidNum)),
+          wrapperChain: [msgType, mediatype, ...childTags].filter(Boolean).slice(0, 8),
+          keys: [attrs.id || 'no-id', ...encAttrsList, ...childTags].slice(0, 8),
+          detail: `id=${attrs.id || '-'} from=${from || '-'} recipient=${recipient || '-'} type=${msgType || '-'} mediatype=${mediatype || '-'} children=[${childTags.join(',')}] encAttrs=[${encAttrsList.join(',')}]`,
           attrsSummary: {
             id: attrs.id || null,
             from: attrs.from || null,
@@ -264,6 +300,7 @@ function syncCalibrationProtoObserver() {
             if (!Array.isArray(s.lastRawWirePackets)) s.lastRawWirePackets = [];
             s.lastRawWirePackets.push({
               at: frame.capturedAt,
+              capturedAt: frame.capturedAt,
               byteLength: frame.byteLength,
               wireTree: frame.wireTree,
               decodedKeys: frame.decodedKeys

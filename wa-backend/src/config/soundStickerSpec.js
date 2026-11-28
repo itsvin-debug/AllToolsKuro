@@ -229,19 +229,26 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
     capturedAt: Number(blueprint.capturedAt) || Date.now(),
     baileysVersion: String(blueprint.baileysVersion || BAILEYS_VERSION).slice(0, 24),
     source: typeof blueprint.source === 'string' ? blueprint.source.slice(0, 32) : 'captured',
+    msgId: typeof blueprint.msgId === 'string' ? blueprint.msgId.slice(0, 64) : undefined,
     upsertType: typeof blueprint.upsertType === 'string' ? blueprint.upsertType.slice(0, 24) : 'notify',
+    fromMe: blueprint.fromMe !== undefined ? Boolean(blueprint.fromMe) : undefined,
+    stubType: blueprint.stubType !== undefined && blueprint.stubType !== null ? blueprint.stubType : null,
     wrapperChain: Array.isArray(blueprint.wrapperChain) ? blueprint.wrapperChain.slice(0, 8).map(String) : [],
     topLevelKeys: topKeys,
+    innerKeys: Array.isArray(blueprint.innerKeys) ? blueprint.innerKeys.slice(0, 16).map(String) : [],
     messageType: detectedMsgType,
     hkdfMediaType,
     innerMeta: activeSpec.protoPatchRules.innerMeta,
     unknownWireFields,
     rawWireTree: Array.isArray(blueprint.rawWireTree) ? blueprint.rawWireTree.slice(0, 32) : [],
+    decryptErrors: blueprint.decryptErrors && typeof blueprint.decryptErrors === 'object' ? blueprint.decryptErrors : undefined,
     stanzaMeta: blueprint.stanzaMeta && typeof blueprint.stanzaMeta === 'object'
       ? {
+          id: blueprint.stanzaMeta.id ? String(blueprint.stanzaMeta.id).slice(0, 64) : undefined,
           type: String(blueprint.stanzaMeta.type || '').slice(0, 32),
           mediatype: String(blueprint.stanzaMeta.mediatype || '').slice(0, 32),
           childTags: Array.isArray(blueprint.stanzaMeta.childTags) ? blueprint.stanzaMeta.childTags.slice(0, 12).map(String) : [],
+          encAttrs: Array.isArray(blueprint.stanzaMeta.encAttrs) ? blueprint.stanzaMeta.encAttrs.slice(0, 8).map(String) : [],
           at: Number(blueprint.stanzaMeta.at) || undefined
         }
       : null,
