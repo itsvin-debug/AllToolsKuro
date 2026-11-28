@@ -10,7 +10,10 @@ const {
   makeCacheableSignalKeyStore,
   Browsers,
   proto,
-  jidNormalizedUser
+  jidNormalizedUser,
+  generateWAMessage,
+  generateMessageIDV2,
+  generateMessageID
 } = baileysModule;
 
 const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/constants');
@@ -93,6 +96,130 @@ function watchE2eeMessageId(session, messageId) {
     if (oldest === undefined) break;
     session.watchedE2eeIds.delete(oldest);
   }
+}
+
+/**
+ * Jalur kirim pesan terpantau: generateWAMessage -> proto verify -> pre-send cache SEBELUM relayMessage -> sync ratchet 0ms.
+ */
+async function sendTrackedMessage(io, sessionId, session, jid, content, options = {}) {
+  if (!session?.sock?.user?.id) {
+    throw new Error('Sesi WhatsApp belum terhubung aktif.');
+  }
+
+  const targetJid = jidNormalizedUser(jid);
+  const selfLid = session.sock.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
+  const assertTargets = [targetJid, ...(selfLid && selfLid !== targetJid ? [selfLid] : [])].filter(Boolean);
+  try {
+    await session.sock.assertSessions(assertTargets, false);
+  } catch (_) {}
+
+  const messageId =
+    options.messageId ||
+    (typeof generateMessageIDV2 === 'function'
+      ? generateMessageIDV2(session.sock.user.id)
+      : typeof generateMessageID === 'function'
+        ? generateMessageID()
+        : undefined);
+
+  if (!session.mediaCache) {
+    session.mediaCache = new NodeCache({ stdTTL: 600, useClones: false });
+  }
+
+  const waMsg = await generateWAMessage(targetJid, content, {
+    logger: pinoSilent,
+    userJid: session.sock.user.id,
+    upload: session.sock.waUploadToServer,
+    mediaCache: session.mediaCache,
+    messageId,
+    ...(options.generateOptions || {})
+  });
+
+  if (!waMsg?.message || typeof waMsg.message !== 'object') {
+    throw new Error('generateWAMessage gagal menyusun payload proto.Message.');
+  }
+  if (typeof options.patchProto === 'function') {
+    options.patchProto(waMsg.message);
+  }
+
+  const verifyErr = proto?.Message?.verify?.(waMsg.message);
+  if (verifyErr) {
+    throw new Error(`Struktur WAProto pesan tidak valid: ${verifyErr}`);
+  }
+  const encodedWire = proto?.Message?.encode ? proto.Message.encode(waMsg.message).finish() : null;
+  if (!encodedWire || encodedWire.length <= 16) {
+    throw new Error('Payload protobuf pesan kosong/terpotong (<= 16 byte), dibatalkan.');
+  }
+
+  // Wajib simpan proto.Message murni ke sentMessageStore SEBELUM stanza dikirim agar Signal retry receipt selalu terlayani
+  const finalMsgId = waMsg.key?.id || messageId;
+  rememberSentMessage(session, finalMsgId, waMsg.message);
+  watchE2eeMessageId(session, finalMsgId);
+
+  if (typeof options.onBeforeRelay === 'function') {
+    options.onBeforeRelay(waMsg, finalMsgId);
+  }
+
+  await session.sock.relayMessage(targetJid, waMsg.message, {
+    messageId: finalMsgId,
+    useUserDevicesCache: false
+  });
+
+  emitAuthSnapshotNow(io, sessionId, session);
+  return {
+    waMsg,
+    messageId: finalMsgId,
+    encodedBytes: encodedWire.length
+  };
+}
+
+/**
+ * Soft-restart socket Baileys sambil menjaga auth_sessions/<id>/creds.json agar kunci RAM benar-benar bersih.
+ */
+async function softRestartBaileysPreserveAuth(io, sessionId, waitConnectedMs = 14000) {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error('Sesi WhatsApp tidak ditemukan.');
+
+  if (session.reconnectTimer) {
+    clearTimeout(session.reconnectTimer);
+    session.reconnectTimer = null;
+  }
+  if (session.pairingTimer) {
+    clearTimeout(session.pairingTimer);
+    session.pairingTimer = null;
+  }
+  try {
+    session.msgRetryCounterCache?.flushAll?.();
+    session.mediaCache?.flushAll?.();
+  } catch (_) {}
+
+  const waiterPromise = new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(t);
+      resolve(ok);
+    };
+    const t = setTimeout(() => done(false), waitConnectedMs);
+    if (!Array.isArray(session._openWaiters)) session._openWaiters = [];
+    session._openWaiters.push(done);
+  });
+
+  await startBaileys(
+    io,
+    sessionId,
+    session.targetNumber || null,
+    false,
+    session.authMethod || 'pairing',
+    session.pairingPhone || '',
+    false,
+    session.monitorMode || 'all',
+    session.swMode || 'auto',
+    session.tokenHash || ''
+  );
+
+  const connected = await waiterPromise;
+  return { connected, session: sessions.get(sessionId) || session };
 }
 
 async function startBaileys(
@@ -402,6 +529,7 @@ async function startBaileys(
             emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
               at: Date.now(),
               messageId: msgId,
+              phase: 'retry_received',
               event: 'retry_receipt',
               retryCount,
               hasCachedProto: Boolean(cachedProto),
@@ -415,14 +543,17 @@ async function startBaileys(
             const selfJidClean = selfBase ? `${selfBase}@s.whatsapp.net` : '';
             if (!attrs.recipient && cachedProto && selfJidClean && fromBase === selfBase && retryCount <= 3) {
               try {
-                await sock.assertSessions([fromStr], true);
+                await sock.assertSessions([fromStr, selfJidClean], true);
                 await sock.relayMessage(selfJidClean, cachedProto, {
                   messageId: msgId,
-                  participant: { jid: fromStr, count: retryCount }
+                  participant: { jid: fromStr, count: retryCount },
+                  useUserDevicesCache: false
                 });
+                emitAuthSnapshotNow(io, sessionId, session);
                 emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
                   at: Date.now(),
                   messageId: msgId,
+                  phase: 'retry_resent',
                   event: 'self_retry_recovered',
                   detail: `Kunci E2EE self-chat dinegosiasi ulang & pesan dikirim ulang (try #${retryCount})`
                 });
@@ -430,6 +561,7 @@ async function startBaileys(
                 emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
                   at: Date.now(),
                   messageId: msgId,
+                  phase: 'decrypt_error',
                   event: 'retry_failed',
                   isError: true,
                   detail: `Gagal kirim ulang retry E2EE: ${retryErr.message}`
@@ -437,10 +569,17 @@ async function startBaileys(
               }
             }
           } else if (isWatched) {
+            const phase =
+              rType === 'read' || rType === 'played'
+                ? 'read'
+                : rType === 'error'
+                  ? 'decrypt_error'
+                  : 'delivery_ack';
             const eventLabel = rType === 'read' ? 'READ' : rType === 'played' ? 'PLAYED' : rType.toUpperCase();
             emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
               at: Date.now(),
               messageId: msgId,
+              phase,
               event: rType,
               isError: rType === 'error',
               detail: `CB:receipt ${eventLabel} dari ${String(attrs.from || '').split('@')[0]}`
@@ -503,9 +642,11 @@ async function startBaileys(
         if (updId && currentSession.watchedE2eeIds?.has(updId) && upd.update?.status !== undefined) {
           const st = Number(upd.update.status);
           const statusNames = { 0: 'ERROR_DECRYPT', 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERY_ACK', 4: 'READ', 5: 'PLAYED' };
+          const phaseNames = { 0: 'decrypt_error', 1: 'pending', 2: 'server_ack', 3: 'delivery_ack', 4: 'read', 5: 'read' };
           emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
             at: Date.now(),
             messageId: updId,
+            phase: phaseNames[st] || 'update',
             event: 'messages.update',
             isError: st === 0,
             detail: `Status WA: ${statusNames[st] || st}`
@@ -664,6 +805,13 @@ async function startBaileys(
 
         // Sinkronkan snapshot auth SEGERA (0ms debounce) begitu sesi terhubung
         emitAuthSnapshotNow(io, sessionId, session);
+
+        if (Array.isArray(session._openWaiters) && session._openWaiters.length > 0) {
+          const waiters = session._openWaiters.splice(0, session._openWaiters.length);
+          for (const done of waiters) {
+            try { done(true); } catch (_) {}
+          }
+        }
 
         const initialContacts = buildContactsSyncPayload(session);
         if (Object.keys(initialContacts).length > 0) {
@@ -1057,6 +1205,8 @@ function triggerAuthSnapshotSync(io, sessionId, session) {
 
 module.exports = {
   startBaileys,
+  sendTrackedMessage,
+  softRestartBaileysPreserveAuth,
   rememberSentMessage,
   getSentMessage,
   watchE2eeMessageId,

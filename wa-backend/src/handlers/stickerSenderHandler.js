@@ -9,19 +9,21 @@ const {
   emitAuthSnapshotNow
 } = require('../services/deviceAuthService');
 const { getSessionDir } = require('../utils/authFiles');
-const { rememberSentMessage, getSentMessage, watchE2eeMessageId, triggerAuthSnapshotSync } = require('./whatsappSessionHandler');
+const {
+  BAILEYS_VERSION,
+  getGlobalSoundStickerSpec,
+  promoteVerifiedBlueprintToGlobalSpec,
+  validateStickerMediaPayload
+} = require('../config/soundStickerSpec');
+const {
+  rememberSentMessage,
+  getSentMessage,
+  watchE2eeMessageId,
+  sendTrackedMessage,
+  softRestartBaileysPreserveAuth,
+  triggerAuthSnapshotSync
+} = require('./whatsappSessionHandler');
 const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
-
-function readInstalledBaileysVersion() {
-  try {
-    const pkgPath = path.join(__dirname, '../../node_modules/@whiskeysockets/baileys/package.json');
-    const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    if (parsed?.version) return String(parsed.version);
-  } catch (_) {}
-  return 'unknown';
-}
-
-const BAILEYS_VERSION = readInstalledBaileysVersion();
 
 const {
   proto,
@@ -375,6 +377,7 @@ function sanitizeBlueprint(raw) {
     capturedAt: Number(raw.capturedAt) || Date.now(),
     topLevelKeys: Array.isArray(raw.topLevelKeys) ? raw.topLevelKeys.slice(0, 16).map(String) : [],
     wrapperChain: Array.isArray(raw.wrapperChain) ? raw.wrapperChain.slice(0, 8).map(String) : [],
+    decryptedByMediaType: typeof raw.decryptedByMediaType === 'string' ? raw.decryptedByMediaType.slice(0, 24) : null,
     unknownWireTags: Array.isArray(raw.unknownWireTags) ? raw.unknownWireTags.slice(0, 16) : [],
     rawWireTree: Array.isArray(raw.rawWireTree) ? raw.rawWireTree.slice(0, 32) : [],
     stickerMeta: {
@@ -662,33 +665,51 @@ function attachCalibrationListener(io, sessionId, session) {
         }
 
         let mediaInspection = null;
+        let decryptedByMediaType = null;
         if (mediaTarget) {
           let dlBuf = null;
           try {
-            if (typeof downloadMediaMessage === 'function') {
-              dlBuf = await downloadMediaMessage(
-                { key: msg.key, message: innerMessage },
-                'buffer',
-                {},
-                { reuploadRequest: curSession.sock?.updateMediaMessage }
-              );
-            } else if (typeof downloadContentFromMessage === 'function') {
-              const kind = stickerNode
-                ? 'sticker'
-                : innerMessage.videoMessage || innerMessage.ptvMessage
-                  ? 'video'
-                  : innerMessage.audioMessage
-                    ? 'audio'
-                    : 'document';
-              const stream = await downloadContentFromMessage(mediaTarget, kind);
-              const chunks = [];
-              let size = 0;
-              for await (const chunk of stream) {
-                if (size < 768 * 1024) chunks.push(chunk);
-                size += chunk.length;
-              }
-              dlBuf = Buffer.concat(chunks);
+            const naturalKind = stickerNode
+              ? 'sticker'
+              : innerMessage.videoMessage || innerMessage.ptvMessage
+                ? 'video'
+                : innerMessage.audioMessage
+                  ? 'audio'
+                  : 'document';
+
+            if (typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || innerMessage.ptvMessage)) {
+              try {
+                dlBuf = await downloadMediaMessage(
+                  { key: msg.key, message: innerMessage },
+                  'buffer',
+                  {},
+                  { reuploadRequest: curSession.sock?.updateMediaMessage }
+                );
+                if (dlBuf && dlBuf.length > 0) decryptedByMediaType = naturalKind;
+              } catch (_) {}
             }
+
+            if ((!dlBuf || dlBuf.length === 0) && typeof downloadContentFromMessage === 'function') {
+              const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document']));
+              for (const kind of candidates) {
+                try {
+                  const stream = await downloadContentFromMessage(mediaTarget, kind);
+                  const chunks = [];
+                  let size = 0;
+                  for await (const chunk of stream) {
+                    if (size < 768 * 1024) chunks.push(chunk);
+                    size += chunk.length;
+                  }
+                  const candidateBuf = Buffer.concat(chunks);
+                  if (candidateBuf && candidateBuf.length > 0) {
+                    dlBuf = candidateBuf;
+                    decryptedByMediaType = kind;
+                    break;
+                  }
+                } catch (_) {}
+              }
+            }
+
             if (dlBuf && dlBuf.length > 0) {
               mediaInspection = inspectMediaBufferMetadata(dlBuf);
             }
@@ -709,10 +730,11 @@ function attachCalibrationListener(io, sessionId, session) {
 
         const blueprint = {
           capturedAt: Date.now(),
-          baileysVersion: '6.7.24',
+          baileysVersion: BAILEYS_VERSION,
           upsertType: type || 'notify',
           wrapperChain,
           topLevelKeys: innerKeys,
+          decryptedByMediaType,
           hasMessageContextInfo: Boolean(innerMessage.messageContextInfo || msg.message?.messageContextInfo),
           stickerMeta,
           unknownWireTags,
@@ -724,8 +746,10 @@ function attachCalibrationListener(io, sessionId, session) {
         };
 
         curSession.soundStickerBlueprint = sanitizeBlueprint(blueprint);
-        emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint });
-        emitToDevice(io, sessionId, 'sound-sticker-schema-detected', blueprint);
+        const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
+        emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
+        emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint, globalSpec });
+        emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
         break;
       }
     } catch (err) {
@@ -760,142 +784,87 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     } = payload || {};
 
     stickerWebpBuf = decodeBoundedBase64(stickerWebpBase64, MAX_STICKER_BYTES, 'stiker WebP 512x512');
-    const { isAnimatedBitstream } = validateStickerWebpBuffer(stickerWebpBuf);
+    const validatedWebp = validateStickerMediaPayload(stickerWebpBuf);
+    const isAnimatedBitstream = validatedWebp.isAnimatedBitstream;
 
     muxedMp4Buf = decodeOptionalBase64(muxedMp4Base64, 'mp4', 'muxed MP4');
     muxedWebmBuf = decodeOptionalBase64(muxedWebmBase64, 'webm', 'muxed WebM');
     audioOpusBuf = decodeOptionalBase64(audioOpusBase64, 'ogg', 'audio Opus');
     audioM4aBuf = decodeOptionalBase64(audioM4aBase64, 'mp4', 'audio M4A');
 
-    // Segarkan sesi Signal perangkat utama (+ LID jika ada) sebelum enkripsi E2EE self-chat
-    const assertTargets = [selfJid];
-    if (session.sock?.user?.lid) {
-      const selfLid = jidNormalizedUser(session.sock.user.lid);
-      if (selfLid) assertTargets.push(selfLid);
-    }
-    try {
-      await session.sock.assertSessions(assertTargets, false);
-    } catch (_) {}
-
+    const activeSpec = getGlobalSoundStickerSpec();
     const activeBlueprint = sanitizeBlueprint(clientBlueprint) || session.soundStickerBlueprint || null;
     const safeWidth = Math.max(16, Math.min(1024, Number(width) || 512));
     const safeHeight = Math.max(16, Math.min(1024, Number(height) || 512));
 
-    const customMsgId =
-      typeof generateMessageIDV2 === 'function'
-        ? generateMessageIDV2(session.sock.user.id)
-        : typeof generateMessageID === 'function'
-          ? generateMessageID()
-          : undefined;
-
-    let modeUsed = 'official-sendMessage-webp';
-    let note = 'Terkirim via jalur resmi sock.sendMessage (WebP 512x512 + EXIF) tanpa bubble video/VN.';
-    let sentMsg = null;
-    let encodedLen = 0;
-
-    const bpMime = String(activeBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
-    const bpContainer = activeBlueprint?.mediaInspection?.detectedContainer || '';
-    const useMuxedBlueprint = Boolean(
-      activeBlueprint &&
-        (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('video/mp4') || bpMime.includes('video/webm')) &&
-        (muxedMp4Buf || muxedWebmBuf)
-    );
-
-    let mediaToSend = null;
+    let modeUsed = 'native_webp_clean';
+    let audioEmbedded = false;
+    let reason = activeSpec.reason;
+    let note = 'Dikirim lewat sendTrackedMessage (WebP 512x512 + EXIF tervalidasi) agar 0% "Menunggu pesan ini".';
+    let finalWebpToSend = stickerWebpBuf;
     let patchMime = null;
-    let patchAnimated = Boolean(isAnimatedBitstream);
 
-    if (useMuxedBlueprint) {
-      const preferWebm = bpContainer === 'webm' || bpMime.includes('webm');
-      containerBuf = preferWebm && muxedWebmBuf ? muxedWebmBuf : muxedMp4Buf || muxedWebmBuf;
-      const targetMime = preferWebm && muxedWebmBuf ? 'video/webm' : 'video/mp4';
-      mediaToSend = containerBuf;
-      patchMime = bpMime || targetMime;
-      patchAnimated = true;
-      modeUsed = `blueprint-${targetMime}`;
-      note = `Dikirim via jalur resmi E2EE mengikuti blueprint ${targetMime} asli WhatsApp.`;
-    } else {
-      const bestAudioBuf = audioOpusBuf || audioM4aBuf;
-      const { finalWebpBuf, customized } = activeBlueprint
-        ? applyBlueprintToWebp(stickerWebpBuf, activeBlueprint, { audioBuf: bestAudioBuf, durationSec })
-        : { finalWebpBuf: stickerWebpBuf, customized: false };
-      if (customized) {
-        validateStickerWebpBuffer(finalWebpBuf);
-        modeUsed = 'blueprint-webp-injected';
-        note = 'Dikirim via jalur resmi sock.sendMessage mengikuti blueprint WebP hasil deteksi.';
-      }
-      mediaToSend = finalWebpBuf;
-    }
-
-    // Hook patchMessageBeforeSending sementara agar proto.Message terverifikasi > 16 byte & masuk sentMessageStore SEBELUM stanza terkirim
-    const prevPatch = session._patchOutgoingWire;
-    session._patchOutgoingWire = (outgoingMsg) => {
-      const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
-      if (inner?.stickerMessage) {
-        if (patchMime) inner.stickerMessage.mimetype = patchMime;
-        if (useMuxedBlueprint || customized) {
-          inner.stickerMessage.isAnimated = patchAnimated;
-          inner.stickerMessage.width = safeWidth;
-          inner.stickerMessage.height = safeHeight;
-        }
-        const verifyErr = proto?.Message?.verify?.(inner);
-        if (verifyErr) {
-          throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
-        }
-        const wire = proto?.Message?.encode ? proto.Message.encode(inner).finish() : null;
-        if (!wire || wire.length <= 16) {
-          throw new Error('Payload protobuf stiker kosong (<= 16 byte), dibatalkan.');
-        }
-        encodedLen = wire.length;
-        if (customMsgId) {
-          rememberSentMessage(session, customMsgId, inner);
-          watchE2eeMessageId(session, customMsgId);
-        }
-      }
-      return outgoingMsg;
-    };
-
-    if (customMsgId) watchE2eeMessageId(session, customMsgId);
-
-    try {
-      attachStickerDeliveryWatcher(io, sessionId, session, customMsgId, queueId);
-      sentMsg = await session.sock.sendMessage(
-        selfJid,
-        { sticker: mediaToSend },
-        { ...(customMsgId ? { messageId: customMsgId } : {}) }
+    // Hanya kloning chunk/EXIF terverifikasi yang tetap lolos WebP validator dan WAProto 6.7.24
+    const allowWebpChunkClone =
+      (activeSpec.calibrated && activeSpec.protoPatchRules?.canEncodeCleanly) ||
+      Boolean(
+        activeBlueprint &&
+          activeBlueprint.mediaInspection?.detectedContainer === 'webp' &&
+          (!activeBlueprint.unknownWireTags || activeBlueprint.unknownWireTags.length === 0)
       );
-    } finally {
-      session._patchOutgoingWire = prevPatch;
-    }
 
-    const finalMsgId = sentMsg?.key?.id || customMsgId;
-    if (finalMsgId) watchE2eeMessageId(session, finalMsgId);
-    if (sentMsg?.key?.id && sentMsg?.message) {
-      rememberSentMessage(session, sentMsg.key.id, sentMsg.message);
-      if (!encodedLen && proto?.Message?.encode) {
-        try {
-          encodedLen = proto.Message.encode(sentMsg.message).finish().length;
-        } catch (_) {}
+    if (allowWebpChunkClone && activeBlueprint) {
+      const bestAudioBuf = audioOpusBuf || audioM4aBuf;
+      const { finalWebpBuf, customized } = applyBlueprintToWebp(stickerWebpBuf, activeBlueprint, {
+        audioBuf: bestAudioBuf,
+        durationSec
+      });
+      if (customized) {
+        validateStickerMediaPayload(finalWebpBuf);
+        finalWebpToSend = finalWebpBuf;
+        modeUsed = 'verified_webp_chunk_clone';
+        audioEmbedded = Boolean(bestAudioBuf && activeSpec.protoPatchRules?.hasDirectAudioEmbed);
+        reason = 'Stiker dirakit mengikuti chunk WebP terverifikasi spec global.';
+        note = 'Dikirim via jalur resmi sendTrackedMessage mengikuti chunk WebP terkalibrasi.';
       }
     }
 
-    if (finalMsgId && finalMsgId !== customMsgId) {
-      attachStickerDeliveryWatcher(io, sessionId, session, finalMsgId, queueId);
-    }
-
-    // Sinkronkan snapshot kunci Signal terbaru agar ratchet key HP & server tetap sinkron
-    triggerAuthSnapshotSync(io, sessionId, session);
+    // Catatan keamanan: DILARANG mengirim MP4/WebM ke { sticker } tanpa dukungan wire-tag resmi WAProto 6.7.24
+    const tracked = await sendTrackedMessage(
+      io,
+      sessionId,
+      session,
+      selfJid,
+      { sticker: finalWebpToSend },
+      {
+        patchProto: (inner) => {
+          if (inner?.stickerMessage && patchMime) {
+            inner.stickerMessage.mimetype = patchMime;
+            inner.stickerMessage.isAnimated = Boolean(isAnimatedBitstream);
+            inner.stickerMessage.width = safeWidth;
+            inner.stickerMessage.height = safeHeight;
+          }
+        },
+        onBeforeRelay: (_waMsg, msgId) => {
+          attachStickerDeliveryWatcher(io, sessionId, session, msgId, queueId);
+        }
+      }
+    );
 
     return {
       ok: true,
       ...(queueId ? { queueId } : {}),
-      messageId: finalMsgId,
-      protocol: 'official-sendMessage-sticker',
+      messageId: tracked.messageId,
+      deliveryTraceId: tracked.messageId,
+      protocol: 'sendTrackedMessage-sticker',
       modeUsed,
+      audioEmbedded,
+      reason,
+      globalSpecMode: activeSpec.mode,
       hasBlueprint: Boolean(activeBlueprint),
-      needsCalibration: !activeBlueprint,
-      isAnimated: patchAnimated,
-      encodedBytes: encodedLen,
+      needsCalibration: !activeSpec.calibrated,
+      isAnimated: Boolean(isAnimatedBitstream),
+      encodedBytes: tracked.encodedBytes,
       note,
       selfJid,
       sentAt: Date.now()
@@ -1013,12 +982,44 @@ async function performResetSelfE2eeKeys(io, sessionId, session) {
     } catch (_) {}
   }
 
-  await session.sock.assertSessions(uniqueTargets, true);
-  // Pancarkan snapshot baru SEGERA (0ms) agar IndexedDB/localStorage browser langsung menimpa snapshot rusak
-  emitAuthSnapshotNow(io, sessionId, session);
+  // Soft-restart Baileys sambil menjaga creds.json agar state Signal/NodeCache/libsignal bersih 100%
+  const { connected, session: freshSession } = await softRestartBaileysPreserveAuth(io, sessionId, 14000);
+  const targetSock = freshSession?.sock || session.sock;
+  if (freshSession) {
+    attachCalibrationListener(io, sessionId, freshSession);
+  }
+
+  if (connected && targetSock?.user?.id) {
+    const freshSet = new Set([selfJid, ...(selfLid ? [selfLid] : [])]);
+    try {
+      if (typeof targetSock.getUSyncDevices === 'function') {
+        const discovered = await targetSock.getUSyncDevices(Array.from(freshSet), false, false);
+        if (Array.isArray(discovered)) {
+          for (const item of discovered) {
+            if (typeof item === 'string' && item.includes('@')) {
+              freshSet.add(item);
+            } else if (item && typeof item === 'object' && item.user) {
+              const isOwnerLid = ownLidUser && String(item.user) === ownLidUser;
+              const server = item.server || (isOwnerLid ? 'lid' : 's.whatsapp.net');
+              const encoded = typeof baileysModule.jidEncode === 'function'
+                ? baileysModule.jidEncode(item.user, server, item.device)
+                : item.device != null && item.device > 0
+                  ? `${item.user}:${item.device}@${server}`
+                  : `${item.user}@${server}`;
+              if (encoded) freshSet.add(encoded);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    await targetSock.assertSessions(Array.from(freshSet), true);
+  }
+
+  emitAuthSnapshotNow(io, sessionId, freshSession || session);
 
   return {
     ok: true,
+    softRestarted: Boolean(connected),
     clearedCount: clearedFiles.length,
     clearedFiles,
     refreshedTargets: uniqueTargets.length,
@@ -1141,48 +1142,20 @@ function registerStickerSenderHandler(io, socket) {
 
       const selfJid = jidNormalizedUser(session.sock.user.id);
       const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
-      try {
-        await session.sock.assertSessions([selfJid, ...(selfLid ? [selfLid] : [])], false);
-      } catch (_) {}
-
-      const customMsgId =
-        typeof generateMessageIDV2 === 'function'
-          ? generateMessageIDV2(session.sock.user.id)
-          : typeof generateMessageID === 'function'
-            ? generateMessageID()
-            : undefined;
-
-      let encodedBytes = 0;
-      const prevPatch = session._patchOutgoingWire;
-      session._patchOutgoingWire = (outgoingMsg) => {
-        const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
-        if (inner && typeof inner === 'object') {
-          try {
-            if (proto?.Message?.encode) {
-              encodedBytes = proto.Message.encode(inner).finish().length;
-            }
-          } catch (_) {}
-          if (customMsgId) {
-            rememberSentMessage(session, customMsgId, inner);
-            watchE2eeMessageId(session, customMsgId);
-          }
-        }
-        return outgoingMsg;
-      };
-
-      if (customMsgId) watchE2eeMessageId(session, customMsgId);
 
       let ackStatus = 1;
       let ackLabel = 'Terkirim via server E2EE (menunggu ACK perangkat)';
       let ackError = false;
       let onAckUpdate = null;
+      let onReceiptUpdate = null;
+      let trackedId = '';
 
       const ackPromise = new Promise((resolve) => {
         const timer = setTimeout(() => resolve({ status: ackStatus, label: ackLabel, isError: ackError }), SELF_E2EE_TEST_WATCH_MS);
         onAckUpdate = (updates) => {
-          if (!Array.isArray(updates) || !customMsgId) return;
+          if (!Array.isArray(updates) || !trackedId) return;
           for (const upd of updates) {
-            if (upd?.key?.id !== customMsgId) continue;
+            if (upd?.key?.id !== trackedId) continue;
             const st = Number(upd?.update?.status);
             if (!Number.isFinite(st)) continue;
             ackStatus = st;
@@ -1204,35 +1177,43 @@ function registerStickerSenderHandler(io, socket) {
             }
           }
         };
+        onReceiptUpdate = (updates) => {
+          if (!Array.isArray(updates) || !trackedId) return;
+          for (const upd of updates) {
+            if (upd?.key?.id !== trackedId) continue;
+            ackStatus = 3;
+            ackLabel = 'Diterima HP Anda ✓✓ (0 error E2EE)';
+            clearTimeout(timer);
+            resolve({ status: 3, label: ackLabel, isError: false });
+            return;
+          }
+        };
         session.sock.ev.on('messages.update', onAckUpdate);
+        session.sock.ev.on('message-receipt.update', onReceiptUpdate);
       });
 
-      let sentMsg = null;
-      try {
-        sentMsg = await session.sock.sendMessage(
-          selfJid,
-          { text: '✅ Tes E2EE Kuro Studio berhasil masuk (0 error).' },
-          { ...(customMsgId ? { messageId: customMsgId } : {}) }
-        );
-      } finally {
-        session._patchOutgoingWire = prevPatch;
-      }
+      const tracked = await sendTrackedMessage(
+        io,
+        sessionId,
+        session,
+        selfJid,
+        { text: '✅ Tes E2EE Kuro Studio berhasil masuk (0 error).' },
+        {
+          onBeforeRelay: (_waMsg, msgId) => {
+            trackedId = msgId;
+          }
+        }
+      );
 
-      const finalMsgId = sentMsg?.key?.id || customMsgId || '';
-      if (finalMsgId) watchE2eeMessageId(session, finalMsgId);
-      if (sentMsg?.key?.id && sentMsg?.message) {
-        rememberSentMessage(session, sentMsg.key.id, sentMsg.message);
-      }
-
+      const finalMsgId = tracked.messageId || '';
       const settledAck = await ackPromise.finally(() => {
         if (onAckUpdate) {
-          try {
-            session.sock?.ev?.off?.('messages.update', onAckUpdate);
-          } catch (_) {}
+          try { session.sock?.ev?.off?.('messages.update', onAckUpdate); } catch (_) {}
+        }
+        if (onReceiptUpdate) {
+          try { session.sock?.ev?.off?.('message-receipt.update', onReceiptUpdate); } catch (_) {}
         }
       });
-
-      emitAuthSnapshotNow(io, sessionId, session);
 
       emitToDevice(io, sessionId, 'self-e2ee-test-result', {
         ok: !settledAck.isError,
@@ -1240,7 +1221,7 @@ function registerStickerSenderHandler(io, socket) {
         selfJid,
         selfLid,
         baileysVersion: BAILEYS_VERSION,
-        encodedBytes,
+        encodedBytes: tracked.encodedBytes,
         ackStatus: settledAck.status,
         ackLabel: settledAck.label,
         error: settledAck.isError ? settledAck.label : null,
@@ -1256,6 +1237,119 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
     }
+  });
+
+  socket.on('test-plain-sticker', async (payload) => {
+    const { sessionId, deviceToken, stickerWebpBase64 } = payload || {};
+    let stickerBuf = null;
+    try {
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
+
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'connected' || !session.sock?.user?.id || !session.sock.authState?.creds?.registered) {
+        return emitToDevice(io, sessionId, 'plain-sticker-test-result', {
+          ok: false,
+          baileysVersion: BAILEYS_VERSION,
+          error: 'Perangkat WhatsApp belum tertaut aktif.'
+        });
+      }
+
+      stickerBuf = decodeBoundedBase64(stickerWebpBase64, MAX_STICKER_BYTES, 'stiker uji WebP 512x512');
+      validateStickerMediaPayload(stickerBuf);
+
+      const selfJid = jidNormalizedUser(session.sock.user.id);
+      const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
+      let ackStatus = 1;
+      let ackLabel = 'Stiker polos terkirim (menunggu ACK perangkat)';
+      let ackError = false;
+      let onAckUpdate = null;
+      let trackedId = '';
+
+      const ackPromise = new Promise((resolve) => {
+        const timer = setTimeout(() => resolve({ status: ackStatus, label: ackLabel, isError: ackError }), SELF_E2EE_TEST_WATCH_MS);
+        onAckUpdate = (updates) => {
+          if (!Array.isArray(updates) || !trackedId) return;
+          for (const upd of updates) {
+            if (upd?.key?.id !== trackedId) continue;
+            const st = Number(upd?.update?.status);
+            if (!Number.isFinite(st)) continue;
+            ackStatus = st;
+            if (st === 0 || st < 0) {
+              ackError = true;
+              ackLabel = 'Stiker polos gagal dekripsi (ERROR ACK 0)';
+              clearTimeout(timer);
+              resolve({ status: st, label: ackLabel, isError: true });
+              return;
+            }
+            if (st >= 3) {
+              ackLabel = 'Stiker Polos Diterima HP ✓✓';
+              clearTimeout(timer);
+              resolve({ status: st, label: ackLabel, isError: false });
+              return;
+            }
+            if (st === 2) {
+              ackLabel = 'Stiker Polos Diterima Server WA ✓';
+            }
+          }
+        };
+        session.sock.ev.on('messages.update', onAckUpdate);
+      });
+
+      const tracked = await sendTrackedMessage(
+        io,
+        sessionId,
+        session,
+        selfJid,
+        { sticker: stickerBuf },
+        {
+          onBeforeRelay: (_waMsg, msgId) => {
+            trackedId = msgId;
+          }
+        }
+      );
+
+      const settledAck = await ackPromise.finally(() => {
+        if (onAckUpdate) {
+          try { session.sock?.ev?.off?.('messages.update', onAckUpdate); } catch (_) {}
+        }
+      });
+
+      emitToDevice(io, sessionId, 'plain-sticker-test-result', {
+        ok: !settledAck.isError,
+        messageId: tracked.messageId,
+        selfJid,
+        selfLid,
+        baileysVersion: BAILEYS_VERSION,
+        encodedBytes: tracked.encodedBytes,
+        ackStatus: settledAck.status,
+        ackLabel: settledAck.label,
+        error: settledAck.isError ? settledAck.label : null,
+        sentAt: Date.now()
+      });
+    } catch (err) {
+      console.error('Error test-plain-sticker:', err.message);
+      if (sessionId) {
+        emitToDevice(io, sessionId, 'plain-sticker-test-result', {
+          ok: false,
+          baileysVersion: BAILEYS_VERSION,
+          error: err.message || 'Gagal menguji pengiriman stiker WebP polos.'
+        });
+      }
+    } finally {
+      stickerBuf = null;
+    }
+  });
+
+  socket.on('get-sound-sticker-spec', (payload) => {
+    try {
+      const { sessionId, deviceToken } = payload || {};
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
+      emitToDevice(io, sessionId, 'sound-sticker-spec-sync', getGlobalSoundStickerSpec());
+    } catch (_) {}
   });
 
   socket.on('send-self-sound-sticker', async (payload) => {

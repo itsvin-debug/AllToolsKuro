@@ -44,7 +44,8 @@ import {
   composeSoundVideoStage1,
   loadMediaElementFromFile,
   releaseMediaElement,
-  buildStickerSendPayload
+  buildStickerSendPayload,
+  createPlainTestStickerWebpBase64
 } from './soundStickerComposer';
 import WaSoundStickerPreview from './WaSoundStickerPreview';
 import StickerQueueList from './StickerQueueList';
@@ -135,6 +136,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const socketRef = useRef(null);
   const e2eeResetTimerRef = useRef(null);
   const e2eeTestTimerRef = useRef(null);
+  const plainStickerTestTimerRef = useRef(null);
 
   const [socketConnected, setSocketConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
@@ -150,7 +152,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
   const [isRefreshingE2ee, setIsRefreshingE2ee] = useState(false);
   const [isTestingE2ee, setIsTestingE2ee] = useState(false);
+  const [isTestingPlainSticker, setIsTestingPlainSticker] = useState(false);
   const [e2eeDiagStatus, setE2eeDiagStatus] = useState(null);
+  const [globalSpec, setGlobalSpec] = useState(null);
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
@@ -219,6 +223,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         deviceToken,
         authSnapshot: snapshot || undefined
       });
+      sock.emit('get-sound-sticker-spec', { sessionId, deviceToken });
     };
 
     sock.on('connect', () => {
@@ -330,7 +335,24 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     sock.on('sound-sticker-delivery-trace', (trace) => {
       if (unmounted || !trace) return;
-      setDeliveryTraces((prev) => [...prev.slice(-5), trace]);
+      setDeliveryTraces((prev) => [...prev.slice(-7), trace]);
+    });
+
+    sock.on('sound-sticker-spec-sync', (spec) => {
+      if (unmounted || !spec || typeof spec !== 'object') return;
+      setGlobalSpec(spec);
+    });
+
+    sock.on('plain-sticker-test-result', (res) => {
+      if (unmounted || !res) return;
+      if (plainStickerTestTimerRef.current) clearTimeout(plainStickerTestTimerRef.current);
+      setIsTestingPlainSticker(false);
+      setE2eeDiagStatus({ kind: 'plain_sticker', ...res });
+      if (res.ok) {
+        onShowToast?.(res.ackLabel || 'Stiker polos berhasil terkirim ke HP!', 'success');
+      } else {
+        onShowToast?.(res.error || 'Tes Stiker Polos gagal.', 'error');
+      }
     });
 
     sock.on('self-e2ee-reset-result', (res) => {
@@ -372,6 +394,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       if (unmounted) return;
       const bp = payloadOrBlueprint?.blueprint || payloadOrBlueprint;
       if (!bp || typeof bp !== 'object') return;
+      if (payloadOrBlueprint?.globalSpec) setGlobalSpec(payloadOrBlueprint.globalSpec);
       setCalibrationArmed(false);
       setSoundStickerBlueprint(bp);
       try {
@@ -441,6 +464,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       unmounted = true;
       if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
       if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
+      if (plainStickerTestTimerRef.current) clearTimeout(plainStickerTestTimerRef.current);
       sock.disconnect();
       socketRef.current = null;
     };
@@ -1096,12 +1120,29 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   };
 
   const handleTestSelfE2ee = () => {
-    if (connectionStatus !== 'connected' || !socketRef.current || isTestingE2ee) return;
+    if (connectionStatus !== 'connected' || !socketRef.current || isTestingE2ee || isTestingPlainSticker) return;
     if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
     setIsTestingE2ee(true);
     setE2eeDiagStatus(null);
+    setDeliveryTraces([]);
     socketRef.current.emit('test-self-e2ee', { sessionId, deviceToken });
     e2eeTestTimerRef.current = setTimeout(() => setIsTestingE2ee(false), 10000);
+  };
+
+  const handleTestPlainSticker = async () => {
+    if (connectionStatus !== 'connected' || !socketRef.current || isTestingPlainSticker || isTestingE2ee) return;
+    if (plainStickerTestTimerRef.current) clearTimeout(plainStickerTestTimerRef.current);
+    setIsTestingPlainSticker(true);
+    setE2eeDiagStatus(null);
+    setDeliveryTraces([]);
+    try {
+      const stickerWebpBase64 = await createPlainTestStickerWebpBase64(packName, packPublisher);
+      socketRef.current.emit('test-plain-sticker', { sessionId, deviceToken, stickerWebpBase64 });
+      plainStickerTestTimerRef.current = setTimeout(() => setIsTestingPlainSticker(false), 12000);
+    } catch (err) {
+      setIsTestingPlainSticker(false);
+      onShowToast?.(err.message || 'Gagal menyiapkan stiker uji WebP.', 'error');
+    }
   };
 
   return (
@@ -1807,7 +1848,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     <button
                       type="button"
                       onClick={handleTestSelfE2ee}
-                      disabled={isTestingE2ee || isRefreshingE2ee}
+                      disabled={isTestingE2ee || isRefreshingE2ee || isTestingPlainSticker}
                       className="px-2.5 py-1 bg-cyan-200 hover:bg-cyan-300 disabled:opacity-50 border-2 border-black shadow-[1px_1px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] font-black text-[10px] flex items-center gap-1 cursor-pointer min-h-[34px]"
                       title="Kirim 1 pesan teks tes ke nomor sendiri untuk cek ACK enkripsi E2EE real-time"
                     >
@@ -1816,14 +1857,28 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       ) : (
                         <Activity className="w-3 h-3" />
                       )}
-                      <span>{isTestingE2ee ? 'Menguji...' : 'Tes E2EE'}</span>
+                      <span>{isTestingE2ee ? 'Menguji...' : 'Tes E2EE (Teks)'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestPlainSticker}
+                      disabled={isTestingPlainSticker || isTestingE2ee || isRefreshingE2ee}
+                      className="px-2.5 py-1 bg-white hover:bg-neutral-100 disabled:opacity-50 border-2 border-black shadow-[1px_1px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] font-black text-[10px] flex items-center gap-1 cursor-pointer min-h-[34px]"
+                      title="Kirim 1 stiker WebP polos 512x512 tervalidasi untuk memisahkan isu E2EE vs format audio"
+                    >
+                      {isTestingPlainSticker ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3 h-3" />
+                      )}
+                      <span>{isTestingPlainSticker ? 'Menguji...' : 'Tes Stiker Polos'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleRefreshE2ee}
-                      disabled={isRefreshingE2ee || isTestingE2ee}
+                      disabled={isRefreshingE2ee || isTestingE2ee || isTestingPlainSticker}
                       className="px-2.5 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-50 border-2 border-black shadow-[1px_1px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] font-black text-[10px] flex items-center gap-1 cursor-pointer min-h-[34px]"
-                      title="Hapus sesi kunci Signal self-chat yang macet dan tarik pre-key baru tanpa scan ulang"
+                      title="Soft-restart sesi Signal self-chat & tarik pre-key baru tanpa scan ulang"
                     >
                       <RefreshCw className={`w-3 h-3 ${isRefreshingE2ee ? 'animate-spin' : ''}`} />
                       <span>Reset Kunci E2EE</span>
@@ -1839,7 +1894,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </div>
                 </div>
                 <p className="text-[11px] font-semibold text-neutral-700">
-                  Target terkunci ke nomor Anda sendiri via jalur resmi <code className="font-mono">sock.sendMessage</code>.
+                  Target terkunci ke nomor Anda sendiri via <code className="font-mono">sendTrackedMessage</code> (pre-send cache + retry recovery).
                 </p>
                 {e2eeDiagStatus && (
                   <div
@@ -1849,10 +1904,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   >
                     <div className="font-black flex items-center justify-between gap-2 flex-wrap">
                       <span>
-                        {e2eeDiagStatus.kind === 'test'
+                        {e2eeDiagStatus.kind === 'test' || e2eeDiagStatus.kind === 'plain_sticker'
                           ? e2eeDiagStatus.ackLabel || e2eeDiagStatus.error
                           : e2eeDiagStatus.ok
-                            ? `Reset Kunci E2EE Selesai (${e2eeDiagStatus.clearedCount || 0} file sesi lama dibersihkan)`
+                            ? `Reset Kunci E2EE Selesai (${e2eeDiagStatus.clearedCount || 0} file sesi lama + soft-restart)`
                             : e2eeDiagStatus.error}
                       </span>
                       {e2eeDiagStatus.baileysVersion && (
@@ -1865,6 +1920,15 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       <div className="text-neutral-600">
                         ID: #{String(e2eeDiagStatus.messageId).slice(-10)}
                         {e2eeDiagStatus.encodedBytes ? ` • ${e2eeDiagStatus.encodedBytes} B proto` : ''}
+                      </div>
+                    )}
+                    {deliveryTraces.length > 0 && (
+                      <div className="pt-1 border-t border-black/15 space-y-0.5 text-[9px] text-neutral-700">
+                        {deliveryTraces.slice(-4).map((t, idx) => (
+                          <div key={`${t.at}-${idx}`} className="truncate">
+                            [{t.phase || t.event}] #{String(t.messageId || '').slice(-6)} {t.detail}
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -1992,6 +2056,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     </span>
                   )}
                 </div>
+                {lastSendResult.reason && (
+                  <p className="text-[10px] text-neutral-700 font-mono leading-snug">{lastSendResult.reason}</p>
+                )}
                 {lastSendResult.note && (
                   <p className="text-[10px] text-neutral-800 leading-snug">{lastSendResult.note}</p>
                 )}
@@ -2007,8 +2074,19 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            {/* Kalibrasi Blueprint Stiker Suara WA (1x Saja Per Perangkat) */}
+            {/* Global Spec & Kalibrasi Blueprint Stiker Suara WA */}
             <div className="pt-2 border-t-2 border-black space-y-2">
+              {globalSpec && (
+                <div className="px-2.5 py-1.5 border-2 border-black bg-white text-[10px] font-mono flex items-center justify-between gap-2 flex-wrap">
+                  <span className="font-black">
+                    Spec Server:{' '}
+                    <span className={globalSpec.calibrated ? 'text-emerald-700' : 'text-amber-700'}>
+                      {globalSpec.calibrated ? `Format Global Aktif (${globalSpec.mode})` : 'Belum Terkalibrasi (WebP Bersih)'}
+                    </span>
+                  </span>
+                  <span className="text-neutral-600">HKDF: {globalSpec.hkdfMediaType || 'sticker'}</span>
+                </div>
+              )}
               {soundStickerBlueprint && !calibrationArmed ? (
                 <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -2042,6 +2120,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     <div>
                       Container: <b>{soundStickerBlueprint.mediaInspection?.detectedContainer || 'unknown'}</b> &bull; Mimetype:{' '}
                       <b>{soundStickerBlueprint.stickerMeta?.mimetype || 'image/webp'}</b>
+                      {soundStickerBlueprint.decryptedByMediaType ? ` • HKDF: ${soundStickerBlueprint.decryptedByMediaType}` : ''}
                     </div>
                     {soundStickerBlueprint.mediaInspection?.chunks?.length > 0 && (
                       <div className="truncate">

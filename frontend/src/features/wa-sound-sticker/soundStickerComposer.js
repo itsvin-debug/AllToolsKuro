@@ -146,7 +146,7 @@ function assembleRiffWebp(chunkBuffers) {
   return riff;
 }
 
-export function verifyWebpRiffIntegrity(webpBytes) {
+export function validateWaWebpBinary(webpBytes, { expectAnimated, enforceStaticCap = false } = {}) {
   if (!webpBytes || webpBytes.length < 30) {
     throw new Error('Berkas WebP terlalu pendek atau tidak lengkap.');
   }
@@ -157,12 +157,72 @@ export function verifyWebpRiffIntegrity(webpBytes) {
   if (declaredSize !== webpBytes.length - 8) {
     throw new Error('Ukuran header RIFF WebP tidak cocok dengan panjang biner.');
   }
-  const chunks = parseWebPChunks(webpBytes);
-  const fourCCs = chunks.map((c) => c.fourCC);
-  if (fourCCs[0] !== 'VP8X' || !fourCCs.includes('EXIF')) {
-    throw new Error('Stiker WebP wajib memiliki header Extended VP8X dan chunk EXIF WhatsApp.');
+  if (webpBytes.length % 2 !== 0) {
+    throw new Error('Total byte WebP harus genap per spesifikasi RIFF.');
   }
+
+  const chunks = [];
+  let offset = 12;
+  while (offset + 8 <= webpBytes.length) {
+    const fourCC = readFourCC(webpBytes, offset);
+    const size = readUint32LE(webpBytes, offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + size;
+    if (dataEnd > webpBytes.length) {
+      throw new Error(`Chunk ${fourCC} melampaui batas panjang file WebP.`);
+    }
+    chunks.push({ fourCC, size, data: webpBytes.subarray(dataStart, dataEnd) });
+    offset = dataEnd + (size % 2);
+  }
+  if (offset !== webpBytes.length) {
+    throw new Error('Trailing padding WebP RIFF tidak konsisten.');
+  }
+
+  const vp8x = chunks.find((c) => c.fourCC === 'VP8X');
+  if (!vp8x || vp8x !== chunks[0] || vp8x.data.length < 10) {
+    throw new Error('Stiker WebP wajib diawali header Extended VP8X 10 byte.');
+  }
+  const vp8xFlags = vp8x.data[0];
+  const vp8xWidth = (vp8x.data[4] | (vp8x.data[5] << 8) | (vp8x.data[6] << 16)) + 1;
+  const vp8xHeight = (vp8x.data[7] | (vp8x.data[8] << 8) | (vp8x.data[9] << 16)) + 1;
+  if (vp8xWidth !== 512 || vp8xHeight !== 512 || (vp8xFlags & 0x08) === 0) {
+    throw new Error('Header VP8X wajib berukuran 512x512 dengan flag EXIF aktif.');
+  }
+
+  const exif = chunks.find((c) => c.fourCC === 'EXIF');
+  if (!exif || exif.data.length < 24) {
+    throw new Error('Chunk EXIF WhatsApp tidak lengkap.');
+  }
+  const hasTiffMagic =
+    exif.data[0] === 0x49 &&
+    exif.data[1] === 0x49 &&
+    exif.data[2] === 0x2a &&
+    exif.data[3] === 0x00 &&
+    exif.data[10] === 0x41 &&
+    exif.data[11] === 0x57;
+  if (!hasTiffMagic) {
+    throw new Error('Header TIFF EXIF WhatsApp tidak valid.');
+  }
+
+  const hasAnim = chunks.some((c) => c.fourCC === 'ANIM');
+  const hasAnmf = chunks.some((c) => c.fourCC === 'ANMF');
+  const isAnimated = hasAnim || hasAnmf;
+
+  if (expectAnimated === true && (!hasAnim || !hasAnmf || (vp8xFlags & 0x02) === 0)) {
+    throw new Error('Stiker animasi wajib memiliki flag ANIM, chunk ANIM, dan minimal 1 frame ANMF.');
+  }
+  if (isAnimated && webpBytes.length > 480 * 1024) {
+    throw new Error(`Ukuran WebP animasi (${(webpBytes.length / 1024).toFixed(1)} KB) melebihi batas aman 480 KB.`);
+  }
+  if (!isAnimated && enforceStaticCap && webpBytes.length > 100 * 1024) {
+    throw new Error(`Ukuran WebP statis (${(webpBytes.length / 1024).toFixed(1)} KB) melebihi target 100 KB.`);
+  }
+
   return chunks;
+}
+
+export function verifyWebpRiffIntegrity(webpBytes) {
+  return validateWaWebpBinary(webpBytes);
 }
 
 export function injectExifIntoStaticWebp(webpBytes, meta = {}) {
@@ -387,7 +447,7 @@ export async function buildWaWebpStickerBlob({
   const needsAnim = Boolean(isAnimated && (isVideoEl || renderOptions.motionEffect !== 'static'));
 
   if (!needsAnim) {
-    const staticQualities = [0.88, 0.76, 0.62, 0.48];
+    const staticQualities = [0.85, 0.72, 0.58, 0.44, 0.30, 0.20];
     let bestStaticBytes = null;
     for (let i = 0; i < staticQualities.length; i++) {
       renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, 0);
@@ -396,24 +456,22 @@ export async function buildWaWebpStickerBlob({
       bestStaticBytes = finalBytes;
       if (finalBytes.byteLength <= 100 * 1024) break;
     }
-    verifyWebpRiffIntegrity(bestStaticBytes);
+    validateWaWebpBinary(bestStaticBytes, { expectAnimated: false, enforceStaticCap: true });
     onProgress?.(100);
     return new Blob([bestStaticBytes], { type: 'image/webp' });
   }
 
-  const clampedDur = Math.max(1, Math.min(5.5, Number(durationSec) || 3));
+  const clampedDur = Math.max(1, Math.min(5.0, Number(durationSec) || 3));
   const videoTotalDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0
     ? sourceMedia.duration
     : clampedDur;
 
   const MAX_ANIM_TARGET_BYTES = 480 * 1024;
   const encodePasses = [
-    { fps: 12, quality: 0.72, maxDur: 4.5 },
-    { fps: 12, quality: 0.56, maxDur: 4.5 },
+    { fps: 10, quality: 0.70, maxDur: 5.0 },
     { fps: 8, quality: 0.55, maxDur: 4.5 },
-    { fps: 8, quality: 0.42, maxDur: 4.0 },
-    { fps: 6, quality: 0.36, maxDur: 3.5 },
-    { fps: 5, quality: 0.28, maxDur: 2.8 }
+    { fps: 6, quality: 0.42, maxDur: 3.8 },
+    { fps: 5, quality: 0.30, maxDur: 2.8 }
   ];
   let bestBlob = null;
 
@@ -450,17 +508,19 @@ export async function buildWaWebpStickerBlob({
     }
 
     const muxed = muxAnimatedWebp(frames, packMeta);
-    verifyWebpRiffIntegrity(muxed);
     bestBlob = new Blob([muxed], { type: 'image/webp' });
-    if (bestBlob.size <= MAX_ANIM_TARGET_BYTES) break;
+    if (bestBlob.size <= MAX_ANIM_TARGET_BYTES) {
+      validateWaWebpBinary(muxed, { expectAnimated: true });
+      break;
+    }
   }
 
   if (!bestBlob || bestBlob.size <= 200) {
     throw new Error('Hasil stiker WebP kosong atau gagal dikodekan.');
   }
-  if (bestBlob.size > 500 * 1024) {
+  if (bestBlob.size > 480 * 1024) {
     const kb = (bestBlob.size / 1024).toFixed(0);
-    throw new Error(`Ukuran stiker animasi (${kb} KB) masih melebihi batas 500 KB WhatsApp. Potong durasi menjadi 2-3 detik.`);
+    throw new Error(`Ukuran stiker animasi (${kb} KB) masih melebihi batas aman 480 KB WhatsApp. Potong durasi menjadi 2-3 detik.`);
   }
 
   onProgress?.(100);
@@ -824,6 +884,34 @@ export async function composeSoundVideoStage1({
     });
     return { blob, mimeType: 'video/webm', ext: 'webm', durationSec: trimmedAudioBuffer.duration };
   }
+}
+
+/**
+ * Bangkitkan 1 stiker WebP 512x512 polos tervalidasi (untuk Tes Stiker Polos E2EE vs Format).
+ */
+export async function createPlainTestStickerWebpBase64(packName = 'Kuro E2EE Test', publisher = 'Kuro Studio') {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d', { alpha: true });
+
+  ctx.fillStyle = '#fef08a';
+  ctx.fillRect(24, 24, 464, 464);
+  ctx.lineWidth = 14;
+  ctx.strokeStyle = '#000000';
+  ctx.strokeRect(24, 24, 464, 464);
+  ctx.fillStyle = '#000000';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 44px system-ui, -apple-system, sans-serif';
+  ctx.fillText('KURO E2EE OK', 256, 224);
+  ctx.font = '700 24px monospace';
+  ctx.fillText('TEST STIKER WEBP', 256, 290);
+
+  const rawBytes = await canvasToWebpBytes(canvas, 0.8);
+  const withExif = injectExifIntoStaticWebp(rawBytes, { packName, publisher });
+  validateWaWebpBinary(withExif, { expectAnimated: false, enforceStaticCap: true });
+  return arrayBufferToBase64(withExif.buffer);
 }
 
 /**

@@ -16,6 +16,7 @@ const {
 } = require('../services/contactsService');
 const { buildVaultPayload, downloadMediaStreamBuffer } = require('../services/vaultService');
 const { startBaileys } = require('./whatsappSessionHandler');
+const { getGlobalSoundStickerSpec } = require('../config/soundStickerSpec');
 const { registerStickerSenderHandler, attachCalibrationListener } = require('./stickerSenderHandler');
 
 function registerSocketHandlers(io) {
@@ -69,7 +70,7 @@ function registerSocketHandlers(io) {
 
           if (session.status === 'connected') {
             attachCalibrationListener(io, sessionId, session);
-            const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || '');
+            const phone = session.sock?.user?.id ? session.sock.user.id.split('@')[0].split(':')[0] : (session.phone || '');
             const accountJid = session.accountJid || (phone ? `${phone}@s.whatsapp.net` : '');
             socket.emit('session-status', {
               status: 'connected',
@@ -79,6 +80,7 @@ function registerSocketHandlers(io) {
               swMode: session.swMode,
               targetNumber: session.targetNumber || ''
             });
+            socket.emit('sound-sticker-spec-sync', getGlobalSoundStickerSpec());
 
             if (session.targetNumber) {
               socket.emit('target-synced', { targetNumber: session.targetNumber });
@@ -440,7 +442,7 @@ function registerSocketHandlers(io) {
 
           if (session.status === 'connected') {
             attachCalibrationListener(io, sessionId, session);
-            const phone = session.sock?.user?.id ? session.sock.user.id.split(':')[0] : (session.phone || '');
+            const phone = session.sock?.user?.id ? session.sock.user.id.split('@')[0].split(':')[0] : (session.phone || '');
             const accountJid = session.accountJid || (phone ? `${phone}@s.whatsapp.net` : '');
             socket.emit('session-status', {
               status: session.status,
@@ -450,6 +452,7 @@ function registerSocketHandlers(io) {
               swMode: session.swMode,
               targetNumber: session.targetNumber || ''
             });
+            socket.emit('sound-sticker-spec-sync', getGlobalSoundStickerSpec());
 
             if (session.targetNumber) {
               socket.emit('target-synced', { targetNumber: session.targetNumber });
