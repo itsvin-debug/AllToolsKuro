@@ -26,10 +26,10 @@ const {
 } = require('../utils/authFiles');
 const {
   armSafeProtoDecodeObserver,
-  unwrapMessageContent,
-  extractTextAndQuoted,
-  getRecentRawWireBytesSnapshots
+  installAudioStickerProtoExtension
 } = require('../utils/protoWireInspector');
+
+installAudioStickerProtoExtension(proto);
 const { isCalibrated } = require('../config/soundStickerSpec');
 const { proto: baileysProtoAlias } = baileysModule;
 const { sessions } = require('../state/sessionStore');
@@ -264,113 +264,16 @@ function cacheRecentOwnerSticker(session, msg, type) {
 }
 
 /**
- * Pasang penyadap kalibrasi stiker audio langsung ke socket baru (CB:message + messages.upsert baris pertama).
+ * Pasang sniffer minimal (hanya saat mode kalibrasi eksplisit aktif; nol spam log & nol sniffer pasif).
  */
 function attachSoundStickerSniffer(io, session, sock) {
   if (!session || !sock) return;
   const sessionId = session.sessionId;
-  // Aktifkan lightweight raw wire snapshot observer sejak socket baru dibuat
-  syncCalibrationProtoObserver();
-
   if (!sock._kuroUpsertSnifferBound && typeof sock?.ev?.on === 'function') {
     sock._kuroUpsertSnifferBound = true;
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       const currentSession = sessions.get(sessionId) || session;
-      if (!currentSession) return;
-      if (Array.isArray(messages)) {
-        for (const msg of messages) {
-          if (!msg?.key) continue;
-          const remoteRaw = String(msg.key.remoteJid || '');
-          if (
-            remoteRaw === 'status@broadcast' ||
-            remoteRaw.endsWith('@g.us') ||
-            remoteRaw.endsWith('@newsletter')
-          ) {
-            continue;
-          }
-          if (msg.key.id && getSentMessage(currentSession, msg.key.id)) continue;
-
-          const topKeys = Object.keys(msg.message || {});
-          const { text, normalizedText, contextInfo, innerMessage } = extractTextAndQuoted(msg.message);
-          const innerKeys = Object.keys(innerMessage || {});
-          const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
-          const quoted = contextInfo?.quotedMessage || null;
-
-          console.log(
-            '[DM-UPSERT]',
-            JSON.stringify({
-              upsertType: type || null,
-              id: msg.key.id || null,
-              fromMe: Boolean(msg.key.fromMe),
-              jid: remoteRaw || null,
-              participant: msg.key.participant || null,
-              stub: msg.messageStubType || null,
-              stubParams: msg.messageStubParameters || null,
-              topKeys,
-              innerKeys,
-              hasQuoted: Boolean(quoted),
-              textPreview: (text || '').slice(0, 30)
-            })
-          );
-
-          cacheRecentOwnerSticker(currentSession, msg, type);
-
-          const isOwner = isOwnerSelfMessage(msg, sock);
-          const isKlonCmd =
-            normalizedText === '.klon' ||
-            normalizedText.startsWith('.klon ') ||
-            normalizedText.startsWith('.klon\n') ||
-            normalizedText === 'klon' ||
-            normalizedText.startsWith('klon ');
-
-          const { innerMessage: qInner } = unwrapMessageContent(quoted);
-          const qKeys = Object.keys(qInner || {});
-          const hasDirectSticker = Boolean(
-            innerMessage?.stickerMessage ||
-              innerMessage?.lottieStickerMessage ||
-              innerKeys.some((k) => k.toLowerCase().includes('sticker'))
-          );
-          const hasQuotedSticker = Boolean(
-            qInner?.stickerMessage ||
-              qInner?.lottieStickerMessage ||
-              qKeys.some((k) => k.toLowerCase().includes('sticker'))
-          );
-          const hasOpaqueMessage = Boolean(msg.message && nonContextKeys.length === 0 && !msg.messageStubType);
-
-          if (isKlonCmd && isOwner) {
-            console.log('[KLON-TRIGGER]', {
-              sessionId,
-              id: msg.key.id || null,
-              upsertType: type || null,
-              fromMe: Boolean(msg.key.fromMe),
-              remoteJid: remoteRaw || null,
-              participant: msg.key.participant || null,
-              hasQuoted: Boolean(quoted),
-              stanzaId: contextInfo?.stanzaId || null
-            });
-            const runner = stickerDumpProcessor || klonCommandProcessor;
-            if (typeof runner === 'function') {
-              runner(io, sessionId, currentSession, msg, {
-                triggerReason: 'klon-command',
-                upsertType: type || 'notify',
-                contextInfo,
-                sendReplyToSelf: true
-              }).catch((err) => {
-                console.error('[STICKER-DUMP-ERR]', err);
-              });
-            }
-          } else if (isOwner && (hasDirectSticker || hasQuotedSticker || hasOpaqueMessage) && typeof stickerDumpProcessor === 'function') {
-            stickerDumpProcessor(io, sessionId, currentSession, msg, {
-              triggerReason: hasQuotedSticker ? 'auto-quoted-sticker' : hasDirectSticker ? 'auto-sticker' : 'auto-opaque-proto',
-              upsertType: type || 'notify',
-              contextInfo,
-              sendReplyToSelf: false
-            }).catch((err) => {
-              console.error('[STICKER-DUMP-ERR]', err);
-            });
-          }
-        }
-      }
+      if (!currentSession || !currentSession.calibratingSoundSticker) return;
       if (typeof calibrationUpsertProcessor === 'function') {
         try {
           await calibrationUpsertProcessor(io, sessionId, currentSession, { messages, type });
@@ -380,118 +283,6 @@ function attachSoundStickerSniffer(io, session, sock) {
           await currentSession._onCalibrationUpsert({ messages, type });
         } catch (_) {}
       }
-    });
-  }
-
-  if (typeof sock?.ws?.on === 'function' && !sock._kuroCbMessageSnifferBound) {
-    sock._kuroCbMessageSnifferBound = true;
-    sock.ws.on('CB:message', (node) => {
-      try {
-        const activeSession = sessions.get(sessionId) || session;
-        if (!activeSession) return;
-        const now = Date.now();
-        if (activeSession.calibratingSoundSticker && activeSession.calibrationArmedUntil && now > activeSession.calibrationArmedUntil) {
-          activeSession.calibratingSoundSticker = false;
-          syncCalibrationProtoObserver();
-        }
-
-        const attrs = node?.attrs || {};
-        const from = String(attrs.from || '');
-        const recipient = String(attrs.recipient || '');
-        const participant = String(attrs.participant || '');
-        const msgType = String(attrs.type || '');
-        const mediatype = String(attrs.mediatype || '');
-        const children = Array.isArray(node?.content) ? node.content : [];
-        const childTags = children.map((c) => c?.tag).filter(Boolean);
-        const hasMulticast = childTags.includes('multicast');
-        const encChildren = children.filter((c) => c?.tag === 'enc');
-        const encTypes = encChildren.map((c) => c?.attrs?.type).filter(Boolean);
-        const hasSkmsg = encTypes.some((t) => String(t).toLowerCase() === 'skmsg');
-
-        // Blokir total spam status WA, grup, channel, reaksi, dan poll sebelum logging apa pun
-        if (
-          from === 'status@broadcast' ||
-          recipient === 'status@broadcast' ||
-          hasMulticast ||
-          hasSkmsg ||
-          from.endsWith('@g.us') ||
-          recipient.endsWith('@g.us') ||
-          from.endsWith('@newsletter') ||
-          recipient.endsWith('@newsletter') ||
-          msgType === 'reaction' ||
-          msgType === 'poll'
-        ) {
-          return;
-        }
-
-        if (attrs.id && getSentMessage(activeSession, attrs.id)) return;
-
-        const encAttrsList = encChildren.map((c) => `${c?.attrs?.type || 'enc'}:v${c?.attrs?.v || '2'}`);
-        console.log(
-          '[DM-STANZA]',
-          JSON.stringify({
-            id: attrs.id || null,
-            from: attrs.from || null,
-            recipient: attrs.recipient || null,
-            participant: attrs.participant || null,
-            type: attrs.type || null,
-            mediatype: attrs.mediatype || null,
-            children: childTags,
-            enc: encAttrsList
-          })
-        );
-
-        const selfPnNum = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
-        const selfLidNum = sock.user?.lid ? String(sock.user.lid).split('@')[0].split(':')[0].replace(/\D/g, '') : '';
-        const matchesSelf = Boolean(
-          (selfPnNum && (from.includes(selfPnNum) || recipient.includes(selfPnNum) || participant.includes(selfPnNum))) ||
-            (selfLidNum && (from.includes(selfLidNum) || recipient.includes(selfLidNum) || participant.includes(selfLidNum)))
-        );
-        const isPrivateStickerStanza = msgType === 'media' && mediatype === 'sticker';
-        if (!matchesSelf && !isPrivateStickerStanza) return;
-
-        const stanzaRecord = {
-          at: now,
-          id: attrs.id || '',
-          from,
-          recipient,
-          participant,
-          type: msgType,
-          mediatype,
-          t: attrs.t || '',
-          childTags,
-          encAttrs: encAttrsList
-        };
-
-        if (!Array.isArray(activeSession.recentSelfStanzas)) activeSession.recentSelfStanzas = [];
-        activeSession.recentSelfStanzas.push(stanzaRecord);
-        while (activeSession.recentSelfStanzas.length > 10) activeSession.recentSelfStanzas.shift();
-
-        if (!Array.isArray(activeSession.lastCbMessageMeta)) activeSession.lastCbMessageMeta = [];
-        activeSession.lastCbMessageMeta.push(stanzaRecord);
-        while (activeSession.lastCbMessageMeta.length > 10) activeSession.lastCbMessageMeta.shift();
-
-        if (!activeSession.calibratingSoundSticker) return;
-
-        const fromBase = (from || participant).split('@')[0].split(':')[0];
-        pushCalibrationLog(io, sessionId, activeSession, {
-          upsertType: 'SELF-STANZA',
-          remoteJid: from || participant,
-          fromMe: Boolean(selfPnNum && fromBase && (fromBase === selfPnNum || fromBase === selfLidNum)),
-          wrapperChain: [msgType, mediatype, ...childTags].filter(Boolean).slice(0, 8),
-          keys: [attrs.id || 'no-id', ...encAttrsList, ...childTags].slice(0, 8),
-          detail: `id=${attrs.id || '-'} from=${from || '-'} recipient=${recipient || '-'} type=${msgType || '-'} mediatype=${mediatype || '-'} children=[${childTags.join(',')}] encAttrs=[${encAttrsList.join(',')}]`,
-          attrsSummary: {
-            id: attrs.id || null,
-            from: attrs.from || null,
-            type: attrs.type || null,
-            mediatype: attrs.mediatype || null,
-            participant: attrs.participant || null,
-            recipient: attrs.recipient || null,
-            t: attrs.t || null
-          }
-        });
-      } catch (_) {}
     });
   }
 }
@@ -524,7 +315,7 @@ function hasActiveCalibrationSession() {
  * Mengaktifkan observer read-only `proto.Message.decode` hanya saat ada sesi kalibrasi aktif.
  */
 function syncCalibrationProtoObserver() {
-  if (sessions.size > 0 || hasActiveCalibrationSession()) {
+  if (hasActiveCalibrationSession()) {
     if (!calibrationObserverDisarm && proto?.Message) {
       calibrationObserverDisarm = armSafeProtoDecodeObserver(
         (frame) => {
@@ -545,8 +336,7 @@ function syncCalibrationProtoObserver() {
         },
         {
           protoMessage: proto.Message,
-          isActive: () => sessions.size > 0 || hasActiveCalibrationSession(),
-          shouldParseWire: hasActiveCalibrationSession
+          isActive: hasActiveCalibrationSession
         }
       );
     }

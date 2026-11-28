@@ -1032,6 +1032,7 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       });
     }
 
+    let audioOpusBase64 = '';
     if (trimmedAudio) {
       onProgress?.(78);
       try {
@@ -1039,7 +1040,8 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
         if (enc?.blob && enc.blob.size > 100 && enc.blob.size <= 1024 * 1024) {
           audioBase64 = await blobToBase64Local(enc.blob);
           audioMime = enc.mimeType || 'audio/mp4';
-          if (enc.ext === 'm4a') audioM4aBase64 = audioBase64;
+          if (enc.ext === 'ogg') audioOpusBase64 = audioBase64;
+          else if (enc.ext === 'm4a') audioM4aBase64 = audioBase64;
         }
       } catch {}
 
@@ -1061,11 +1063,13 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       queueId: item.id,
       stickerWebpBase64,
       ...(audioBase64 ? { audioBase64, audioMime } : {}),
+      ...(audioOpusBase64 ? { audioOpusBase64 } : {}),
       ...(audioM4aBase64 ? { audioM4aBase64 } : {}),
       ...(muxedMp4Base64 ? { muxedMp4Base64 } : {}),
       ...(muxedWebmBase64 ? { muxedWebmBase64 } : {}),
       ...(thumbnailJpegBase64 ? { thumbnailJpegBase64 } : {}),
       ...(thumbnailPngBase64 ? { thumbnailPngBase64 } : {}),
+      stickerEmoji: '✨',
       durationSec,
       isAnimated: willAnimate,
       width: 512,

@@ -18,33 +18,50 @@ const MAX_MUXED_CONTAINER_BYTES = 3 * 1024 * 1024;
 // Spesifikasi global anonim di RAM server (tanpa nomor HP/JID/media pengguna)
 const activeSpec = {
   version: 1,
-  mode: 'native_webp_clean',
-  deliveryRoute: 'jalur_d_uncalibrated_webp',
-  calibrated: false,
-  hasAudioSignature: false,
-  messageType: 'stickerMessage',
+  mode: 'wa_proto_134_audio_sticker_v1',
+  specMode: 'wa_proto_134_audio_sticker_v1',
+  deliveryRoute: 'jalur_proto_134_permanent',
+  calibrated: true,
+  hasAudioSignature: true,
+  messageType: 'audioStickerFutureProof',
   container: 'webp',
   mimetype: 'image/webp',
   hkdfMediaType: 'sticker',
-  canEncodeCleanly: false,
+  stickerHkdf: 'sticker',
+  audioHkdf: 'audio',
+  audioMime: 'audio/ogg; codecs=opus',
+  canEncodeCleanly: true,
   hasUnsupportedUnknownProtoFields: false,
-  reason: 'Belum dikalibrasi. Kiriman memakai WebP 512x512 bersih via sock.sendMessage (0% "Menunggu pesan ini").',
+  reason: 'Engine Stiker Audio WA Native (#134 -> #1 -> #26 + Ogg/Opus) aktif permanen tanpa kalibrasi.',
   baileysVersion: BAILEYS_VERSION,
   maxStaticBytes: MAX_STATIC_WEBP_BYTES,
   maxAnimatedBytes: MAX_ANIMATED_WEBP_BYTES,
   maxMuxedBytes: MAX_MUXED_CONTAINER_BYTES,
   protoPatchRules: {
-    wrapperChain: [],
-    topLevelKeys: [],
-    innerMeta: {},
-    unknownWireFields: [],
+    wrapperChain: ['audioStickerFutureProof'],
+    topLevelKeys: ['stickerMessage'],
+    innerMeta: {
+      mimetype: 'image/webp',
+      isAnimated: true,
+      isLottie: false,
+      gifPlayback: false,
+      width: 64,
+      height: 64
+    },
+    unknownWireFields: [
+      { scope: 'Message', field: 134, wireType: 2 },
+      { scope: 'StickerMessage', field: 24, wireType: 0 },
+      { scope: 'StickerMessage', field: 25, wireType: 2 },
+      { scope: 'StickerMessage', field: 26, wireType: 2 },
+      { scope: 'ContextInfo', field: 74, wireType: 2 }
+    ],
     unknownTags: [],
     customRiffChunks: [],
     extraExifKeys: [],
     exifTemplate: null,
     hasDirectAudioEmbed: false
   },
-  updatedAt: null
+  updatedAt: Date.now()
 };
 
 function sanitizeAnonymousExifTemplate(exifJson, extraKeys = []) {

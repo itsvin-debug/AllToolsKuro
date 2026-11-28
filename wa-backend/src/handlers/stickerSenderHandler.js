@@ -37,6 +37,7 @@ const {
   verifyWireBytesStrict,
   diffUnknownWireFields,
   extractOpaqueInnerMessageTree,
+  installAudioStickerProtoExtension,
   getRecentRawWireFrames,
   getRecentRawWireBytesSnapshots,
   appendWireFieldsToEncodedMessage,
@@ -44,16 +45,20 @@ const {
   unwrapMessageContent,
   extractTextAndQuoted
 } = require('../utils/protoWireInspector');
+const { ensureValidOggOpusBuffer } = require('../utils/oggOpusEncoder');
 
 const {
   proto,
   generateWAMessage,
   generateWAMessageFromContent,
+  generateMessageIDV2,
   prepareWAMessageMedia,
   downloadMediaMessage,
   downloadContentFromMessage,
   jidNormalizedUser: baileysJidNorm
 } = baileysModule;
+
+installAudioStickerProtoExtension(proto);
 
 const jidNormalizedUser =
   baileysJidNorm ||
@@ -1214,19 +1219,6 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       if (!existingHasRich || incomingHasRich) {
         curSession.soundStickerBlueprint = blueprint;
       }
-      if (nonContextKeys.length === 0 || opaqueInnerFields.some((f) => String(f.fieldLabel || '').startsWith('UNKNOWN_TOP_FIELD_'))) {
-        console.log(
-          '[OPAQUE-WIRE-DUMP]',
-          JSON.stringify({
-            msgId: msg.key.id || null,
-            remoteJid: remoteRaw || participantRaw || null,
-            stanzaMeta: rawBlueprint.stanzaMeta,
-            totalBytes: rawBytesTotal,
-            opaqueInnerFields,
-            rawWireTree
-          })
-        );
-      }
       const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
 
       pushCalibrationLog(io, sessionId, curSession, {
@@ -1496,37 +1488,8 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       specMode: globalSpec.mode,
       deliveryRoute: globalSpec.deliveryRoute
     };
-    console.log('[STICKER-DUMP]', JSON.stringify(dumpObject));
-    if (triggerReason === 'auto-opaque-proto' || topKeys.length === 0 || opaqueInnerFields.some((f) => String(f.fieldLabel || '').startsWith('UNKNOWN_TOP_FIELD_'))) {
-      console.log(
-        '[OPAQUE-WIRE-DUMP]',
-        JSON.stringify({
-          msgId: blueprint.msgId,
-          remoteJid: msg.key.remoteJid || selfJid,
-          stanzaMeta: blueprint.stanzaMeta,
-          totalBytes: rawWireBytesLength,
-          opaqueInnerFields,
-          rawWireTree: effectiveWireTree
-        })
-      );
-    }
-    if (isKlonCmd) {
-      console.log('[KLON-RESULT]', JSON.stringify(dumpObject));
-    }
 
     const wf = mediaInspection?.webpForensics || null;
-    const forensicReport = {
-      msgId: blueprint.msgId,
-      trigger: triggerReason,
-      mime: innerMeta?.mimetype || '-',
-      hkdf: decryptedByMediaType || '-',
-      container: mediaInspection?.detectedContainer || 'unknown',
-      stickerMeta: innerMeta,
-      unknownWireFields,
-      webpForensics: wf,
-      decryptErrors
-    };
-    console.log('[KLON-FORENSIC]', JSON.stringify(forensicReport));
 
     pushCalibrationLog(io, sessionId, activeSession, {
       upsertType: 'BLUEPRINT-CAPTURED',
@@ -2006,7 +1969,148 @@ async function sendJalurCAltMessage({ io, sessionId, session, selfJid, messageTy
 }
 
 /**
- * Mesin Perakitan & Wire-Exact Cloner Stiker Audio WA (Jalur A, B, C, dan D) — Zero "Menunggu pesan ini".
+ * Pengirim Native WA Audio Sticker (#134 -> #1 -> #26 StickerMessage + #26 AudioMessage Ogg/Opus) — Zero-Disk & Anti "Menunggu pesan ini".
+ */
+async function sendNativeProto134AudioSticker({
+  io,
+  sessionId,
+  session,
+  selfJid,
+  stickerWebpBuf,
+  isAnimated = false,
+  audioBuf,
+  audioMime = '',
+  durationSec = 3,
+  stickerEmoji = '✨',
+  queueId = null
+}) {
+  if (!session?.sock?.user?.id) {
+    throw new Error('Sesi WhatsApp belum terhubung aktif.');
+  }
+
+  let oggOpusBuf = null;
+  try {
+    oggOpusBuf = await ensureValidOggOpusBuffer(audioBuf, audioMime);
+    const safeSeconds = Math.max(1, Math.round(Number(durationSec) || 1));
+
+    const uploadedSticker = await uploadMediaNodeForCloner(session, 'sticker', stickerWebpBuf);
+    const uploadedAudio = await uploadMediaNodeForCloner(session, 'audio', oggOpusBuf, {
+      mimetype: 'audio/ogg; codecs=opus',
+      ptt: false,
+      seconds: safeSeconds
+    });
+
+    const nowMs = Date.now();
+    const nowSec = Math.floor(nowMs / 1000);
+
+    const audioObj = {
+      url: uploadedAudio.url,
+      mimetype: 'audio/ogg; codecs=opus',
+      fileSha256: uploadedAudio.fileSha256,
+      fileLength: uploadedAudio.fileLength || oggOpusBuf.length,
+      seconds: safeSeconds,
+      ptt: false,
+      mediaKey: uploadedAudio.mediaKey,
+      fileEncSha256: uploadedAudio.fileEncSha256,
+      directPath: uploadedAudio.directPath,
+      mediaKeyTimestamp: uploadedAudio.mediaKeyTimestamp || nowSec,
+      contextInfo: {
+        mediaKeyContext: {
+          type: 1,
+          mediaKey: uploadedAudio.mediaKey
+        }
+      }
+    };
+
+    const stickerObj = {
+      url: uploadedSticker.url,
+      fileSha256: uploadedSticker.fileSha256,
+      fileEncSha256: uploadedSticker.fileEncSha256,
+      mediaKey: uploadedSticker.mediaKey,
+      mimetype: 'image/webp',
+      height: 64,
+      width: 64,
+      directPath: uploadedSticker.directPath,
+      fileLength: uploadedSticker.fileLength || stickerWebpBuf.length,
+      mediaKeyTimestamp: uploadedSticker.mediaKeyTimestamp || nowSec,
+      ...(uploadedSticker.firstFrameLength ? { firstFrameLength: uploadedSticker.firstFrameLength } : {}),
+      ...(uploadedSticker.firstFrameSidecar ? { firstFrameSidecar: uploadedSticker.firstFrameSidecar } : {}),
+      isAnimated: Boolean(isAnimated),
+      contextInfo: {
+        mediaKeyContext: {
+          type: 1,
+          mediaKey: uploadedSticker.mediaKey
+        }
+      },
+      stickerSentTs: nowMs,
+      isAvatar: false,
+      isAiSticker: false,
+      isLottie: false,
+      mediaKeyDomain: 0,
+      stickerEmoji: typeof stickerEmoji === 'string' && stickerEmoji.trim() ? stickerEmoji.trim().slice(0, 16) : '✨',
+      audioStickerMessage: audioObj
+    };
+
+    const protoMsg = proto.Message.fromObject({
+      audioStickerFutureProof: {
+        message: {
+          stickerMessage: stickerObj
+        }
+      }
+    });
+
+    const encodedBytes = proto.Message.encode(protoMsg).finish();
+    if (!encodedBytes || encodedBytes.length <= 500) {
+      throw new Error(`Payload Stiker Audio #134 terlalu pendek (${encodedBytes?.length || 0} B).`);
+    }
+
+    const wireTree = inspectProtobufWire(encodedBytes, 8);
+    const f134 = wireTree.find((n) => n.field === 134);
+    const f1 = f134?.subFields?.find((n) => n.field === 1);
+    const f26 = f1?.subFields?.find((n) => n.field === 26);
+    const f26Audio = f26?.subFields?.find((n) => n.field === 26);
+    const audioMimeLeaf = f26Audio?.subFields?.find((n) => n.field === 2);
+    if (!f134 || !f1 || !f26 || !f26Audio || !String(audioMimeLeaf?.utf8 || '').includes('audio/ogg')) {
+      throw new Error('Validasi wire #134 -> #1 -> #26 (AudioMessage Ogg/Opus) gagal.');
+    }
+
+    const msgId =
+      typeof generateMessageIDV2 === 'function'
+        ? generateMessageIDV2(session.sock.user.id)
+        : `KURO${nowMs.toString(16).toUpperCase()}`;
+
+    // Simpan ke cache E2EE sebelum relayMessage agar retry Signal langsung melayani proto identik
+    rememberSentMessage(session, msgId, protoMsg);
+    watchE2eeMessageId(session, msgId);
+
+    await session.sock.relayMessage(selfJid, protoMsg, {
+      messageId: msgId,
+      additionalAttributes: { type: 'media' }
+    });
+
+    const traceLabel = queueId ? `Stiker Audio #134 #${String(queueId).slice(-5)}` : 'Stiker Audio #134';
+    pushDeliveryTrace(io, sessionId, session, {
+      messageId: msgId,
+      phase: 'sent',
+      event: 'proto134-relay',
+      isError: false,
+      detail: `${traceLabel} (${encodedBytes.length} B proto, Ogg/Opus ${(oggOpusBuf.length / 1024).toFixed(1)} KB) -> menunggu ACK HP`
+    });
+    emitAuthSnapshotNow(io, sessionId, session);
+    console.log(`[WA-AUDIO-STICKER] Terkirim id=${msgId} (${encodedBytes.length} B proto, WebP=${stickerWebpBuf.length} B, Ogg=${oggOpusBuf.length} B)`);
+
+    return {
+      messageId: msgId,
+      encodedBytes: encodedBytes.length,
+      oggBytes: oggOpusBuf.length
+    };
+  } finally {
+    oggOpusBuf = null;
+  }
+}
+
+/**
+ * Mesin Perakitan & Pengirim Stiker Audio Native #134 — Zero "Menunggu pesan ini".
  */
 async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, payload }) {
   let stickerWebpBuf = null;
@@ -2031,12 +2135,13 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       thumbnailJpegBase64,
       thumbnailPngBase64,
       durationSec = 3,
-      blueprint: clientBlueprint
+      stickerEmoji = '✨'
     } = payload || {};
 
     stickerWebpBuf = decodeBoundedBase64(stickerWebpBase64, MAX_STICKER_BYTES, 'stiker WebP 512x512');
     const validatedWebp = validateStickerMediaPayload(stickerWebpBuf);
     const isAnimatedBitstream = validatedWebp.isAnimatedBitstream;
+    const webpBytes = stickerWebpBuf.length;
 
     muxedMp4Buf = decodeOptionalBase64(muxedMp4Base64, 'mp4', 'muxed MP4');
     muxedWebmBuf = decodeOptionalBase64(muxedWebmBase64, 'webm', 'muxed WebM');
@@ -2057,124 +2162,55 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       } catch (_) {}
     }
 
-    const sanitizedClientBp = sanitizeBlueprint(clientBlueprint);
-    if (sanitizedClientBp && (!getGlobalSoundStickerSpec().calibrated || !session.soundStickerBlueprint)) {
-      session.soundStickerBlueprint = sanitizedClientBp;
-      const promoted = promoteVerifiedBlueprintToGlobalSpec(sanitizedClientBp);
-      emitToDevice(io, sessionId, 'sound-sticker-spec-sync', promoted);
-    }
-
     const activeSpec = getGlobalSoundStickerSpec();
-    const activeBlueprint = session.soundStickerBlueprint || sanitizedClientBp || null;
-    const bestAudioBuf = audioUnifiedBuf || audioOpusBuf || audioM4aBuf;
-    const bestAudioMime = audioMime || (audioOpusBuf ? 'audio/ogg;codecs=opus' : 'audio/mp4');
-    const route = activeSpec.deliveryRoute || 'jalur_d_uncalibrated_webp';
+    const bestAudioBuf = audioOpusBuf || audioUnifiedBuf || audioM4aBuf;
+    const bestAudioMime = audioOpusBuf ? 'audio/ogg; codecs=opus' : (audioMime || 'audio/mp4');
 
     let modeUsed = 'native_webp_clean';
     let audioEmbedded = false;
     let isAudioSticker = false;
-    let needsCalibration = !activeSpec.calibrated || !activeSpec.hasAudioSignature;
+    let needsCalibration = false;
     let reason = activeSpec.reason;
     let note = 'Stiker WebP 512x512 terkirim via sock.sendMessage (0 error E2EE).';
     let sendRes = null;
+    let oggBytes = 0;
 
-    if (route === 'jalur_b_wire_patch' && activeSpec.protoPatchRules?.unknownWireFields?.length > 0) {
-      sendRes = await sendJalurBWirePatchedSticker({
+    if (bestAudioBuf) {
+      sendRes = await sendNativeProto134AudioSticker({
         io,
         sessionId,
         session,
         selfJid,
         stickerWebpBuf,
+        isAnimated: isAnimatedBitstream,
         audioBuf: bestAudioBuf,
         audioMime: bestAudioMime,
         durationSec,
-        unknownFields: activeSpec.protoPatchRules.unknownWireFields,
+        stickerEmoji,
         queueId
       });
-      modeUsed = 'wire_exact_proto_patch';
-      audioEmbedded = Boolean(bestAudioBuf);
-      isAudioSticker = true;
-      needsCalibration = false;
-      reason = activeSpec.reason;
-      note = 'Dikirim lewat Jalur B (Wire-Exact Unknown Tag Patch + verifikasi round-trip).';
-    } else if (route === 'jalur_a_muxed_sticker' && (muxedMp4Buf || muxedWebmBuf)) {
-      const useWebm = activeSpec.container === 'webm' && Boolean(muxedWebmBuf);
-      const chosenMuxed = useWebm ? muxedWebmBuf : (muxedMp4Buf || muxedWebmBuf);
-      sendRes = await sendJalurAMuxedSticker({
-        io,
-        sessionId,
-        session,
-        selfJid,
-        muxedBuf: chosenMuxed,
-        containerExt: useWebm ? 'webm' : 'mp4',
-        activeSpec,
-        pngThumbnail: pngThumbBuf,
-        queueId
-      });
-      modeUsed = 'sticker_muxed_container';
+      modeUsed = 'wa_proto_134_audio_sticker_v1';
       audioEmbedded = true;
       isAudioSticker = true;
       needsCalibration = false;
-      reason = activeSpec.reason;
-      note = `Dikirim lewat Jalur A2 (stickerMessage bermedia ${useWebm ? 'WebM' : 'MP4'} via HKDF ${activeSpec.hkdfMediaType}).`;
-    } else if (route === 'jalur_a_webp_chunk' && activeBlueprint) {
-      const { finalWebpBuf, customized } = applyBlueprintToWebp(stickerWebpBuf, activeBlueprint, {
-        audioBuf: bestAudioBuf,
-        durationSec
-      });
-      const targetWebp = customized ? finalWebpBuf : stickerWebpBuf;
-      validateStickerMediaPayload(targetWebp);
-      sendRes = await sendOfficialSelfMessage(
-        io,
-        sessionId,
-        session,
-        selfJid,
-        { sticker: targetWebp },
-        queueId ? `Jalur A1 WebP-Chunk #${String(queueId).slice(-5)}` : 'Jalur A1 WebP-Chunk'
-      );
-      modeUsed = customized ? 'verified_webp_chunk_clone' : 'native_webp_clean';
-      audioEmbedded = Boolean(customized && bestAudioBuf);
-      isAudioSticker = Boolean(customized);
-      needsCalibration = !customized;
-      reason = activeSpec.reason;
-      note = 'Dikirim lewat Jalur A1 (sock.sendMessage dengan chunk WebP/EXIF terkalibrasi).';
-    } else if (route === 'jalur_c_alt_message') {
-      const chosenMuxed = (activeSpec.container === 'webm' && muxedWebmBuf) ? muxedWebmBuf : (muxedMp4Buf || muxedWebmBuf);
-      sendRes = await sendJalurCAltMessage({
-        io,
-        sessionId,
-        session,
-        selfJid,
-        messageType: activeSpec.messageType,
-        innerMeta: activeSpec.protoPatchRules?.innerMeta || {},
-        stickerWebpBuf,
-        muxedBuf: chosenMuxed,
-        jpegThumbBuf,
-        queueId
-      });
-      modeUsed = 'alt_message_type_clone';
-      audioEmbedded = Boolean(chosenMuxed);
-      isAudioSticker = true;
-      needsCalibration = false;
-      reason = activeSpec.reason;
-      note = `Dikirim lewat Jalur C (${activeSpec.messageType}) mengikuti blueprint terkalibrasi.`;
+      oggBytes = sendRes.oggBytes || 0;
+      reason = 'Stiker Audio Native (#134 • WebP + Ogg/Opus) terkirim bersih ke WhatsApp Anda.';
+      note = 'Dikirim lewat Protokol Native #134 -> #1 -> #26 (WebP + AudioMessage audio/ogg; codecs=opus).';
     } else {
-      // Jalur D: Belum terkalibrasi (atau blueprint bukan stiker audio) -> WebP bersih bebas "Menunggu pesan ini"
       sendRes = await sendOfficialSelfMessage(
         io,
         sessionId,
         session,
         selfJid,
         { sticker: stickerWebpBuf },
-        queueId ? `Stiker WebP #${String(queueId).slice(-5)} -> sock.sendMessage` : 'Stiker WebP -> sock.sendMessage'
+        queueId ? `Stiker Polos #${String(queueId).slice(-5)} -> sock.sendMessage` : 'Stiker Polos -> sock.sendMessage'
       );
       modeUsed = 'native_webp_clean';
       audioEmbedded = false;
       isAudioSticker = false;
-      needsCalibration = true;
-      reason =
-        'Stiker terkirim bersih (0 error). Untuk mengaktifkan mode Stiker Audio permanen, balas (Reply) 1 stiker audio di WA dengan ketik .klon lalu coba kirim ulang.';
-      note = 'Dikirim lewat Jalur D (WebP 512x512 bersih via sock.sendMessage).';
+      needsCalibration = false;
+      reason = 'Stiker WebP polos terkirim bersih (item tanpa audio).';
+      note = 'Dikirim lewat sock.sendMessage (WebP 512x512 tanpa audio).';
     }
 
     if (sendRes?.messageId) {
@@ -2186,17 +2222,20 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       ...(queueId ? { queueId } : {}),
       messageId: sendRes.messageId,
       deliveryTraceId: sendRes.messageId,
-      protocol: isAudioSticker ? `wire-cloner-${modeUsed}` : 'sock.sendMessage-sticker',
+      protocol: isAudioSticker ? 'wa-proto-134-audio-sticker' : 'sock.sendMessage-sticker',
       modeUsed,
-      deliveryRoute: route,
+      deliveryRoute: isAudioSticker ? 'jalur_proto_134_permanent' : 'native_webp_clean',
       isAudioSticker,
       audioEmbedded,
       reason,
       globalSpecMode: activeSpec.mode,
-      hasBlueprint: Boolean(activeBlueprint),
+      hasBlueprint: true,
       needsCalibration,
       isAnimated: Boolean(isAnimatedBitstream),
       encodedBytes: sendRes.encodedBytes,
+      webpBytes,
+      oggBytes,
+      durationSec: Math.max(0.5, Number(durationSec) || 1),
       note,
       selfJid,
       sentAt: Date.now()
@@ -2710,6 +2749,7 @@ module.exports = {
   buildCalibrationStatePayload,
   handleKlonReplyCommand,
   inspectAndDumpSticker,
+  sendNativeProto134AudioSticker,
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,

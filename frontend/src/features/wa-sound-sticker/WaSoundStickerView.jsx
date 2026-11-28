@@ -22,7 +22,6 @@ import {
   LogOut,
   ShieldCheck,
   Info,
-  Wrench,
   Plus,
   Layers,
   Sparkles,
@@ -182,7 +181,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const e2eeResetTimerRef = useRef(null);
   const e2eeTestTimerRef = useRef(null);
   const plainStickerTestTimerRef = useRef(null);
-  const lastSyncPullAtRef = useRef(0);
 
   const [socketConnected, setSocketConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
@@ -200,28 +198,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [isTestingE2ee, setIsTestingE2ee] = useState(false);
   const [isTestingPlainSticker, setIsTestingPlainSticker] = useState(false);
   const [e2eeDiagStatus, setE2eeDiagStatus] = useState(null);
-  const [globalSpec, setGlobalSpec] = useState(null);
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
-  const [calibrationArmed, setCalibrationArmed] = useState(false);
-  const [calibrationMeta, setCalibrationMeta] = useState(null);
-  const [calibrationLogs, setCalibrationLogs] = useState([]);
-  const [isSyncingCalibration, setIsSyncingCalibration] = useState(false);
   const [deliveryTraces, setDeliveryTraces] = useState([]);
-  const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
-    try {
-      const raw =
-        localStorage.getItem('kuro_global_sound_sticker_blueprint_v2') ||
-        (sessionId &&
-          (localStorage.getItem(`kuro_sound_sticker_blueprint_${sessionId}`) ||
-            localStorage.getItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`)));
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [copiedSchema, setCopiedSchema] = useState(false);
-  const [copiedLogs, setCopiedLogs] = useState(false);
 
   const renderOptions = useMemo(
     () => ({
@@ -272,23 +251,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         deviceToken,
         authSnapshot: snapshot || undefined
       });
-      sock.emit('get-sound-sticker-spec', { sessionId, deviceToken });
-      sock.emit('sync-calibration-state', { sessionId, deviceToken });
-      try {
-        const storedBp =
-          localStorage.getItem('kuro_global_sound_sticker_blueprint_v2') ||
-          localStorage.getItem(`kuro_sound_sticker_blueprint_${sessionId}`);
-        if (storedBp) {
-          const parsedBp = JSON.parse(storedBp);
-          if (parsedBp && typeof parsedBp === 'object') {
-            sock.emit('sync-sound-sticker-blueprint', {
-              sessionId,
-              deviceToken,
-              blueprint: parsedBp
-            });
-          }
-        }
-      } catch {}
     };
 
     sock.on('connect', () => {
@@ -379,66 +341,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setWaError(data?.message || 'Terjadi gangguan pada koneksi WhatsApp.');
     });
 
-    sock.on('sound-sticker-calibration-armed', (info) => {
-      if (unmounted) return;
-      setCalibrationArmed(true);
-      setCalibrationMeta(info && typeof info === 'object' ? info : null);
-      if (!info?.resumed) {
-        setCalibrationLogs([]);
-      }
-      const phoneLabel = info?.linkedPhone ? `+${info.linkedPhone}` : 'perangkat tertaut';
-      if (!info?.resumed) {
-        onShowToastRef.current?.(`Deteksi aktif di ${phoneLabel}: kirim pesan atau teruskan 1 stiker audio.`, 'info');
-      }
-    });
-
-    sock.on('sound-sticker-calibration-error', (payload) => {
-      if (unmounted) return;
-      setCalibrationArmed(false);
-      onShowToastRef.current?.(payload?.error || 'Deteksi format gagal dimulai.', 'error');
-    });
-
-    sock.on('sound-sticker-calibration-log', (entry) => {
-      if (unmounted || !entry) return;
-      setCalibrationLogs((prev) => [...prev.slice(-24), entry]);
-    });
-
-    sock.on('sound-sticker-calibration-history', (items) => {
-      if (unmounted || !Array.isArray(items) || items.length === 0) return;
-      setCalibrationLogs(items.slice(-25));
-    });
-
-    sock.on('calibration-state-sync', (state) => {
-      if (unmounted || !state) return;
-      setIsSyncingCalibration(false);
-      if (state.globalSpec && typeof state.globalSpec === 'object') {
-        setGlobalSpec(state.globalSpec);
-      }
-      setCalibrationArmed(Boolean(state.calibrating));
-      if (state.linkedPhone || state.linkedLid || state.armedUntil) {
-        setCalibrationMeta((prev) => ({
-          ...(prev || {}),
-          linkedPhone: state.linkedPhone || prev?.linkedPhone || '',
-          linkedLid: state.linkedLid || prev?.linkedLid || null,
-          baileysVersion: state.baileysVersion || prev?.baileysVersion,
-          armedUntil: state.armedUntil || 0
-        }));
-      }
-      if (Array.isArray(state.logs)) {
-        setCalibrationLogs(state.logs.slice(-25));
-      }
-      if (state.blueprint && typeof state.blueprint === 'object') {
-        setSoundStickerBlueprint(state.blueprint);
-        try {
-          const serialized = JSON.stringify(state.blueprint);
-          localStorage.setItem('kuro_global_sound_sticker_blueprint_v2', serialized);
-          if (sessionId) {
-            localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, serialized);
-          }
-        } catch {}
-      }
-    });
-
     sock.on('sound-sticker-delivery-trace', (trace) => {
       if (unmounted || !trace) return;
       setDeliveryTraces((prev) => [...prev.slice(-19), trace]);
@@ -447,11 +349,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     sock.on('sound-sticker-delivery-trace-history', (items) => {
       if (unmounted || !Array.isArray(items) || items.length === 0) return;
       setDeliveryTraces(items.slice(-20));
-    });
-
-    sock.on('sound-sticker-spec-sync', (spec) => {
-      if (unmounted || !spec || typeof spec !== 'object') return;
-      setGlobalSpec(spec);
     });
 
     sock.on('plain-sticker-test-result', (res) => {
@@ -500,26 +397,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         onShowToastRef.current?.(res?.error || 'Gagal menyegarkan kunci E2EE.', 'error');
       }
     });
-
-    const handleBlueprintCaptured = (payloadOrBlueprint) => {
-      if (unmounted) return;
-      const bp = payloadOrBlueprint?.blueprint || payloadOrBlueprint;
-      if (!bp || typeof bp !== 'object') return;
-      if (payloadOrBlueprint?.globalSpec) setGlobalSpec(payloadOrBlueprint.globalSpec);
-      setCalibrationArmed(false);
-      setSoundStickerBlueprint(bp);
-      try {
-        const serialized = JSON.stringify(bp);
-        localStorage.setItem('kuro_global_sound_sticker_blueprint_v2', serialized);
-        if (sessionId) {
-          localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, serialized);
-        }
-      } catch {}
-      onShowToastRef.current?.('Blueprint Stiker Audio Tertangkap & disimpan permanen!', 'success');
-    };
-
-    sock.on('sound-sticker-blueprint-ready', handleBlueprintCaptured);
-    sock.on('sound-sticker-schema-detected', handleBlueprintCaptured);
 
     const handleAckEvent = (upd) => {
       if (unmounted || !upd) return;
@@ -573,35 +450,18 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       }
     });
 
-    const pullCalibrationStateOnReturn = () => {
-      if (unmounted) return;
-      const now = Date.now();
-      if (now - lastSyncPullAtRef.current < 1200) return;
-      lastSyncPullAtRef.current = now;
-      if (!sock.connected) {
-        sock.connect();
-        return;
-      }
-      sock.emit('sync-calibration-state', { sessionId, deviceToken });
-    };
-
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        pullCalibrationStateOnReturn();
+      if (unmounted) return;
+      if (document.visibilityState === 'visible' && !sock.connected) {
+        sock.connect();
       }
-    };
-
-    const handleWindowFocus = () => {
-      pullCalibrationStateOnReturn();
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleWindowFocus);
 
     return () => {
       unmounted = true;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleWindowFocus);
       if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
       if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
       if (plainStickerTestTimerRef.current) clearTimeout(plainStickerTestTimerRef.current);
@@ -882,23 +742,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       validateSourceMediaDimensions(sourceMedia);
       const thumbnailUrl = createSquareThumbnailDataUrl(sourceMedia, renderOptions);
 
-      let stagedMuxedBlob = null;
-      let stagedMuxedExt = null;
-      const bpContainer = soundStickerBlueprint?.mediaInspection?.detectedContainer || '';
-      const bpMime = String(soundStickerBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
-      if (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm')) {
-        try {
-          const trimmed = await renderTrimmedAudioBuffer(audioBuffer, {
-            startSec: effectiveBounds.start,
-            endSec: effectiveBounds.end,
-            volume,
-            fadeSmooth
-          });
-          const stage1 = await composeSoundVideoStage1({ sourceMedia, trimmedAudioBuffer: trimmed, renderOptions });
-          stagedMuxedBlob = stage1.blob;
-          stagedMuxedExt = stage1.ext;
-        } catch {}
-      }
+      const stagedMuxedBlob = null;
+      const stagedMuxedExt = null;
 
       const itemId = `stk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const newItem = {
@@ -1055,8 +900,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       );
 
       const payload = await buildStickerSendPayload({
-        item,
-        blueprint: soundStickerBlueprint
+        item
       });
 
       setStickerQueue((prev) =>
@@ -1102,7 +946,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
       return res;
     },
-    [connectionStatus, deviceToken, sessionId, soundStickerBlueprint]
+    [connectionStatus, deviceToken, sessionId]
   );
 
   // Kirim Langsung 1 Ini dari Mode A
@@ -1274,26 +1118,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     setConnectionStatus('disconnected');
   };
 
-  const handleArmCalibration = () => {
-    if (connectionStatus !== 'connected' || !socketRef.current) {
-      onShowToast?.('Tautkan WhatsApp terlebih dahulu sebelum memulai deteksi format.', 'error');
-      return;
-    }
-    setCalibrationLogs([]);
-    socketRef.current.emit('start-sound-sticker-calibration', { sessionId, deviceToken });
-  };
-
-  const handleSyncCalibrationState = () => {
-    if (!socketRef.current) return;
-    setIsSyncingCalibration(true);
-    if (!socketRef.current.connected) {
-      socketRef.current.connect();
-    } else {
-      socketRef.current.emit('sync-calibration-state', { sessionId, deviceToken });
-    }
-    setTimeout(() => setIsSyncingCalibration(false), 3500);
-  };
-
   const handleRefreshE2ee = () => {
     if (connectionStatus !== 'connected' || !socketRef.current || isRefreshingE2ee) return;
     if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
@@ -1329,33 +1153,36 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
-  const handleJumpAndArmCalibration = () => {
-    setMobileTab('wa');
-    if (connectionStatus === 'connected') {
-      handleArmCalibration();
-    }
-  };
-
   const renderSendOutcomeCard = () => {
     if (!lastSendResult?.ok) return null;
-    const isCalibratedAudio = Boolean(lastSendResult.isAudioSticker && !lastSendResult.needsCalibration);
+    const isAudioSticker = lastSendResult.isAudioSticker !== false;
+    const webpKb = Number.isFinite(Number(lastSendResult.webpBytes))
+      ? `${(Number(lastSendResult.webpBytes) / 1024).toFixed(1)} KB`
+      : null;
+    const oggKb = Number.isFinite(Number(lastSendResult.oggBytes))
+      ? `${(Number(lastSendResult.oggBytes) / 1024).toFixed(1)} KB`
+      : null;
+    const durLabel = Number.isFinite(Number(lastSendResult.durationSec))
+      ? `${Number(lastSendResult.durationSec).toFixed(1)}s`
+      : null;
+
     return (
       <div
-        className={`p-3 border-2 border-black text-[11px] font-semibold space-y-2 ${
-          isCalibratedAudio ? 'bg-emerald-100 text-emerald-950' : 'bg-amber-50 text-black'
+        className={`p-3 border-2 border-black shadow-[3px_3px_0px_#000] text-[11px] font-semibold space-y-2 ${
+          isAudioSticker ? 'bg-emerald-100 text-emerald-950' : 'bg-amber-50 text-black'
         }`}
       >
         <div className="font-black flex items-center justify-between gap-1.5 flex-wrap">
           <span className="flex items-center gap-1.5">
-            {isCalibratedAudio ? (
+            {isAudioSticker ? (
               <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
             ) : (
               <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0" />
             )}
             <span>
-              {isCalibratedAudio
+              {isAudioSticker
                 ? 'Stiker Audio Terkirim ke WA Anda ✓✓'
-                : 'Stiker Terkirim (Belum Kalibrasi Audio)'}
+                : 'Stiker Polos Terkirim ke WA Anda ✓✓'}
             </span>
           </span>
           {lastSendResult.messageId && (
@@ -1366,22 +1193,31 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         </div>
 
         <div className="text-[10px] font-mono text-neutral-800">
-          Status: {deliveryStatus?.label || 'Terkirim via sock.sendMessage'}
+          Status: {deliveryStatus?.label || 'Terkirim via Protokol Native #134'}
         </div>
+
+        {(webpKb || oggKb || durLabel) && (
+          <div className="flex flex-wrap gap-1.5 font-mono text-[10px] font-bold text-black">
+            {webpKb && (
+              <span className="px-2 py-0.5 bg-white border border-black">
+                WebP: {webpKb}
+              </span>
+            )}
+            {oggKb && (
+              <span className="px-2 py-0.5 bg-white border border-black">
+                Audio Ogg/Opus: {oggKb}
+              </span>
+            )}
+            {durLabel && (
+              <span className="px-2 py-0.5 bg-white border border-black">
+                Durasi: {durLabel}
+              </span>
+            )}
+          </div>
+        )}
 
         {lastSendResult.reason && (
           <p className="text-[10px] text-neutral-700 leading-snug">{lastSendResult.reason}</p>
-        )}
-
-        {!isCalibratedAudio && (
-          <button
-            type="button"
-            onClick={handleJumpAndArmCalibration}
-            className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-[11px] inline-flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px]"
-          >
-            <Wrench className="w-3.5 h-3.5 shrink-0" />
-            <span>Kalibrasi Format Audio Sekarang &rarr;</span>
-          </button>
         )}
 
         {deliveryTraces.length > 0 && (
@@ -2317,204 +2153,22 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
             {renderSendOutcomeCard()}
 
-            {/* Global Spec & Kalibrasi Blueprint Stiker Suara WA */}
-            <div className="pt-2 border-t-2 border-black space-y-2">
-              {globalSpec && (
-                <div className="px-2.5 py-1.5 border-2 border-black bg-white text-[10px] font-mono flex items-center justify-between gap-2 flex-wrap">
-                  <span className="font-black">
-                    Spec Server:{' '}
-                    <span className={globalSpec.calibrated && globalSpec.hasAudioSignature ? 'text-emerald-700' : 'text-amber-700'}>
-                      {globalSpec.calibrated && globalSpec.hasAudioSignature
-                        ? `Aktif (${globalSpec.mode})`
-                        : globalSpec.calibrated
-                          ? 'WebP Standar'
-                          : 'Belum Terkalibrasi (WebP Bersih)'}
-                    </span>
+            {/* Status Permanen Engine Stiker Audio WA */}
+            <div className="pt-2 border-t-2 border-black">
+              <div className="p-3 bg-emerald-50 border-2 border-black shadow-[3px_3px_0px_#000] space-y-1.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 font-black text-[11px] uppercase text-black">
+                    <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>Engine Stiker Audio WA: Aktif Permanen</span>
                   </span>
-                  <span className="text-neutral-600">HKDF: {globalSpec.hkdfMediaType || 'sticker'}</span>
+                  <span className="px-2 py-0.5 bg-emerald-300 border border-black font-mono font-black text-[10px] text-black">
+                    PRO #134
+                  </span>
                 </div>
-              )}
-              {soundStickerBlueprint && !calibrationArmed ? (
-                <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2.5">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="px-2 py-0.5 bg-emerald-300 border border-black font-black text-[10px] uppercase text-black">
-                      Blueprint Stiker Audio Tertangkap!
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleArmCalibration}
-                      disabled={connectionStatus !== 'connected'}
-                      className="px-2.5 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border-2 border-black font-black text-[10px] cursor-pointer min-h-[32px]"
-                    >
-                      Deteksi Ulang
-                    </button>
-                  </div>
-
-                  {(() => {
-                    const msgType =
-                      soundStickerBlueprint.messageType ||
-                      soundStickerBlueprint.topLevelKeys?.find((k) => k !== 'messageContextInfo') ||
-                      'stickerMessage';
-                    const container =
-                      soundStickerBlueprint.mediaInspection?.detectedContainer ||
-                      soundStickerBlueprint.mediaInspection?.container ||
-                      'unknown';
-                    const mime =
-                      soundStickerBlueprint.innerMeta?.mimetype ||
-                      soundStickerBlueprint.stickerMeta?.mimetype ||
-                      'image/webp';
-                    const hkdf =
-                      soundStickerBlueprint.hkdfMediaType ||
-                      soundStickerBlueprint.decryptedByMediaType ||
-                      '-';
-                    const unknownList =
-                      soundStickerBlueprint.unknownWireFields ||
-                      soundStickerBlueprint.unknownWireTags ||
-                      [];
-                    const riffChunks = soundStickerBlueprint.mediaInspection?.chunks || [];
-
-                    return (
-                      <div className="p-2 bg-white border border-black text-[10px] font-mono text-neutral-800 space-y-1">
-                        <div>
-                          Tipe Pesan: <b>{msgType}</b>
-                        </div>
-                        <div>
-                          Container &amp; Mimetype: <b>{container}</b> &bull; <b>{mime}</b>
-                        </div>
-                        <div>
-                          HKDF Key: <b>{hkdf}</b>
-                        </div>
-                        <div className="truncate">
-                          Unknown Tags: <b>{unknownList.length}</b>
-                          {unknownList.length > 0 ? ` (${unknownList.map((t) => `#${t.field}`).join(', ')})` : ''}
-                          {' '}&bull; Chunks: <b>{riffChunks.length}</b>
-                          {riffChunks.length > 0 ? ` (${riffChunks.slice(0, 5).join(', ')})` : ''}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  <textarea
-                    readOnly
-                    rows={5}
-                    aria-label="Preview Blueprint JSON"
-                    value={JSON.stringify(soundStickerBlueprint, null, 2)}
-                    className="w-full p-2 bg-white border border-black font-mono text-[10px] leading-snug text-neutral-800 select-all resize-y"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await copyTextToClipboard(JSON.stringify(soundStickerBlueprint, null, 2));
-                      setCopiedSchema(true);
-                      onShowToast?.('Blueprint tersalin!', 'success');
-                      setTimeout(() => setCopiedSchema(false), 1800);
-                    }}
-                    className="w-full py-2.5 px-3 bg-white hover:bg-emerald-100 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px]"
-                  >
-                    {copiedSchema ? <Check className="w-4 h-4 text-emerald-700" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedSchema ? 'Blueprint tersalin!' : 'Salin Blueprint JSON'}</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-black text-[11px] uppercase text-black">
-                      Deteksi Format Stiker Suara WA (1x Saja)
-                    </span>
-                    <Wrench className="w-3.5 h-3.5 text-black shrink-0" />
-                  </div>
-                  <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
-                    {calibrationArmed
-                      ? `Aktif Mendengarkan di +${calibrationMeta?.linkedPhone || connectedPhone} — Teruskan 1 Stiker Audio Sekarang!`
-                      : "Cara Tercepat (Anti-Gagal): Cukup balas (Reply) 1 stiker audio di WA HP Anda dengan ketik .klon — server langsung membaca formatnya & membalas di WA!"}
-                  </p>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <button
-                      type="button"
-                      onClick={handleArmCalibration}
-                      disabled={connectionStatus !== 'connected'}
-                      className={`flex-1 py-2 px-3 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px] ${
-                        calibrationArmed ? 'bg-emerald-300 text-black' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
-                      }`}
-                    >
-                      {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" /> : <Wrench className="w-3.5 h-3.5 shrink-0" />}
-                      <span>
-                        {calibrationArmed
-                          ? 'Aktif Mendengarkan — Teruskan 1 Stiker Audio Sekarang!'
-                          : 'Mulai Deteksi Format'}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSyncCalibrationState}
-                      disabled={connectionStatus !== 'connected' || isSyncingCalibration}
-                      className="sm:w-auto py-2 px-3 bg-white hover:bg-neutral-100 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs text-black flex items-center justify-center gap-1.5 cursor-pointer min-h-[42px]"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isSyncingCalibration ? 'animate-spin' : ''}`} />
-                      <span>Tarik Log &amp; Cek Hasil</span>
-                    </button>
-                  </div>
-
-                  {calibrationArmed && (
-                    <p className="text-[11px] font-semibold text-emerald-900 bg-emerald-50 border border-black px-2 py-1.5 leading-snug">
-                      Kirim pesan apa saja atau teruskan 1 stiker audio (boleh di Pesan Diri Sendiri atau langsung dari chat bot <code className="font-mono">.stikeraudio</code>) &mdash; saat kembali dari WA, log otomatis ditarik di bawah.
-                    </p>
-                  )}
-
-                  {(calibrationArmed || calibrationLogs.length > 0 || connectionStatus === 'connected') && (
-                    <div className="p-2 bg-white border border-black space-y-1 text-[10px] font-mono">
-                      <div className="font-black uppercase text-neutral-600 flex items-center justify-between gap-2 flex-wrap">
-                        <span>Log Aktivitas Masuk (Real-Time):</span>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] font-bold text-neutral-500">{calibrationLogs.length}/25</span>
-                          {calibrationLogs.length > 0 && (
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const text = calibrationLogs
-                                  .map((it) =>
-                                    `[${it.upsertType}] ${it.detail || `fromMe=${String(Boolean(it.fromMe))} keys=${(it.keys || []).join(',')}`}`
-                                  )
-                                  .join('\n');
-                                await copyTextToClipboard(text);
-                                setCopiedLogs(true);
-                                onShowToast?.('Log aktivitas tersalin!', 'success');
-                                setTimeout(() => setCopiedLogs(false), 1800);
-                              }}
-                              className="px-2 py-0.5 bg-neutral-100 hover:bg-yellow-200 border border-black font-black text-[9px] text-black flex items-center gap-1 cursor-pointer min-h-[24px]"
-                            >
-                              {copiedLogs ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
-                              <span>{copiedLogs ? 'Tersalin' : 'Salin Log'}</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {calibrationLogs.length === 0 ? (
-                        <div className="text-neutral-500">
-                          Menunggu pesan masuk dari HP Anda (notify / append / LID / WS stanza)...
-                        </div>
-                      ) : (
-                        calibrationLogs.map((item, idx) => (
-                          <div key={`${item.at}-${idx}`} className="text-neutral-800 break-words leading-snug border-t border-neutral-100 pt-1 first:border-t-0 first:pt-0">
-                            <span className="font-bold">[{item.upsertType}]</span>{' '}
-                            {item.detail ? (
-                              <span>{item.detail}</span>
-                            ) : (
-                              <span>
-                                fromMe={String(Boolean(item.fromMe))}{' '}
-                                {item.remoteJid ? `${String(item.remoteJid).split('@')[0].slice(-8)} ` : ''}
-                                {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} ` : ''}
-                                keys={(item.keys || []).join(',') || 'raw-wire'}
-                              </span>
-                            )}
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+                <p className="text-[11px] font-semibold text-neutral-800 leading-snug">
+                  Protokol Native #134 &bull; WebP 512&times;512 + Ogg/Opus &bull; Siap kirim langsung tanpa kalibrasi.
+                </p>
+              </div>
             </div>
           </section>
         </div>

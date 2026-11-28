@@ -227,11 +227,481 @@ function encodeMonoWavBlob(audioBuffer) {
   return new Blob([wav], { type: 'audio/wav' });
 }
 
+const OGG_CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let r = i << 24;
+    for (let j = 0; j < 8; j++) {
+      r = (r & 0x80000000) !== 0 ? ((r << 1) ^ 0x04c11db7) >>> 0 : (r << 1) >>> 0;
+    }
+    table[i] = r >>> 0;
+  }
+  return table;
+})();
+
+function computeOggCrc32Bytes(bytes) {
+  let crc = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = ((crc << 8) ^ OGG_CRC_TABLE[((crc >>> 24) ^ bytes[i]) & 0xff]) >>> 0;
+  }
+  return crc >>> 0;
+}
+
+function getOpusPacketSampleCount(frame) {
+  if (!frame || frame.length === 0) return 960;
+  const toc = frame[0];
+  const config = toc >> 3;
+  const code = toc & 0x03;
+
+  let samplesPerFrame = 960;
+  if (config < 12) {
+    const silkMs = [10, 20, 40, 60];
+    samplesPerFrame = silkMs[config & 0x03] * 48;
+  } else if (config < 16) {
+    samplesPerFrame = (config & 0x01) !== 0 ? 960 : 480;
+  } else {
+    samplesPerFrame = 120 << (config & 0x03);
+  }
+
+  let frameCount = 1;
+  if (code === 1 || code === 2) {
+    frameCount = 2;
+  } else if (code === 3 && frame.length >= 2) {
+    frameCount = Math.max(1, frame[1] & 0x3f);
+  }
+  return samplesPerFrame * frameCount;
+}
+
+function readEbmlVintId(bytes, offset) {
+  if (offset >= bytes.length) return null;
+  const first = bytes[offset];
+  if (first === 0) return null;
+  let len = 1;
+  let mask = 0x80;
+  while (len <= 4 && (first & mask) === 0) {
+    len++;
+    mask >>= 1;
+  }
+  if (len > 4 || offset + len > bytes.length) return null;
+  let id = 0;
+  for (let i = 0; i < len; i++) {
+    id = id * 256 + bytes[offset + i];
+  }
+  return { id, length: len };
+}
+
+function readEbmlVintSize(bytes, offset) {
+  if (offset >= bytes.length) return null;
+  const first = bytes[offset];
+  if (first === 0) return null;
+  let len = 1;
+  let mask = 0x80;
+  while (len <= 8 && (first & mask) === 0) {
+    len++;
+    mask >>= 1;
+  }
+  if (len > 8 || offset + len > bytes.length) return null;
+  let value = first & (mask - 1);
+  let allOnes = value === mask - 1;
+  for (let i = 1; i < len; i++) {
+    const b = bytes[offset + i];
+    if (b !== 0xff) allOnes = false;
+    value = value * 256 + b;
+  }
+  return { value: allOnes ? Infinity : value, length: len };
+}
+
+function extractOpusFramesFromBlock(blockBytes) {
+  if (!blockBytes || blockBytes.length < 4) return [];
+  const trackVint = readEbmlVintSize(blockBytes, 0);
+  if (!trackVint) return [];
+  const trackNum = trackVint.value;
+  let pos = trackVint.length + 2;
+  if (pos >= blockBytes.length) return [];
+
+  const flags = blockBytes[pos++];
+  const lacing = (flags >> 1) & 0x03;
+
+  if (lacing === 0) {
+    const frame = blockBytes.subarray(pos);
+    return frame.length > 0 ? [{ trackNum, frame }] : [];
+  }
+
+  if (pos >= blockBytes.length) return [];
+  const frameCount = blockBytes[pos++] + 1;
+  const out = [];
+
+  if (lacing === 1) {
+    const sizes = [];
+    for (let i = 0; i < frameCount - 1; i++) {
+      let sz = 0;
+      while (pos < blockBytes.length) {
+        const b = blockBytes[pos++];
+        sz += b;
+        if (b < 255) break;
+      }
+      sizes.push(sz);
+    }
+    for (const sz of sizes) {
+      if (pos + sz <= blockBytes.length && sz > 0) {
+        out.push({ trackNum, frame: blockBytes.subarray(pos, pos + sz) });
+      }
+      pos += sz;
+    }
+    if (pos < blockBytes.length) out.push({ trackNum, frame: blockBytes.subarray(pos) });
+    return out;
+  }
+
+  if (lacing === 2) {
+    const rem = blockBytes.length - pos;
+    const fSize = Math.floor(rem / frameCount);
+    for (let i = 0; i < frameCount && fSize > 0; i++) {
+      out.push({ trackNum, frame: blockBytes.subarray(pos, pos + fSize) });
+      pos += fSize;
+    }
+    return out;
+  }
+
+  const sizes = [];
+  const firstSz = readEbmlVintSize(blockBytes, pos);
+  if (!firstSz) return [];
+  pos += firstSz.length;
+  let curSz = firstSz.value;
+  sizes.push(curSz);
+  for (let i = 1; i < frameCount - 1; i++) {
+    const deltaVint = readEbmlVintSize(blockBytes, pos);
+    if (!deltaVint) break;
+    pos += deltaVint.length;
+    const bias = Math.pow(2, 7 * deltaVint.length - 1) - 1;
+    curSz += deltaVint.value - bias;
+    sizes.push(Math.max(0, curSz));
+  }
+  for (const sz of sizes) {
+    if (pos + sz <= blockBytes.length && sz > 0) {
+      out.push({ trackNum, frame: blockBytes.subarray(pos, pos + sz) });
+    }
+    pos += sz;
+  }
+  if (pos < blockBytes.length) out.push({ trackNum, frame: blockBytes.subarray(pos) });
+  return out;
+}
+
+function buildOggPageBytes(packets, { headerType = 0, granulePos = 0, serial = 0x4b55524f, seq = 0 } = {}) {
+  const segTable = [];
+  for (const pkt of packets) {
+    let rem = pkt.length;
+    while (rem >= 255) {
+      segTable.push(255);
+      rem -= 255;
+    }
+    segTable.push(rem);
+  }
+  if (segTable.length > 255) {
+    throw new Error('Ogg page segment table melebihi 255 segmen.');
+  }
+
+  const headerLen = 27 + segTable.length;
+  const dataLen = packets.reduce((acc, p) => acc + p.length, 0);
+  const page = new Uint8Array(headerLen + dataLen);
+  const view = new DataView(page.buffer);
+
+  page[0] = 0x4f;
+  page[1] = 0x67;
+  page[2] = 0x67;
+  page[3] = 0x53;
+  page[4] = 0;
+  page[5] = headerType & 0xff;
+
+  const gBig = BigInt(Math.max(0, Math.round(granulePos)));
+  view.setUint32(6, Number(gBig & 0xffffffffn), true);
+  view.setUint32(10, Number((gBig >> 32n) & 0xffffffffn), true);
+
+  view.setUint32(14, serial >>> 0, true);
+  view.setUint32(18, seq >>> 0, true);
+  view.setUint32(22, 0, true);
+  page[26] = segTable.length;
+
+  for (let i = 0; i < segTable.length; i++) {
+    page[27 + i] = segTable[i];
+  }
+
+  let bodyOff = headerLen;
+  for (const pkt of packets) {
+    page.set(pkt, bodyOff);
+    bodyOff += pkt.length;
+  }
+
+  view.setUint32(22, computeOggCrc32Bytes(page), true);
+  return page;
+}
+
 /**
- * Encode potongan AudioBuffer ke M4A/AAC (WebCodecs + mp4-muxer), atau fallback WAV 22kHz
+ * Remux container WebM/Opus menjadi container Ogg/Opus RFC 7845 murni di browser (pure JS).
+ */
+export function remuxWebmOpusToOggOpus(webmInput) {
+  const bytes =
+    webmInput instanceof Uint8Array
+      ? webmInput
+      : webmInput instanceof ArrayBuffer
+        ? new Uint8Array(webmInput)
+        : new Uint8Array(webmInput.buffer, webmInput.byteOffset || 0, webmInput.byteLength);
+
+  if (bytes.length < 16 || bytes[0] !== 0x1a || bytes[1] !== 0x45 || bytes[2] !== 0xdf || bytes[3] !== 0xa3) {
+    throw new Error('Buffer bukan container WebM/EBML yang valid.');
+  }
+
+  const asciiDecoder = new TextDecoder('ascii');
+  const MASTER_IDS = new Set([0x1a45dfa3, 0x18538067, 0x1654ae6b, 0xae, 0xe1, 0x1f43b675, 0xa0]);
+  let channels = 1;
+  let preSkip = 312;
+  let inputSampleRate = 48000;
+  let opusTrackNum = null;
+  let currentTrack = { num: null, type: null, codec: '', channels: 1, sampleRate: 48000, codecPrivate: null };
+  const rawBlocks = [];
+
+  function walkEbml(start, end, depth = 0) {
+    if (depth > 8) return;
+    let pos = start;
+    while (pos < end) {
+      const idInfo = readEbmlVintId(bytes, pos);
+      if (!idInfo) break;
+      const szInfo = readEbmlVintSize(bytes, pos + idInfo.length);
+      if (!szInfo) break;
+
+      const bodyStart = pos + idInfo.length + szInfo.length;
+      const bodyEnd = szInfo.value === Infinity ? end : Math.min(end, bodyStart + szInfo.value);
+
+      if (idInfo.id === 0xae) {
+        currentTrack = { num: null, type: null, codec: '', channels: 1, sampleRate: 48000, codecPrivate: null };
+        walkEbml(bodyStart, bodyEnd, depth + 1);
+        if (currentTrack.codec === 'A_OPUS' || (currentTrack.type === 2 && opusTrackNum == null)) {
+          opusTrackNum = currentTrack.num;
+          const priv = currentTrack.codecPrivate;
+          if (priv && priv.length >= 19 && asciiDecoder.decode(priv.subarray(0, 8)) === 'OpusHead') {
+            const pv = new DataView(priv.buffer, priv.byteOffset, priv.byteLength);
+            channels = Math.max(1, Math.min(2, priv[9] || currentTrack.channels || 1));
+            preSkip = pv.getUint16(10, true) || 312;
+            inputSampleRate = pv.getUint32(12, true) || 48000;
+          } else {
+            channels = Math.max(1, Math.min(2, currentTrack.channels || 1));
+            inputSampleRate = Math.round(currentTrack.sampleRate) || 48000;
+          }
+        }
+      } else if (MASTER_IDS.has(idInfo.id)) {
+        walkEbml(bodyStart, bodyEnd, depth + 1);
+      } else {
+        const slice = bytes.subarray(bodyStart, bodyEnd);
+        if (idInfo.id === 0xd7) {
+          let v = 0;
+          for (let i = 0; i < slice.length; i++) v = v * 256 + slice[i];
+          currentTrack.num = v;
+        } else if (idInfo.id === 0x83) {
+          currentTrack.type = slice[0];
+        } else if (idInfo.id === 0x86) {
+          currentTrack.codec = asciiDecoder.decode(slice).replace(/\0+$/, '');
+        } else if (idInfo.id === 0x63a2) {
+          currentTrack.codecPrivate = slice;
+        } else if (idInfo.id === 0x9f && slice.length >= 1) {
+          currentTrack.channels = slice[0];
+        } else if (idInfo.id === 0xb5) {
+          const sv = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+          if (slice.length === 4) currentTrack.sampleRate = sv.getFloat32(0, false);
+          else if (slice.length === 8) currentTrack.sampleRate = sv.getFloat64(0, false);
+        } else if (idInfo.id === 0xa3 || idInfo.id === 0xa1) {
+          for (const item of extractOpusFramesFromBlock(slice)) {
+            rawBlocks.push(item);
+          }
+        }
+      }
+
+      if (bodyEnd <= pos) break;
+      pos = bodyEnd;
+    }
+  }
+
+  walkEbml(0, bytes.length, 0);
+
+  const opusFrames = rawBlocks
+    .filter((b) => opusTrackNum == null || b.trackNum === opusTrackNum)
+    .map((b) => b.frame)
+    .filter((f) => f && f.length > 0);
+
+  if (opusFrames.length === 0) {
+    throw new Error('Tidak ditemukan paket audio Opus di dalam container WebM.');
+  }
+
+  const encoder = new TextEncoder();
+  const opusHead = new Uint8Array(19);
+  opusHead.set(encoder.encode('OpusHead'), 0);
+  opusHead[8] = 1;
+  opusHead[9] = channels;
+  const headView = new DataView(opusHead.buffer);
+  headView.setUint16(10, preSkip, true);
+  headView.setUint32(12, inputSampleRate, true);
+  headView.setInt16(16, 0, true);
+  opusHead[18] = 0;
+
+  const vendorBytes = encoder.encode('KuroStudio');
+  const opusTags = new Uint8Array(16 + vendorBytes.length);
+  opusTags.set(encoder.encode('OpusTags'), 0);
+  const tagsView = new DataView(opusTags.buffer);
+  tagsView.setUint32(8, vendorBytes.length, true);
+  opusTags.set(vendorBytes, 12);
+  tagsView.setUint32(12 + vendorBytes.length, 0, true);
+
+  const serial = 0x4b55524f;
+  const pages = [
+    buildOggPageBytes([opusHead], { headerType: 0x02, granulePos: 0, serial, seq: 0 }),
+    buildOggPageBytes([opusTags], { headerType: 0x00, granulePos: 0, serial, seq: 1 })
+  ];
+
+  let seq = 2;
+  let granulePos = preSkip;
+  let batch = [];
+  let segUsed = 0;
+
+  for (let i = 0; i < opusFrames.length; i++) {
+    const frame = opusFrames[i];
+    const pktSegs = Math.floor(frame.length / 255) + 1;
+    if (batch.length > 0 && (batch.length >= 25 || segUsed + pktSegs > 240)) {
+      pages.push(buildOggPageBytes(batch, { headerType: 0x00, granulePos, serial, seq: seq++ }));
+      batch = [];
+      segUsed = 0;
+    }
+    granulePos += getOpusPacketSampleCount(frame);
+    batch.push(frame);
+    segUsed += pktSegs;
+  }
+
+  if (batch.length > 0) {
+    pages.push(buildOggPageBytes(batch, { headerType: 0x04, granulePos, serial, seq: seq++ }));
+  }
+
+  const totalLen = pages.reduce((acc, p) => acc + p.length, 0);
+  const out = new Uint8Array(totalLen);
+  let offset = 0;
+  for (const p of pages) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+async function recordAudioBufferWithMediaRecorder(trimmedBuffer, mimeType) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx || typeof MediaRecorder === 'undefined') {
+    throw new Error('MediaRecorder tidak tersedia.');
+  }
+
+  let audioCtx;
+  try {
+    audioCtx = new AudioCtx({ sampleRate: 48000 });
+  } catch {
+    audioCtx = new AudioCtx();
+  }
+
+  const dest = audioCtx.createMediaStreamDestination();
+  let safetyTimer = null;
+
+  try {
+    await audioCtx.resume?.().catch(() => {});
+    const recBuf = audioCtx.createBuffer(1, trimmedBuffer.length, trimmedBuffer.sampleRate);
+    recBuf.copyToChannel(trimmedBuffer.getChannelData(0), 0);
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = recBuf;
+    source.connect(dest);
+
+    const chunks = [];
+    const recorder = new MediaRecorder(dest.stream, {
+      mimeType,
+      audioBitsPerSecond: 48000
+    });
+
+    return await new Promise((resolve, reject) => {
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+      };
+      recorder.onerror = (ev) => {
+        reject(ev?.error || new Error('MediaRecorder gagal merekam audio Opus.'));
+      };
+      recorder.onstop = () => {
+        if (safetyTimer) clearTimeout(safetyTimer);
+        const blob = new Blob(chunks, { type: mimeType });
+        if (blob.size <= 64) {
+          reject(new Error('Hasil rekaman audio Opus kosong.'));
+          return;
+        }
+        resolve(blob);
+      };
+      source.onended = () => {
+        setTimeout(() => {
+          if (recorder.state === 'recording') {
+            recorder.stop();
+          }
+        }, 40);
+      };
+
+      recorder.start(100);
+      source.start(0);
+      safetyTimer = setTimeout(() => {
+        if (recorder.state === 'recording') recorder.stop();
+      }, Math.ceil((trimmedBuffer.duration + 0.8) * 1000));
+    });
+  } finally {
+    if (safetyTimer) clearTimeout(safetyTimer);
+    try {
+      dest.stream.getTracks().forEach((t) => t.stop());
+    } catch {}
+    await audioCtx.close?.().catch(() => {});
+  }
+}
+
+/**
+ * Encode potongan AudioBuffer langsung ke Ogg/Opus (`audio/ogg; codecs=opus`),
+ * atau fallback M4A/AAC (WebCodecs + mp4-muxer) / WAV 22kHz.
  */
 export async function encodeTrimmedAudio(trimmedBuffer) {
   if (!trimmedBuffer) throw new Error('Audio potongan kosong.');
+
+  if (
+    typeof window !== 'undefined' &&
+    typeof MediaRecorder !== 'undefined' &&
+    typeof MediaRecorder.isTypeSupported === 'function'
+  ) {
+    if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+      try {
+        const directBlob = await recordAudioBufferWithMediaRecorder(trimmedBuffer, 'audio/ogg;codecs=opus');
+        const head = new Uint8Array(await directBlob.slice(0, 4).arrayBuffer());
+        if (head[0] === 0x4f && head[1] === 0x67 && head[2] === 0x67 && head[3] === 0x53) {
+          return {
+            blob: new Blob([directBlob], { type: 'audio/ogg; codecs=opus' }),
+            mimeType: 'audio/ogg; codecs=opus',
+            ext: 'ogg',
+            pttCapable: true
+          };
+        }
+      } catch {}
+    }
+
+    const webmMime = ['audio/webm;codecs=opus', 'audio/webm'].find((m) =>
+      MediaRecorder.isTypeSupported(m)
+    );
+    if (webmMime) {
+      try {
+        const webmBlob = await recordAudioBufferWithMediaRecorder(trimmedBuffer, webmMime);
+        const webmBuf = await webmBlob.arrayBuffer();
+        const oggBytes = remuxWebmOpusToOggOpus(webmBuf);
+        return {
+          blob: new Blob([oggBytes], { type: 'audio/ogg; codecs=opus' }),
+          mimeType: 'audio/ogg; codecs=opus',
+          ext: 'ogg',
+          pttCapable: true
+        };
+      } catch {}
+    }
+  }
+
   const sampleRate = trimmedBuffer.sampleRate;
   const numberOfChannels = Math.min(2, Math.max(1, trimmedBuffer.numberOfChannels));
 
@@ -303,7 +773,7 @@ export async function encodeTrimmedAudio(trimmedBuffer) {
             blob,
             mimeType: 'audio/mp4',
             ext: 'm4a',
-            pttCapable: true
+            pttCapable: false
           };
         }
       } catch {

@@ -974,6 +974,181 @@ function extractOpaqueInnerMessageTree(rawWireTree = []) {
   });
 }
 
+/**
+ * Ekstensi WAProto 6.7.24 idempoten & 100% aditif untuk protokol native Audio Sticker:
+ * - proto.ContextInfo: mediaKeyContext (#74 -> #1 type, #2 mediaKey)
+ * - proto.Message.StickerMessage: mediaKeyDomain (#24), stickerEmoji (#25), audioStickerMessage (#26 AudioMessage)
+ * - proto.Message: audioStickerFutureProof (#134 -> #1 Message)
+ */
+function installAudioStickerProtoExtension(protoObj = baileysProto) {
+  if (!protoObj || protoObj.__kuroAudioStickerExtended) return protoObj;
+  const MessageCls = protoObj.Message;
+  const StickerCls = MessageCls?.StickerMessage;
+  const AudioCls = MessageCls?.AudioMessage;
+  const ContextCls = protoObj.ContextInfo;
+  if (!MessageCls || !StickerCls || !AudioCls || !ContextCls) return protoObj;
+
+  const normalizeMediaKeyContext = (mkc) => {
+    if (!mkc || typeof mkc !== 'object' || !mkc.mediaKey) return null;
+    const rawKey = mkc.mediaKey;
+    const keyBytes =
+      rawKey instanceof Uint8Array
+        ? rawKey
+        : typeof rawKey === 'string'
+          ? Uint8Array.from(Buffer.from(rawKey, 'base64'))
+          : Buffer.isBuffer(rawKey)
+            ? Uint8Array.from(rawKey)
+            : null;
+    if (!keyBytes || keyBytes.length === 0) return null;
+    return { type: Number(mkc.type ?? 1) || 1, mediaKey: keyBytes };
+  };
+
+  // 1. Extensi proto.ContextInfo (#74 mediaKeyContext)
+  const origCtxCreate = ContextCls.create;
+  const origCtxFromObject = ContextCls.fromObject;
+  const origCtxToObject = ContextCls.toObject;
+  const origCtxEncode = ContextCls.encode;
+
+  ContextCls.create = function extendedCtxCreate(properties) {
+    const inst = origCtxCreate.call(this, properties);
+    const norm = normalizeMediaKeyContext(properties?.mediaKeyContext);
+    if (norm) inst.mediaKeyContext = norm;
+    return inst;
+  };
+  ContextCls.fromObject = function extendedCtxFromObject(object) {
+    const inst = origCtxFromObject.call(this, object);
+    const norm = normalizeMediaKeyContext(object?.mediaKeyContext);
+    if (norm) inst.mediaKeyContext = norm;
+    return inst;
+  };
+  ContextCls.toObject = function extendedCtxToObject(message, options) {
+    const obj = origCtxToObject.call(this, message, options);
+    const norm = normalizeMediaKeyContext(message?.mediaKeyContext);
+    if (norm) obj.mediaKeyContext = { type: norm.type, mediaKey: norm.mediaKey };
+    return obj;
+  };
+  ContextCls.encode = function extendedCtxEncode(message, writer) {
+    const w = origCtxEncode.call(this, message, writer);
+    const norm = normalizeMediaKeyContext(message?.mediaKeyContext);
+    if (norm) {
+      // field #74 wireType 2 -> (74 << 3) | 2 = 594
+      const sub = w.uint32(594).fork();
+      sub.uint32(8).uint32(norm.type);
+      sub.uint32(18).bytes(norm.mediaKey);
+      sub.ldelim();
+    }
+    return w;
+  };
+
+  // 2. Extensi proto.Message.StickerMessage (#24 mediaKeyDomain, #25 stickerEmoji, #26 audioStickerMessage)
+  const origStickCreate = StickerCls.create;
+  const origStickFromObject = StickerCls.fromObject;
+  const origStickToObject = StickerCls.toObject;
+  const origStickEncode = StickerCls.encode;
+
+  const copyCustomStickerFields = (src, dst) => {
+    if (!src || !dst) return dst;
+    if (src.mediaKeyDomain !== undefined && src.mediaKeyDomain !== null) {
+      dst.mediaKeyDomain = Number(src.mediaKeyDomain);
+    }
+    if (typeof src.stickerEmoji === 'string' && src.stickerEmoji.length > 0) {
+      dst.stickerEmoji = src.stickerEmoji;
+    }
+    if (src.audioStickerMessage && typeof src.audioStickerMessage === 'object') {
+      dst.audioStickerMessage = AudioCls.fromObject(src.audioStickerMessage);
+    }
+    return dst;
+  };
+
+  StickerCls.create = function extendedStickerCreate(properties) {
+    const inst = origStickCreate.call(this, properties);
+    return copyCustomStickerFields(properties, inst);
+  };
+  StickerCls.fromObject = function extendedStickerFromObject(object) {
+    const inst = origStickFromObject.call(this, object);
+    return copyCustomStickerFields(object, inst);
+  };
+  StickerCls.toObject = function extendedStickerToObject(message, options) {
+    const obj = origStickToObject.call(this, message, options);
+    if (message?.mediaKeyDomain !== undefined && message?.mediaKeyDomain !== null) {
+      obj.mediaKeyDomain = Number(message.mediaKeyDomain);
+    }
+    if (typeof message?.stickerEmoji === 'string' && message.stickerEmoji.length > 0) {
+      obj.stickerEmoji = message.stickerEmoji;
+    }
+    if (message?.audioStickerMessage && typeof message.audioStickerMessage === 'object') {
+      obj.audioStickerMessage = AudioCls.toObject(message.audioStickerMessage, options);
+    }
+    return obj;
+  };
+  StickerCls.encode = function extendedStickerEncode(message, writer) {
+    const w = origStickEncode.call(this, message, writer);
+    if (message?.mediaKeyDomain !== undefined && message?.mediaKeyDomain !== null) {
+      // field #24 wireType 0 -> 192
+      w.uint32(192).int32(Number(message.mediaKeyDomain));
+    }
+    if (typeof message?.stickerEmoji === 'string' && message.stickerEmoji.length > 0) {
+      // field #25 wireType 2 -> 202
+      w.uint32(202).string(message.stickerEmoji);
+    }
+    if (message?.audioStickerMessage && typeof message.audioStickerMessage === 'object') {
+      // field #26 wireType 2 -> 210
+      const audioMsg = AudioCls.fromObject(message.audioStickerMessage);
+      AudioCls.encode(audioMsg, w.uint32(210).fork()).ldelim();
+    }
+    return w;
+  };
+
+  // 3. Extensi proto.Message (#134 audioStickerFutureProof -> #1 Message)
+  const origMsgCreate = MessageCls.create;
+  const origMsgFromObject = MessageCls.fromObject;
+  const origMsgToObject = MessageCls.toObject;
+  const origMsgEncode = MessageCls.encode;
+
+  const normalizeFutureProof = (fp) => {
+    if (!fp || typeof fp !== 'object' || !fp.message || typeof fp.message !== 'object') return null;
+    return { message: MessageCls.fromObject(fp.message) };
+  };
+
+  MessageCls.create = function extendedMsgCreate(properties) {
+    const inst = origMsgCreate.call(this, properties);
+    const norm = normalizeFutureProof(properties?.audioStickerFutureProof);
+    if (norm) inst.audioStickerFutureProof = norm;
+    return inst;
+  };
+  MessageCls.fromObject = function extendedMsgFromObject(object) {
+    const inst = origMsgFromObject.call(this, object);
+    const norm = normalizeFutureProof(object?.audioStickerFutureProof);
+    if (norm) inst.audioStickerFutureProof = norm;
+    return inst;
+  };
+  MessageCls.toObject = function extendedMsgToObject(message, options) {
+    const obj = origMsgToObject.call(this, message, options);
+    if (message?.audioStickerFutureProof?.message) {
+      obj.audioStickerFutureProof = {
+        message: MessageCls.toObject(message.audioStickerFutureProof.message, options)
+      };
+    }
+    return obj;
+  };
+  MessageCls.encode = function extendedMsgEncode(message, writer) {
+    const w = origMsgEncode.call(this, message, writer);
+    if (message?.audioStickerFutureProof?.message) {
+      // field #134 wireType 2 -> (134 << 3) | 2 = 1074
+      const wrap = w.uint32(1074).fork();
+      const inner = MessageCls.fromObject(message.audioStickerFutureProof.message);
+      MessageCls.encode(inner, wrap.uint32(10).fork()).ldelim();
+      wrap.ldelim();
+    }
+    return w;
+  };
+
+  protoObj.__kuroAudioStickerExtended = true;
+  return protoObj;
+}
+
+installAudioStickerProtoExtension(baileysProto);
+
 module.exports = {
   KNOWN_WA_PROTO_FIELDS,
   KNOWN_MESSAGE_TAG_NAMES,
@@ -981,6 +1156,7 @@ module.exports = {
   verifyWireBytesStrict,
   diffUnknownWireFields,
   extractOpaqueInnerMessageTree,
+  installAudioStickerProtoExtension,
   armSafeProtoDecodeObserver,
   disarmSafeProtoDecodeObserver,
   getRecentRawWireFrames,
