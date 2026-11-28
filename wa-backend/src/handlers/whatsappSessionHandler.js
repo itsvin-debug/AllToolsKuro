@@ -9,7 +9,8 @@ const {
   DisconnectReason,
   makeCacheableSignalKeyStore,
   Browsers,
-  proto
+  proto,
+  jidNormalizedUser
 } = baileysModule;
 
 const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/constants');
@@ -338,6 +339,30 @@ async function startBaileys(
         } catch (_) {}
         return plain;
       };
+    }
+
+    // Tap pasif read-only Lapisan A pada raw stanza CB:message saat kalibrasi format menyala
+    if (typeof sock?.ws?.on === 'function') {
+      sock.ws.on('CB:message', (node) => {
+        try {
+          if (!session.calibratingSoundSticker) return;
+          const attrs = node?.attrs || {};
+          const childTags = Array.isArray(node?.content)
+            ? node.content.map((c) => c?.tag).filter(Boolean)
+            : [];
+          const fromStr = String(attrs.from || '');
+          const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
+          const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
+          emitToDevice(io, sessionId, 'sound-sticker-calibration-log', {
+            at: Date.now(),
+            upsertType: 'ws:CB:message',
+            remoteJid: fromStr,
+            fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
+            wrapperChain: childTags.slice(0, 6),
+            keys: [attrs.type || 'msg', attrs.id || 'no-id', ...childTags].slice(0, 6)
+          });
+        } catch (_) {}
+      });
     }
 
     session.sock = sock;

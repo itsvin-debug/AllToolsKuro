@@ -387,31 +387,45 @@ export async function buildWaWebpStickerBlob({
   const needsAnim = Boolean(isAnimated && (isVideoEl || renderOptions.motionEffect !== 'static'));
 
   if (!needsAnim) {
-    renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, 0);
-    const rawBytes = await canvasToWebpBytes(canvas, 0.88);
-    const finalBytes = injectExifIntoStaticWebp(rawBytes, packMeta);
+    const staticQualities = [0.88, 0.76, 0.62, 0.48];
+    let bestStaticBytes = null;
+    for (let i = 0; i < staticQualities.length; i++) {
+      renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, 0);
+      const rawBytes = await canvasToWebpBytes(canvas, staticQualities[i]);
+      const finalBytes = injectExifIntoStaticWebp(rawBytes, packMeta);
+      bestStaticBytes = finalBytes;
+      if (finalBytes.byteLength <= 100 * 1024) break;
+    }
+    verifyWebpRiffIntegrity(bestStaticBytes);
     onProgress?.(100);
-    return new Blob([finalBytes], { type: 'image/webp' });
+    return new Blob([bestStaticBytes], { type: 'image/webp' });
   }
 
-  const fps = 12;
   const clampedDur = Math.max(1, Math.min(5.5, Number(durationSec) || 3));
-  const totalFrames = Math.max(6, Math.round(clampedDur * fps));
-  const frameDurationMs = Math.round(1000 / fps);
   const videoTotalDur = isVideoEl && Number.isFinite(sourceMedia.duration) && sourceMedia.duration > 0
     ? sourceMedia.duration
     : clampedDur;
 
-  const qualities = [0.78, 0.62, 0.45, 0.34];
+  const MAX_ANIM_TARGET_BYTES = 480 * 1024;
+  const encodePasses = [
+    { fps: 12, quality: 0.72, maxDur: 4.5 },
+    { fps: 12, quality: 0.56, maxDur: 4.5 },
+    { fps: 8, quality: 0.55, maxDur: 4.5 },
+    { fps: 8, quality: 0.42, maxDur: 4.0 },
+    { fps: 6, quality: 0.36, maxDur: 3.5 },
+    { fps: 5, quality: 0.28, maxDur: 2.8 }
+  ];
   let bestBlob = null;
 
-  for (let qIdx = 0; qIdx < qualities.length; qIdx++) {
-    const q = qualities[qIdx];
-    const stepStride = qIdx === qualities.length - 1 && totalFrames > 28 ? 2 : 1;
+  for (let pIdx = 0; pIdx < encodePasses.length; pIdx++) {
+    const pass = encodePasses[pIdx];
+    const passDur = Math.min(clampedDur, pass.maxDur);
+    const totalFrames = Math.max(4, Math.round(passDur * pass.fps));
+    const frameDurationMs = Math.round(1000 / pass.fps);
     const frames = [];
 
-    for (let i = 0; i < totalFrames; i += stepStride) {
-      const tSec = i / fps;
+    for (let i = 0; i < totalFrames; i++) {
+      const tSec = i / pass.fps;
       if (isVideoEl) {
         const seekTime = videoTotalDur > 0.1 ? (tSec % videoTotalDur) : 0;
         await new Promise((resolve) => {
@@ -430,18 +444,23 @@ export async function buildWaWebpStickerBlob({
       }
 
       renderStickerCanvasFrame(ctx, sourceMedia, renderOptions, tSec);
-      const webpBytes = await canvasToWebpBytes(canvas, q);
-      frames.push({ webpBytes, durationMs: frameDurationMs * stepStride });
+      const webpBytes = await canvasToWebpBytes(canvas, pass.quality);
+      frames.push({ webpBytes, durationMs: frameDurationMs });
       onProgress?.(Math.min(95, Math.round(((i + 1) / totalFrames) * 85)));
     }
 
     const muxed = muxAnimatedWebp(frames, packMeta);
+    verifyWebpRiffIntegrity(muxed);
     bestBlob = new Blob([muxed], { type: 'image/webp' });
-    if (bestBlob.size <= 500 * 1024) break;
+    if (bestBlob.size <= MAX_ANIM_TARGET_BYTES) break;
   }
 
   if (!bestBlob || bestBlob.size <= 200) {
     throw new Error('Hasil stiker WebP kosong atau gagal dikodekan.');
+  }
+  if (bestBlob.size > 500 * 1024) {
+    const kb = (bestBlob.size / 1024).toFixed(0);
+    throw new Error(`Ukuran stiker animasi (${kb} KB) masih melebihi batas 500 KB WhatsApp. Potong durasi menjadi 2-3 detik.`);
   }
 
   onProgress?.(100);

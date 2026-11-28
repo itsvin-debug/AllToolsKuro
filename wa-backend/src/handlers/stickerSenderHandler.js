@@ -1,8 +1,22 @@
+const fs = require('fs');
+const path = require('path');
 const baileysModule = require('@whiskeysockets/baileys');
 const { sessions } = require('../state/sessionStore');
 const { verifyDeviceOwner, emitToDevice, joinExclusiveDeviceRoom } = require('../services/deviceAuthService');
+const { getSessionDir } = require('../utils/authFiles');
 const { rememberSentMessage, getSentMessage, triggerAuthSnapshotSync } = require('./whatsappSessionHandler');
 const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
+
+function readInstalledBaileysVersion() {
+  try {
+    const pkgPath = path.join(__dirname, '../../node_modules/@whiskeysockets/baileys/package.json');
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (parsed?.version) return String(parsed.version);
+  } catch (_) {}
+  return 'unknown';
+}
+
+const BAILEYS_VERSION = readInstalledBaileysVersion();
 
 const {
   proto,
@@ -22,11 +36,13 @@ const jidNormalizedUser =
   });
 
 const MAX_STICKER_BYTES = 1024 * 1024;
+const MAX_ANIMATED_STICKER_BYTES = 500 * 1024;
 const MAX_MUXED_BYTES = 3.5 * 1024 * 1024;
 const MIN_MEDIA_BYTES = 100;
 const RATE_LIMIT_MS = 1300;
 const CALIBRATION_WINDOW_MS = 5 * 60 * 1000;
 const DELIVERY_WATCH_MS = 20 * 1000;
+const SELF_E2EE_TEST_WATCH_MS = 4500;
 
 const STANDARD_WEBP_CHUNKS = new Set([
   'VP8X',
@@ -84,6 +100,10 @@ function validateStickerWebpBuffer(buf) {
   }
   if (!hasImageFrame) {
     throw new Error('Stiker WebP tidak memiliki frame gambar yang valid.');
+  }
+  if (hasAnimChunk && buf.length > MAX_ANIMATED_STICKER_BYTES) {
+    const kb = (buf.length / 1024).toFixed(1);
+    throw new Error(`Stiker WebP animasi (${kb} KB) melebihi batas WhatsApp 500 KB. Kurangi durasi atau FPS.`);
   }
   return { isAnimatedBitstream: hasAnimChunk };
 }
@@ -779,9 +799,11 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
       if (inner?.stickerMessage) {
         if (patchMime) inner.stickerMessage.mimetype = patchMime;
-        inner.stickerMessage.isAnimated = patchAnimated;
-        inner.stickerMessage.width = safeWidth;
-        inner.stickerMessage.height = safeHeight;
+        if (useMuxedBlueprint || customized) {
+          inner.stickerMessage.isAnimated = patchAnimated;
+          inner.stickerMessage.width = safeWidth;
+          inner.stickerMessage.height = safeHeight;
+        }
         const verifyErr = proto?.Message?.verify?.(inner);
         if (verifyErr) {
           throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
@@ -848,6 +870,105 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
   }
 }
 
+function isOwnSignalSessionFile(fname, ownPhone, ownLidUser) {
+  if (!fname || typeof fname !== 'string') return false;
+  if (fname === 'creds.json' || fname === '.owner.hash') return false;
+  if (!fname.startsWith('session-') || !fname.endsWith('.json')) return false;
+  const body = fname.slice('session-'.length, -'.json'.length);
+  const matchesPrefix = (prefix) => {
+    if (!prefix) return false;
+    if (body === prefix) return true;
+    const boundary = body[prefix.length];
+    return body.startsWith(prefix) && (boundary === '.' || boundary === '-' || boundary === '_' || boundary === '@');
+  };
+  return matchesPrefix(ownPhone) || matchesPrefix(ownLidUser);
+}
+
+async function performResetSelfE2eeKeys(io, sessionId, session) {
+  const selfJid = jidNormalizedUser(session.sock.user.id);
+  const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
+  const ownPhone = selfJid ? selfJid.split('@')[0].split(':')[0] : '';
+  const ownLidUser = selfLid ? selfLid.split('@')[0].split(':')[0] : '';
+
+  const baseTargets = [selfJid, ...(selfLid ? [selfLid] : [])].filter(Boolean);
+  const targetSet = new Set(baseTargets);
+  try {
+    if (typeof session.sock?.getUSyncDevices === 'function') {
+      const discovered = await session.sock.getUSyncDevices(baseTargets, false, false);
+      if (Array.isArray(discovered)) {
+        for (const item of discovered) {
+          if (typeof item === 'string' && item.includes('@')) {
+            targetSet.add(item);
+          } else if (item && typeof item === 'object' && item.user) {
+            const isOwnerLid = ownLidUser && String(item.user) === ownLidUser;
+            const server = item.server || (isOwnerLid ? 'lid' : 's.whatsapp.net');
+            const encoded = typeof baileysModule.jidEncode === 'function'
+              ? baileysModule.jidEncode(item.user, server, item.device)
+              : item.device != null && item.device > 0
+                ? `${item.user}:${item.device}@${server}`
+                : `${item.user}@${server}`;
+            if (encoded) targetSet.add(encoded);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  const uniqueTargets = Array.from(targetSet);
+
+  const sessionDir = getSessionDir(sessionId);
+  const clearedFiles = [];
+  const nullSessionMap = {};
+
+  if (sessionDir && fs.existsSync(sessionDir)) {
+    const entries = fs.readdirSync(sessionDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !isOwnSignalSessionFile(entry.name, ownPhone, ownLidUser)) continue;
+      const bodyId = entry.name.slice('session-'.length, -'.json'.length);
+      if (bodyId) nullSessionMap[bodyId] = null;
+      try {
+        fs.unlinkSync(path.join(sessionDir, entry.name));
+        clearedFiles.push(entry.name);
+      } catch (_) {}
+    }
+  }
+
+  for (const targetJid of uniqueTargets) {
+    try {
+      const sigAddr = session.sock?.signalRepository?.jidToSignalProtocolAddress?.(targetJid);
+      if (sigAddr) nullSessionMap[sigAddr] = null;
+    } catch (_) {}
+  }
+
+  // Kosongkan cache RAM makeCacheableSignalKeyStore (TTL 5 menit) agar pre-key baru benar-benar dipakai
+  for (let dev = 0; dev <= 5; dev++) {
+    if (ownPhone) nullSessionMap[`${ownPhone}.${dev}`] = null;
+    if (ownLidUser) {
+      nullSessionMap[`${ownLidUser}.${dev}`] = null;
+      nullSessionMap[`${ownLidUser}_1.${dev}`] = null;
+    }
+  }
+
+  if (Object.keys(nullSessionMap).length > 0 && typeof session.sock?.authState?.keys?.set === 'function') {
+    try {
+      await session.sock.authState.keys.set({ session: nullSessionMap });
+    } catch (_) {}
+  }
+
+  await session.sock.assertSessions(uniqueTargets, true);
+  triggerAuthSnapshotSync(io, sessionId, session);
+
+  return {
+    ok: true,
+    clearedCount: clearedFiles.length,
+    clearedFiles,
+    refreshedTargets: uniqueTargets.length,
+    selfJid,
+    selfLid,
+    baileysVersion: BAILEYS_VERSION,
+    resetAt: Date.now()
+  };
+}
+
 function registerStickerSenderHandler(io, socket) {
   socket.on('start-sound-sticker-calibration', (payload) => {
     try {
@@ -891,20 +1012,8 @@ function registerStickerSenderHandler(io, socket) {
         });
       }
 
-      const selfJid = jidNormalizedUser(session.sock.user.id);
-      const targets = [selfJid];
-      if (session.sock?.user?.lid) {
-        const lidNorm = jidNormalizedUser(session.sock.user.lid);
-        if (lidNorm) targets.push(lidNorm);
-      }
-      await session.sock.assertSessions(targets, true);
-      triggerAuthSnapshotSync(io, sessionId, session);
-
-      emitToDevice(io, sessionId, 'wa-e2ee-refreshed', {
-        ok: true,
-        selfJid,
-        refreshedAt: Date.now()
-      });
+      const resetRes = await performResetSelfE2eeKeys(io, sessionId, session);
+      emitToDevice(io, sessionId, 'wa-e2ee-refreshed', resetRes);
     } catch (err) {
       console.error('Error refresh-wa-e2ee-sessions:', err.message);
       const sessionId = payload?.sessionId;
@@ -912,6 +1021,166 @@ function registerStickerSenderHandler(io, socket) {
         emitToDevice(io, sessionId, 'wa-e2ee-refreshed', {
           ok: false,
           error: err.message || 'Gagal menyegarkan sesi enkripsi.'
+        });
+      }
+    }
+  });
+
+  socket.on('reset-self-e2ee-keys', async (payload) => {
+    const { sessionId, deviceToken } = payload || {};
+    try {
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
+
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'connected' || !session.sock?.user?.id) {
+        return emitToDevice(io, sessionId, 'self-e2ee-reset-result', {
+          ok: false,
+          baileysVersion: BAILEYS_VERSION,
+          error: 'Perangkat WhatsApp belum terhubung.'
+        });
+      }
+
+      const resetRes = await performResetSelfE2eeKeys(io, sessionId, session);
+      emitToDevice(io, sessionId, 'self-e2ee-reset-result', resetRes);
+      emitToDevice(io, sessionId, 'wa-e2ee-refreshed', resetRes);
+    } catch (err) {
+      console.error('Error reset-self-e2ee-keys:', err.message);
+      if (sessionId) {
+        emitToDevice(io, sessionId, 'self-e2ee-reset-result', {
+          ok: false,
+          baileysVersion: BAILEYS_VERSION,
+          error: err.message || 'Gagal mereset kunci Signal E2EE.'
+        });
+      }
+    }
+  });
+
+  socket.on('test-self-e2ee', async (payload) => {
+    const { sessionId, deviceToken } = payload || {};
+    try {
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
+
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'connected' || !session.sock?.user?.id || !session.sock.authState?.creds?.registered) {
+        return emitToDevice(io, sessionId, 'self-e2ee-test-result', {
+          ok: false,
+          baileysVersion: BAILEYS_VERSION,
+          error: 'Perangkat WhatsApp belum tertaut aktif.'
+        });
+      }
+
+      const selfJid = jidNormalizedUser(session.sock.user.id);
+      const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
+      try {
+        await session.sock.assertSessions([selfJid, ...(selfLid ? [selfLid] : [])], false);
+      } catch (_) {}
+
+      const customMsgId =
+        typeof generateMessageIDV2 === 'function'
+          ? generateMessageIDV2(session.sock.user.id)
+          : typeof generateMessageID === 'function'
+            ? generateMessageID()
+            : undefined;
+
+      let encodedBytes = 0;
+      const prevPatch = session._patchOutgoingWire;
+      session._patchOutgoingWire = (outgoingMsg) => {
+        const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
+        if (inner && typeof inner === 'object') {
+          try {
+            if (proto?.Message?.encode) {
+              encodedBytes = proto.Message.encode(inner).finish().length;
+            }
+          } catch (_) {}
+          if (customMsgId) rememberSentMessage(session, customMsgId, inner);
+        }
+        return outgoingMsg;
+      };
+
+      let ackStatus = 1;
+      let ackLabel = 'Terkirim via server E2EE (menunggu ACK perangkat)';
+      let ackError = false;
+      let onAckUpdate = null;
+
+      const ackPromise = new Promise((resolve) => {
+        const timer = setTimeout(() => resolve({ status: ackStatus, label: ackLabel, isError: ackError }), SELF_E2EE_TEST_WATCH_MS);
+        onAckUpdate = (updates) => {
+          if (!Array.isArray(updates) || !customMsgId) return;
+          for (const upd of updates) {
+            if (upd?.key?.id !== customMsgId) continue;
+            const st = Number(upd?.update?.status);
+            if (!Number.isFinite(st)) continue;
+            ackStatus = st;
+            if (st === 0 || st < 0) {
+              ackError = true;
+              ackLabel = 'Gagal dekripsi E2EE di perangkat (ERROR ACK 0)';
+              clearTimeout(timer);
+              resolve({ status: ackStatus, label: ackLabel, isError: true });
+              return;
+            }
+            if (st >= 3) {
+              ackLabel = 'Diterima HP Anda ✓✓ (0 error E2EE)';
+              clearTimeout(timer);
+              resolve({ status: ackStatus, label: ackLabel, isError: false });
+              return;
+            }
+            if (st === 2) {
+              ackLabel = 'Diterima Server WA ✓ (0 error E2EE)';
+            }
+          }
+        };
+        session.sock.ev.on('messages.update', onAckUpdate);
+      });
+
+      let sentMsg = null;
+      try {
+        sentMsg = await session.sock.sendMessage(
+          selfJid,
+          { text: '✅ Tes E2EE Kuro Studio berhasil masuk (0 error).' },
+          { ...(customMsgId ? { messageId: customMsgId } : {}) }
+        );
+      } finally {
+        session._patchOutgoingWire = prevPatch;
+      }
+
+      const finalMsgId = sentMsg?.key?.id || customMsgId || '';
+      if (sentMsg?.key?.id && sentMsg?.message) {
+        rememberSentMessage(session, sentMsg.key.id, sentMsg.message);
+      }
+
+      const settledAck = await ackPromise.finally(() => {
+        if (onAckUpdate) {
+          try {
+            session.sock?.ev?.off?.('messages.update', onAckUpdate);
+          } catch (_) {}
+        }
+      });
+
+      triggerAuthSnapshotSync(io, sessionId, session);
+
+      emitToDevice(io, sessionId, 'self-e2ee-test-result', {
+        ok: !settledAck.isError,
+        messageId: finalMsgId,
+        selfJid,
+        selfLid,
+        baileysVersion: BAILEYS_VERSION,
+        encodedBytes,
+        ackStatus: settledAck.status,
+        ackLabel: settledAck.label,
+        error: settledAck.isError ? settledAck.label : null,
+        sentAt: Date.now()
+      });
+    } catch (err) {
+      console.error('Error test-self-e2ee:', err.message);
+      if (sessionId) {
+        emitToDevice(io, sessionId, 'self-e2ee-test-result', {
+          ok: false,
+          baileysVersion: BAILEYS_VERSION,
+          error: err.message || 'Gagal menjalankan Tes E2EE ke nomor sendiri.'
         });
       }
     }

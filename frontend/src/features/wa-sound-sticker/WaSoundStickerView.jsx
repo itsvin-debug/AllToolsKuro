@@ -26,7 +26,8 @@ import {
   Plus,
   Layers,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  Activity
 } from 'lucide-react';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { isValidPairingPhone, formatPairingCodeDisplay } from '../../shared/utils/waPhoneUtils';
@@ -132,6 +133,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [{ sessionId, deviceToken }] = useState(() => getOrCreateDeviceCredentials());
   const backendUrl = useMemo(() => getWaBackendUrl(), []);
   const socketRef = useRef(null);
+  const e2eeResetTimerRef = useRef(null);
+  const e2eeTestTimerRef = useRef(null);
 
   const [socketConnected, setSocketConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('connecting');
@@ -146,6 +149,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [hasSavedAuth, setHasSavedAuth] = useState(() => hasSavedDeviceLink(sessionId));
 
   const [isRefreshingE2ee, setIsRefreshingE2ee] = useState(false);
+  const [isTestingE2ee, setIsTestingE2ee] = useState(false);
+  const [e2eeDiagStatus, setE2eeDiagStatus] = useState(null);
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
@@ -310,11 +315,36 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     sock.on('sound-sticker-calibration-log', (entry) => {
       if (unmounted || !entry) return;
-      setCalibrationLogs((prev) => [...prev.slice(-4), entry]);
+      setCalibrationLogs((prev) => [...prev.slice(-7), entry]);
+    });
+
+    sock.on('self-e2ee-reset-result', (res) => {
+      if (unmounted || !res) return;
+      if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
+      setIsRefreshingE2ee(false);
+      setE2eeDiagStatus({ kind: 'reset', ...res });
+      if (res.ok) {
+        onShowToast?.(`Kunci E2EE disegarkan (${res.clearedCount || 0} sesi dihapus).`, 'success');
+      } else {
+        onShowToast?.(res.error || 'Gagal mereset kunci E2EE.', 'error');
+      }
+    });
+
+    sock.on('self-e2ee-test-result', (res) => {
+      if (unmounted || !res) return;
+      if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
+      setIsTestingE2ee(false);
+      setE2eeDiagStatus({ kind: 'test', ...res });
+      if (res.ok) {
+        onShowToast?.(res.ackLabel || 'Tes E2EE berhasil terkirim (0 error).', 'success');
+      } else {
+        onShowToast?.(res.error || 'Tes E2EE gagal mencapai perangkat.', 'error');
+      }
     });
 
     sock.on('wa-e2ee-refreshed', (res) => {
       if (unmounted) return;
+      if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
       setIsRefreshingE2ee(false);
       if (res?.ok) {
         onShowToast?.('Kunci enkripsi E2EE WhatsApp berhasil disegarkan.', 'success');
@@ -394,6 +424,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     return () => {
       unmounted = true;
+      if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
+      if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
       sock.disconnect();
       socketRef.current = null;
     };
@@ -1017,8 +1049,20 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
   const handleRefreshE2ee = () => {
     if (connectionStatus !== 'connected' || !socketRef.current || isRefreshingE2ee) return;
+    if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
     setIsRefreshingE2ee(true);
-    socketRef.current.emit('refresh-wa-e2ee-sessions', { sessionId, deviceToken });
+    setE2eeDiagStatus(null);
+    socketRef.current.emit('reset-self-e2ee-keys', { sessionId, deviceToken });
+    e2eeResetTimerRef.current = setTimeout(() => setIsRefreshingE2ee(false), 12000);
+  };
+
+  const handleTestSelfE2ee = () => {
+    if (connectionStatus !== 'connected' || !socketRef.current || isTestingE2ee) return;
+    if (e2eeTestTimerRef.current) clearTimeout(e2eeTestTimerRef.current);
+    setIsTestingE2ee(true);
+    setE2eeDiagStatus(null);
+    socketRef.current.emit('test-self-e2ee', { sessionId, deviceToken });
+    e2eeTestTimerRef.current = setTimeout(() => setIsTestingE2ee(false), 10000);
   };
 
   return (
@@ -1701,7 +1745,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             </div>
 
             {connectionStatus === 'connected' ? (
-              <div className="p-3 bg-emerald-100 border-2 border-black space-y-1.5">
+              <div className="p-3 bg-emerald-100 border-2 border-black space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 min-w-0">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
@@ -1709,21 +1753,35 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       WA Terhubung &bull; +{connectedPhone}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleTestSelfE2ee}
+                      disabled={isTestingE2ee || isRefreshingE2ee}
+                      className="px-2.5 py-1 bg-cyan-200 hover:bg-cyan-300 disabled:opacity-50 border-2 border-black shadow-[1px_1px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] font-black text-[10px] flex items-center gap-1 cursor-pointer min-h-[34px]"
+                      title="Kirim 1 pesan teks tes ke nomor sendiri untuk cek ACK enkripsi E2EE real-time"
+                    >
+                      {isTestingE2ee ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Activity className="w-3 h-3" />
+                      )}
+                      <span>{isTestingE2ee ? 'Menguji...' : 'Tes E2EE'}</span>
+                    </button>
                     <button
                       type="button"
                       onClick={handleRefreshE2ee}
-                      disabled={isRefreshingE2ee}
-                      className="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer min-h-[32px]"
-                      title="Segarkan sesi kunci enkripsi E2EE WhatsApp tanpa scan ulang"
+                      disabled={isRefreshingE2ee || isTestingE2ee}
+                      className="px-2.5 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-50 border-2 border-black shadow-[1px_1px_0px_#000] active:translate-x-[1px] active:translate-y-[1px] font-black text-[10px] flex items-center gap-1 cursor-pointer min-h-[34px]"
+                      title="Hapus sesi kunci Signal self-chat yang macet dan tarik pre-key baru tanpa scan ulang"
                     >
                       <RefreshCw className={`w-3 h-3 ${isRefreshingE2ee ? 'animate-spin' : ''}`} />
-                      <span>Reset E2EE</span>
+                      <span>Reset Kunci E2EE</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleLogoutWa}
-                      className="px-2 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer min-h-[32px]"
+                      className="px-2.5 py-1 bg-white hover:bg-rose-50 border-2 border-black font-black text-[10px] flex items-center gap-1 cursor-pointer min-h-[34px]"
                     >
                       <LogOut className="w-3 h-3" />
                       <span>Putus</span>
@@ -1733,6 +1791,34 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <p className="text-[11px] font-semibold text-neutral-700">
                   Target terkunci ke nomor Anda sendiri via jalur resmi <code className="font-mono">sock.sendMessage</code>.
                 </p>
+                {e2eeDiagStatus && (
+                  <div
+                    className={`p-2 border-2 border-black text-[10px] font-mono space-y-0.5 ${
+                      e2eeDiagStatus.ok ? 'bg-white text-black' : 'bg-rose-100 text-rose-950'
+                    }`}
+                  >
+                    <div className="font-black flex items-center justify-between gap-2 flex-wrap">
+                      <span>
+                        {e2eeDiagStatus.kind === 'test'
+                          ? e2eeDiagStatus.ackLabel || e2eeDiagStatus.error
+                          : e2eeDiagStatus.ok
+                            ? `Reset Kunci E2EE Selesai (${e2eeDiagStatus.clearedCount || 0} file sesi lama dibersihkan)`
+                            : e2eeDiagStatus.error}
+                      </span>
+                      {e2eeDiagStatus.baileysVersion && (
+                        <span className="px-1.5 py-0.5 bg-neutral-100 border border-black text-[9px]">
+                          Baileys v{e2eeDiagStatus.baileysVersion}
+                        </span>
+                      )}
+                    </div>
+                    {e2eeDiagStatus.messageId && (
+                      <div className="text-neutral-600">
+                        ID: #{String(e2eeDiagStatus.messageId).slice(-10)}
+                        {e2eeDiagStatus.encodedBytes ? ` • ${e2eeDiagStatus.encodedBytes} B proto` : ''}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="p-3 bg-neutral-50 border-2 border-black space-y-3">
@@ -1950,7 +2036,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       ) : (
                         calibrationLogs.map((item, idx) => (
                           <div key={`${item.at}-${idx}`} className="text-neutral-800 truncate">
-                            [{item.upsertType}] {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} -> ` : ''}
+                            [{item.upsertType}] {item.remoteJid ? `${String(item.remoteJid).split('@')[0].slice(-8)} ` : ''}
+                            {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} -> ` : ''}
                             {(item.keys || []).join(', ') || 'raw-wire'}
                           </div>
                         ))
