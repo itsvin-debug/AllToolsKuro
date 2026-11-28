@@ -279,6 +279,243 @@ function inspectMp4Boxes(buf) {
   return { topLevelAtoms, trackCodecs: Array.from(codecs), durationSec, resolution };
 }
 
+const AUDIO_BINARY_SIGNATURES = [
+  { label: 'OggS', needle: Buffer.from('OggS', 'ascii'), startAt: 0 },
+  { label: 'OpusHead', needle: Buffer.from('OpusHead', 'ascii'), startAt: 0 },
+  { label: 'OpusTags', needle: Buffer.from('OpusTags', 'ascii'), startAt: 0 },
+  { label: 'ftyp', needle: Buffer.from('ftyp', 'ascii'), startAt: 0 },
+  { label: 'moov', needle: Buffer.from('moov', 'ascii'), startAt: 0 },
+  { label: 'ID3', needle: Buffer.from('ID3', 'ascii'), startAt: 0 },
+  { label: 'WAVE', needle: Buffer.from('WAVE', 'ascii'), startAt: 0 },
+  { label: 'fLaC', needle: Buffer.from('fLaC', 'ascii'), startAt: 0 },
+  { label: 'AUDI', needle: Buffer.from('AUDI', 'ascii'), startAt: 0 },
+  { label: 'SOUN', needle: Buffer.from('SOUN', 'ascii'), startAt: 0 },
+  { label: 'MP3', needle: Buffer.from('MP3', 'ascii'), startAt: 0 },
+  { label: 'audio', needle: Buffer.from('audio', 'ascii'), startAt: 0 },
+  { label: 'sound', needle: Buffer.from('sound', 'ascii'), startAt: 0 },
+  { label: 'MP3_SYNC(fffb)', needle: Buffer.from([0xff, 0xfb]), startAt: 0 },
+  { label: 'ADTS_AAC(fff1)', needle: Buffer.from([0xff, 0xf1]), startAt: 0 },
+  { label: 'AMR(#!)', needle: Buffer.from('#!', 'ascii'), startAt: 0 },
+  { label: 'RIFF_2ND', needle: Buffer.from('RIFF', 'ascii'), startAt: 1 }
+];
+
+function toPrintableAscii(buf, maxLen = 64) {
+  if (!buf || buf.length === 0) return '';
+  const slice = buf.subarray(0, Math.min(maxLen, buf.length));
+  return Array.from(slice, (b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+}
+
+function resolveChunkOwnerAtOffset(offset, chunkRanges = [], riffEndOffset = 0) {
+  if (offset < 12) return 'header';
+  for (const r of chunkRanges) {
+    if (offset >= r.start && offset < r.end) return r.fourcc;
+  }
+  if (riffEndOffset > 0 && offset >= riffEndOffset) return 'trailing';
+  return 'unknown';
+}
+
+function scanAudioSignatures(buf, chunkRanges = null, riffEndOffset = null) {
+  if (!Buffer.isBuffer(buf) || buf.length === 0) return [];
+
+  let resolvedRanges = Array.isArray(chunkRanges) ? chunkRanges : null;
+  let resolvedRiffEnd = Number.isFinite(riffEndOffset) ? riffEndOffset : null;
+
+  if (!resolvedRanges && buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF') {
+    resolvedRiffEnd = 8 + buf.readUInt32LE(4);
+    resolvedRanges = [];
+    let off = 12;
+    const limit = Math.min(buf.length, resolvedRiffEnd);
+    while (off + 8 <= limit) {
+      const fcc = buf.toString('ascii', off, off + 4);
+      const sz = buf.readUInt32LE(off + 4);
+      const end = Math.min(buf.length, off + 8 + sz + (sz % 2));
+      resolvedRanges.push({ fourcc: fcc, start: off, end });
+      off = off + 8 + sz + (sz % 2);
+    }
+  }
+
+  const hits = [];
+  const seen = new Set();
+  for (const spec of AUDIO_BINARY_SIGNATURES) {
+    let idx = buf.indexOf(spec.needle, spec.startAt || 0);
+    while (idx !== -1) {
+      const owner = resolveChunkOwnerAtOffset(idx, resolvedRanges || [], resolvedRiffEnd || buf.length);
+      const dedupKey = `${spec.label}:${owner}`;
+      if (!seen.has(dedupKey)) {
+        seen.add(dedupKey);
+        hits.push({ sig: spec.label, offset: idx, chunkOwner: owner });
+        if (hits.length >= 10) return hits;
+      }
+      idx = buf.indexOf(spec.needle, idx + spec.needle.length);
+    }
+  }
+  return hits;
+}
+
+function parseAnmfSubChunks(buf, range) {
+  if (!range || range.dataEnd - range.dataStart <= 16) return [];
+  const subList = [];
+  let off = range.dataStart + 16;
+  while (off + 8 <= range.dataEnd && subList.length < 24) {
+    const fcc = buf.toString('ascii', off, off + 4);
+    const sz = buf.readUInt32LE(off + 4);
+    const next = off + 8 + sz + (sz % 2);
+    subList.push({
+      fourcc: fcc,
+      size: sz,
+      isForeign: !['VP8 ', 'VP8L', 'ALPH'].includes(fcc)
+    });
+    if (next <= off) break;
+    off = next;
+  }
+  return subList;
+}
+
+function inspectWebpBinaryForensics(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null;
+  if (buf.toString('ascii', 0, 4) !== 'RIFF' || buf.toString('ascii', 8, 12) !== 'WEBP') {
+    return null;
+  }
+
+  const totalFileBytes = buf.length;
+  const riffDeclaredSize = buf.readUInt32LE(4);
+  const riffEndOffset = 8 + riffDeclaredSize;
+  const trailingBytesCount = Math.max(0, totalFileBytes - riffEndOffset);
+  const trailingSlice = trailingBytesCount > 0 ? buf.subarray(riffEndOffset, Math.min(totalFileBytes, riffEndOffset + 64)) : null;
+  const trailingHeadHex = trailingSlice ? trailingSlice.toString('hex') : '';
+  const trailingHeadAscii = trailingSlice ? toPrintableAscii(trailingSlice, 64) : '';
+
+  const chunkRanges = [];
+  const nonAnmfChunks = [];
+  const customChunks = [];
+  const chunksBeforeAnmf = [];
+  const chunksAfterAnmf = [];
+  let seenAnmf = false;
+  let anmfCount = 0;
+  let anmfTotalBytes = 0;
+  let firstAnmfRange = null;
+  let lastAnmfRange = null;
+
+  let vp8xDetails = null;
+  let vp8xFlags = null;
+  let exifJson = null;
+  let fullExifString = '';
+  let extraExifKeys = [];
+  let xmpText = '';
+
+  let off = 12;
+  const limit = Math.min(totalFileBytes, riffEndOffset);
+  while (off + 8 <= limit) {
+    const fcc = buf.toString('ascii', off, off + 4);
+    const sz = buf.readUInt32LE(off + 4);
+    const dataStart = off + 8;
+    const dataEnd = Math.min(limit, dataStart + sz);
+    const chunkEnd = Math.min(limit, dataStart + sz + (sz % 2));
+    chunkRanges.push({ fourcc: fcc, start: off, end: chunkEnd });
+
+    if (fcc === 'ANMF') {
+      seenAnmf = true;
+      anmfCount++;
+      anmfTotalBytes += sz;
+      const r = { dataStart, dataEnd };
+      if (!firstAnmfRange) firstAnmfRange = r;
+      lastAnmfRange = r;
+    } else {
+      const label = `${fcc}@${off}:${sz}`;
+      if (!seenAnmf) chunksBeforeAnmf.push(label);
+      else chunksAfterAnmf.push(label);
+
+      const headSlice = buf.subarray(dataStart, Math.min(dataEnd, dataStart + 32));
+      nonAnmfChunks.push({
+        fourcc: fcc,
+        offset: off,
+        size: sz,
+        headHex: headSlice.toString('hex'),
+        headAscii: toPrintableAscii(headSlice, 32)
+      });
+
+      if (!STANDARD_WEBP_CHUNKS.has(fcc)) {
+        customChunks.push({
+          fourCC: fcc,
+          offset: off,
+          size: sz,
+          headHex: headSlice.toString('hex'),
+          headAscii: toPrintableAscii(headSlice, 32)
+        });
+      }
+
+      if (fcc === 'VP8X' && dataEnd - dataStart >= 10) {
+        const flagsByte = buf[dataStart];
+        vp8xFlags = flagsByte;
+        vp8xDetails = {
+          flagsByte,
+          flagsBinary: flagsByte.toString(2).padStart(8, '0'),
+          flags: {
+            bit0_reserved: (flagsByte & 0x01) !== 0,
+            anim: (flagsByte & 0x02) !== 0,
+            xmp: (flagsByte & 0x04) !== 0,
+            exif: (flagsByte & 0x08) !== 0,
+            alpha: (flagsByte & 0x10) !== 0,
+            icc: (flagsByte & 0x20) !== 0,
+            bit6_reserved: (flagsByte & 0x40) !== 0,
+            bit7_reserved: (flagsByte & 0x80) !== 0
+          },
+          canvasWidth: (buf[dataStart + 4] | (buf[dataStart + 5] << 8) | (buf[dataStart + 6] << 16)) + 1,
+          canvasHeight: (buf[dataStart + 7] | (buf[dataStart + 8] << 8) | (buf[dataStart + 9] << 16)) + 1
+        };
+      } else if (fcc === 'EXIF') {
+        const exifBuf = buf.subarray(dataStart, dataEnd);
+        const parsed = extractExifJsonFromChunk(exifBuf);
+        if (parsed) {
+          exifJson = parsed;
+          extraExifKeys = Object.keys(parsed).filter((k) => !STANDARD_WA_EXIF_KEYS.has(k));
+          fullExifString = JSON.stringify(parsed).slice(0, 2000);
+        } else {
+          fullExifString = toPrintableAscii(exifBuf, 2000);
+        }
+      } else if (fcc === 'XMP ') {
+        xmpText = buf.subarray(dataStart, Math.min(dataEnd, dataStart + 2000)).toString('utf8');
+      }
+    }
+
+    off = dataStart + sz + (sz % 2);
+  }
+
+  const chunksSummary = [
+    ...chunksBeforeAnmf,
+    ...(anmfCount > 0 ? [`ANMF x ${anmfCount} (total ${anmfTotalBytes} B)`] : []),
+    ...chunksAfterAnmf
+  ];
+
+  const anmfSubChunks = {
+    first: parseAnmfSubChunks(buf, firstAnmfRange),
+    last: lastAnmfRange && lastAnmfRange !== firstAnmfRange ? parseAnmfSubChunks(buf, lastAnmfRange) : []
+  };
+  const audioSignatures = scanAudioSignatures(buf, chunkRanges, riffEndOffset);
+
+  return {
+    totalFileBytes,
+    riffDeclaredSize,
+    riffEndOffset,
+    trailingBytesCount,
+    trailingHeadHex,
+    trailingHeadAscii,
+    vp8xFlags,
+    vp8xDetails,
+    nonAnmfChunks,
+    customChunks,
+    anmfCount,
+    anmfTotalBytes,
+    anmfSubChunks,
+    exifJson,
+    fullExifString,
+    extraExifKeys,
+    xmpText,
+    audioSignatures,
+    chunksSummary
+  };
+}
+
 function inspectMediaBufferMetadata(buf) {
   if (!buf || buf.length === 0) {
     return { magicHex: '', magicAscii: '', totalBytes: 0, detectedContainer: 'unknown', container: 'unknown', chunks: [] };
@@ -286,51 +523,22 @@ function inspectMediaBufferMetadata(buf) {
 
   const head = buf.subarray(0, Math.min(64, buf.length));
   const magicHex = head.toString('hex');
-  const magicAscii = Array.from(head, (b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+  const magicAscii = toPrintableAscii(head, 64);
 
-  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
-    const chunks = [];
-    const customChunks = [];
-    let exifJson = null;
-    let extraExifKeys = [];
-    let vp8xFlags = null;
-    let off = 12;
-
-    while (off + 8 <= buf.length && chunks.length < 48) {
-      const fcc = buf.toString('ascii', off, off + 4);
-      const sz = buf.readUInt32LE(off + 4);
-      const dataStart = off + 8;
-      const dataEnd = Math.min(buf.length, dataStart + sz);
-      chunks.push(`${fcc}:${sz}`);
-
-      if (fcc === 'VP8X' && dataEnd - dataStart >= 1) {
-        vp8xFlags = buf[dataStart];
-      }
-      if (!STANDARD_WEBP_CHUNKS.has(fcc)) {
-        const sub = buf.subarray(dataStart, Math.min(dataEnd, dataStart + 16));
-        customChunks.push({ fourCC: fcc, size: sz, headHex: sub.toString('hex') });
-      }
-      if (fcc === 'EXIF') {
-        const parsed = extractExifJsonFromChunk(buf.subarray(dataStart, dataEnd));
-        if (parsed) {
-          exifJson = parsed;
-          extraExifKeys = Object.keys(parsed).filter((k) => !STANDARD_WA_EXIF_KEYS.has(k));
-        }
-      }
-      off = dataStart + sz + (sz % 2);
-    }
-
+  const webpForensics = inspectWebpBinaryForensics(buf);
+  if (webpForensics) {
     return {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
       container: 'webp',
       detectedContainer: 'webp',
-      vp8xFlags,
-      chunks,
-      customChunks,
-      exifJson,
-      extraExifKeys
+      vp8xFlags: webpForensics.vp8xFlags,
+      chunks: webpForensics.chunksSummary,
+      customChunks: webpForensics.customChunks,
+      exifJson: webpForensics.exifJson,
+      extraExifKeys: webpForensics.extraExifKeys,
+      webpForensics
     };
   }
 
@@ -449,6 +657,15 @@ function sanitizeBlueprint(raw) {
     : (typeof raw.decryptedByMediaType === 'string' ? raw.decryptedByMediaType.slice(0, 24) : null);
 
   const normalizedMeta = {
+    ...Object.fromEntries(
+      Object.entries(sm).filter(
+        ([k, v]) =>
+          v !== null &&
+          v !== undefined &&
+          !['url', 'directPath', 'mediaKey', 'fileSha256', 'fileEncSha256'].includes(k) &&
+          typeof v !== 'object'
+      )
+    ),
     mimetype: typeof sm.mimetype === 'string' ? sm.mimetype.slice(0, 64) : 'image/webp',
     isAnimated: Boolean(sm.isAnimated),
     isLottie: Boolean(sm.isLottie),
@@ -458,7 +675,7 @@ function sanitizeBlueprint(raw) {
     seconds: Number.isFinite(Number(sm.seconds)) ? Number(sm.seconds) : undefined,
     width: Number(sm.width) || 512,
     height: Number(sm.height) || 512,
-    accessibilityLabel: typeof sm.accessibilityLabel === 'string' ? sm.accessibilityLabel.slice(0, 120) : undefined
+    accessibilityLabel: typeof sm.accessibilityLabel === 'string' ? sm.accessibilityLabel.slice(0, 240) : undefined
   };
 
   return {
@@ -500,10 +717,11 @@ function sanitizeBlueprint(raw) {
       magicAscii: typeof mi.magicAscii === 'string' ? mi.magicAscii.slice(0, 64) : undefined,
       totalBytes: Number(mi.totalBytes) || 0,
       vp8xFlags: Number.isFinite(Number(mi.vp8xFlags)) ? Number(mi.vp8xFlags) : undefined,
-      chunks: Array.isArray(mi.chunks) ? mi.chunks.slice(0, 48).map(String) : [],
-      customChunks: Array.isArray(mi.customChunks) ? mi.customChunks.slice(0, 12) : [],
+      chunks: Array.isArray(mi.chunks) ? mi.chunks.map(String) : [],
+      customChunks: Array.isArray(mi.customChunks) ? mi.customChunks : [],
       extraExifKeys: Array.isArray(mi.extraExifKeys) ? mi.extraExifKeys.slice(0, 24).map(String) : [],
       exifJson: mi.exifJson && typeof mi.exifJson === 'object' ? mi.exifJson : null,
+      webpForensics: mi.webpForensics && typeof mi.webpForensics === 'object' ? mi.webpForensics : undefined,
       trackCodecs: Array.isArray(mi.trackCodecs) ? mi.trackCodecs.slice(0, 12).map(String) : [],
       durationSec: Number.isFinite(Number(mi.durationSec)) ? Number(mi.durationSec) : undefined,
       resolution: typeof mi.resolution === 'string' ? mi.resolution.slice(0, 24) : undefined
@@ -1218,6 +1436,20 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       console.log('[KLON-RESULT]', JSON.stringify(dumpObject));
     }
 
+    const wf = mediaInspection?.webpForensics || null;
+    const forensicReport = {
+      msgId: blueprint.msgId,
+      trigger: triggerReason,
+      mime: innerMeta?.mimetype || '-',
+      hkdf: decryptedByMediaType || '-',
+      container: mediaInspection?.detectedContainer || 'unknown',
+      stickerMeta: innerMeta,
+      unknownWireFields,
+      webpForensics: wf,
+      decryptErrors
+    };
+    console.log('[KLON-FORENSIC]', JSON.stringify(forensicReport));
+
     pushCalibrationLog(io, sessionId, activeSession, {
       upsertType: 'BLUEPRINT-CAPTURED',
       remoteJid: msg.key.remoteJid || selfJid,
@@ -1237,33 +1469,64 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
     emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
 
     const detectedCont = mediaInspection?.detectedContainer || 'unknown';
+    const hasCustomAudioSignatures = Boolean(wf?.audioSignatures?.length || wf?.trailingBytesCount > 0);
     const shouldReplyInWa = Boolean(
       sendReplyToSelf ||
         isKlonCmd ||
         globalSpec.hasAudioSignature ||
+        hasCustomAudioSignatures ||
         unknownWireFields.length > 0 ||
         (detectedCont !== 'webp' && detectedCont !== 'unknown')
     );
 
     if (shouldReplyInWa) {
-      const chunksText = dumpObject.chunks.length > 0 ? dumpObject.chunks.slice(0, 8).join(', ') : '-';
-      const exifText = dumpObject.exifJson ? JSON.stringify(dumpObject.exifJson).slice(0, 140) : '-';
       const unknownText = dumpObject.unknownTags.length > 0 ? dumpObject.unknownTags.join(', ') : '0';
       const errKeys = Object.keys(decryptErrors || {});
       const replyLines = [
-        '✅ *.klon Blueprint Stiker Audio Terdeteksi!*',
-        `• Spec Aktif: ${globalSpec.mode} (${globalSpec.deliveryRoute})`,
-        `• Keys: ${mergedInnerKeys.join(', ') || primaryMsgType}`,
-        `• Mime: ${innerMeta?.mimetype || '-'}`,
-        `• HKDF: ${decryptedByMediaType || '-'}`,
-        `• Container: ${detectedCont}`,
-        `• Chunks/Atoms: ${chunksText}`,
-        `• EXIF: ${exifText}`,
-        `• Unknown Wire Tags: ${unknownText}`,
-        `• Cache Stiker Asli: ${cachedSticker ? 'Cocok' : 'Quote Only'}`,
-        ...(errKeys.length && !decryptedByMediaType ? [`• Decrypt Errors: ${errKeys.map((k) => `${k}=${decryptErrors[k]}`).join('; ')}`] : [])
+        '🔬 *.klon Forensik Stiker Lengkap*',
+        `• Spec: ${globalSpec.mode} | HKDF: ${decryptedByMediaType || '-'} | Mime: ${innerMeta?.mimetype || '-'}`
       ];
-      await sendOfficialSelfMessage(io, sessionId, activeSession, selfJid, { text: replyLines.join('\n') }, '.klon Blueprint Report');
+
+      if (wf) {
+        const vp8FlagsStr = wf.vp8xDetails
+          ? `0x${wf.vp8xDetails.flagsByte.toString(16).padStart(2, '0')} (${wf.vp8xDetails.flagsBinary}) ${wf.vp8xDetails.canvasWidth}x${wf.vp8xDetails.canvasHeight} | reserved0=${wf.vp8xDetails.flags.bit0_reserved} reserved6=${wf.vp8xDetails.flags.bit6_reserved} reserved7=${wf.vp8xDetails.flags.bit7_reserved}`
+          : '-';
+        const nonAnmfText = wf.nonAnmfChunks.length > 0
+          ? wf.nonAnmfChunks.map((c) => `${c.fourcc}@${c.offset}:${c.size}B`).join(', ')
+          : '-';
+        const firstSub = wf.anmfSubChunks?.first?.map((s) => `${s.fourcc}:${s.size}${s.isForeign ? '[FOREIGN]' : ''}`).join(',') || '-';
+        const lastSub = wf.anmfSubChunks?.last?.length
+          ? wf.anmfSubChunks.last.map((s) => `${s.fourcc}:${s.size}${s.isForeign ? '[FOREIGN]' : ''}`).join(',')
+          : '';
+        const sigText = wf.audioSignatures.length > 0
+          ? wf.audioSignatures.map((s) => `${s.sig}@${s.offset}(${s.chunkOwner})`).join(', ')
+          : 'none';
+
+        replyLines.push(
+          `• TotalBytes vs RiffEnd: ${wf.totalFileBytes} B vs ${wf.riffEndOffset} B (Trailing: ${wf.trailingBytesCount} B${wf.trailingHeadAscii ? ` | ASCII=${wf.trailingHeadAscii}` : ''})`,
+          `• Non-ANMF Chunks: ${nonAnmfText}`,
+          `• ANMF: ${wf.anmfCount} frame (total ${wf.anmfTotalBytes} B) | first=[${firstSub}]${lastSub ? ` last=[${lastSub}]` : ''}`,
+          `• VP8X Flags: ${vp8FlagsStr}`,
+          `• Full EXIF: ${wf.fullExifString || '-'}`,
+          ...(wf.xmpText ? [`• XMP: ${wf.xmpText}`] : []),
+          `• Audio Signatures: ${sigText}`
+        );
+      } else {
+        const chunksText = dumpObject.chunks.length > 0 ? dumpObject.chunks.join(', ') : '-';
+        const exifText = dumpObject.exifJson ? JSON.stringify(dumpObject.exifJson).slice(0, 2000) : '-';
+        replyLines.push(
+          `• Container: ${detectedCont}`,
+          `• Chunks/Atoms: ${chunksText}`,
+          `• Full EXIF: ${exifText}`
+        );
+      }
+
+      replyLines.push(
+        `• StickerMeta: ${JSON.stringify(innerMeta)}`,
+        `• Unknown Wire Tags: ${unknownText}`,
+        ...(errKeys.length && !decryptedByMediaType ? [`• Decrypt Errors: ${errKeys.map((k) => `${k}=${decryptErrors[k]}`).join('; ')}`] : [])
+      );
+      await sendOfficialSelfMessage(io, sessionId, activeSession, selfJid, { text: replyLines.join('\n') }, '.klon Forensic Report');
     }
 
     return blueprint;
@@ -2372,5 +2635,7 @@ module.exports = {
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,
+  inspectWebpBinaryForensics,
+  scanAudioSignatures,
   sanitizeBlueprint
 };
