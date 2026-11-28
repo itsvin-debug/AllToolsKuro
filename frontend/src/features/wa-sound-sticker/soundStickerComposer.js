@@ -311,6 +311,33 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
 }
 
 /**
+ * Bungkus WebP statis menjadi Animated WebP 2-frame ringan (VP8X+ANIM+2xANMF+EXIF) agar kompatibel dengan Stiker Audio WA.
+ */
+export function wrapStaticWebpToAnimatedWebp(staticWebpBytes, meta = {}) {
+  const bytes = staticWebpBytes instanceof Uint8Array ? staticWebpBytes : new Uint8Array(staticWebpBytes);
+  const chunks = parseWebPChunks(bytes);
+  const vp8x = chunks.find((c) => c.fourCC === 'VP8X');
+  const hasVp8xAnim = Boolean(vp8x && vp8x.data.length >= 10 && (vp8x.data[0] & 0x02) !== 0);
+  const hasAnim = chunks.some((c) => c.fourCC === 'ANIM');
+  const hasAnmf = chunks.some((c) => c.fourCC === 'ANMF');
+
+  if (hasVp8xAnim && hasAnim && hasAnmf) {
+    validateWaWebpBinary(bytes, { expectAnimated: true });
+    return bytes;
+  }
+
+  const animated = muxAnimatedWebp(
+    [
+      { webpBytes: bytes, durationMs: 500 },
+      { webpBytes: bytes, durationMs: 500 }
+    ],
+    meta
+  );
+  validateWaWebpBinary(animated, { expectAnimated: true });
+  return animated;
+}
+
+/**
  * Renderer Kotak 512x512 Terpadu (Dipakai oleh Live Preview Stiker Suara WA & Kompositor WebP)
  */
 export function renderStickerCanvasFrame(ctx, sourceMedia, options = {}, tSec = 0) {
@@ -972,20 +999,37 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     };
 
     const willAnimate = isVideo || renderOptions.motionEffect !== 'static';
-    const webpBlob = await buildWaWebpStickerBlob({
+    const packMeta = {
+      packName: item.packName || 'Kuro Sound Sticker',
+      publisher: item.packPublisher || 'Kuro Studio'
+    };
+    const rawWebpBlob = await buildWaWebpStickerBlob({
       sourceMedia: mediaEl,
       isAnimated: willAnimate,
       durationSec: Math.min(5, durationSec),
       renderOptions,
-      packMeta: { packName: item.packName || 'Kuro Sound Sticker', publisher: item.packPublisher || 'Kuro Studio' },
+      packMeta,
       onProgress: (p) => onProgress?.(Math.min(72, Math.round(p * 0.72)))
     });
 
-    if (!webpBlob || webpBlob.size <= 200 || webpBlob.size > 1024 * 1024) {
+    let finalWebpBlob = rawWebpBlob;
+    let finalIsAnimated = willAnimate;
+    if (audioBuf && !willAnimate && rawWebpBlob) {
+      try {
+        const rawBytes = new Uint8Array(await rawWebpBlob.arrayBuffer());
+        const animBytes = wrapStaticWebpToAnimatedWebp(rawBytes, packMeta);
+        if (animBytes.length <= 480 * 1024) {
+          finalWebpBlob = new Blob([animBytes], { type: 'image/webp' });
+          finalIsAnimated = true;
+        }
+      } catch {}
+    }
+
+    if (!finalWebpBlob || finalWebpBlob.size <= 200 || finalWebpBlob.size > 1024 * 1024) {
       throw new Error('Ukuran stiker WebP tidak valid atau melebihi batas 1 MB.');
     }
 
-    const stickerWebpBase64 = await blobToBase64Local(webpBlob);
+    const stickerWebpBase64 = await blobToBase64Local(finalWebpBlob);
     let audioBase64;
     let audioMime;
     let audioM4aBase64;
@@ -1071,7 +1115,7 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       ...(thumbnailPngBase64 ? { thumbnailPngBase64 } : {}),
       stickerEmoji: '✨',
       durationSec,
-      isAnimated: willAnimate,
+      isAnimated: finalIsAnimated,
       width: 512,
       height: 512,
       packName: item.packName || 'Kuro Sound Sticker',

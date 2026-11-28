@@ -761,13 +761,9 @@ async function startBaileys(
 
             if (cachedProto && targetPnJid && prevCount < 1) {
               session.msgRetryCounterCache?.set?.(retryKey, prevCount + 1);
-              const extraOpts = cachedProto.audioStickerFutureProof
-                ? { additionalAttributes: { type: 'media' } }
-                : {};
               await sock.relayMessage(targetPnJid, cachedProto, {
                 messageId: msgId,
-                useUserDevicesCache: false,
-                ...extraOpts
+                useUserDevicesCache: false
               }).catch((err) => {
                 console.warn(`[E2EE-RETRY ${sessionId}] Gagal retry tunggal id=${msgId}:`, err.message);
               });
@@ -1144,6 +1140,60 @@ async function startBaileys(
         }
 
         learnLidPair(msg.key, currentSession);
+
+        // Deteksi Bad MAC / stub=2 beruntun (>= 2x dalam 15 detik) dari selfLid/selfPn, bersihkan sesi korup + cooldown 60s
+        if (remoteJid !== 'status@broadcast' && isOwnerSelfMessage(msg, sock)) {
+          if (Number(msg.messageStubType) === 2) {
+            const nowFail = Date.now();
+            const recentFails = Array.isArray(currentSession.selfDecryptFailTimestamps)
+              ? currentSession.selfDecryptFailTimestamps.filter((t) => nowFail - t <= 15000)
+              : [];
+            recentFails.push(nowFail);
+            currentSession.selfDecryptFailTimestamps = recentFails;
+
+            const canHeal =
+              recentFails.length >= 2 &&
+              nowFail - (currentSession.lastSelfBadMacHealAt || 0) >= 60000;
+            if (canHeal) {
+              currentSession.lastSelfBadMacHealAt = nowFail;
+              currentSession.selfDecryptFailTimestamps = [];
+              try {
+                const { ownPnDigits, ownLidDigits } = getOwnerDigitsSet(sock);
+                const credsIds = extractOwnIdentifiersFromCreds(sock.authState?.creds);
+                const ownPhone = ownPnDigits || credsIds.ownPhone;
+                const ownLidUser = ownLidDigits || credsIds.ownLidUser;
+                const { clearedFiles, nullSessionMap } = clearOwnSignalSessionFilesOnDisk(
+                  getSessionDir(sessionId),
+                  ownPhone,
+                  ownLidUser
+                );
+                for (let dev = 0; dev <= 5; dev++) {
+                  if (ownPhone) nullSessionMap[`${ownPhone}.${dev}`] = null;
+                  if (ownLidUser) {
+                    nullSessionMap[`${ownLidUser}.${dev}`] = null;
+                    nullSessionMap[`${ownLidUser}_1.${dev}`] = null;
+                  }
+                }
+                if (Object.keys(nullSessionMap).length > 0 && typeof sock.authState?.keys?.set === 'function') {
+                  await sock.authState.keys.set({ session: nullSessionMap }).catch(() => {});
+                }
+                emitAuthSnapshotNow(io, sessionId, currentSession);
+                pushDeliveryTrace(io, sessionId, currentSession, {
+                  messageId: String(msg.key.id || 'bad-mac-heal'),
+                  phase: 'bad_mac_self_heal',
+                  event: 'stub2_cleanup',
+                  isError: false,
+                  detail: `Auto-heal Bad MAC: ${clearedFiles.length} file sesi self-chat dibersihkan & snapshot disinkronkan`
+                });
+                console.warn(`[WA-E2EE-SELF-HEAL ${sessionId}] Deteksi >=2 Bad MAC (stub=2) beruntun -> hapus ${clearedFiles.length} sesi self-chat & sinkron snapshot`);
+              } catch (healErr) {
+                console.warn(`[WA-E2EE-SELF-HEAL ${sessionId}] Gagal cleanup Bad MAC:`, healErr.message);
+              }
+            }
+          } else if (msg.message && !msg.messageStubType) {
+            currentSession.selfDecryptFailTimestamps = [];
+          }
+        }
 
         if (msg.key?.id && msg.message) {
           if (!currentSession.msgCache) currentSession.msgCache = new Map();

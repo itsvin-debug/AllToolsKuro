@@ -1969,6 +1969,121 @@ async function sendJalurCAltMessage({ io, sessionId, session, selfJid, messageTy
   );
 }
 
+function writeUint24LE(buf, off, val) {
+  buf[off] = val & 0xff;
+  buf[off + 1] = (val >>> 8) & 0xff;
+  buf[off + 2] = (val >>> 16) & 0xff;
+}
+
+function buildWaExifPayloadBuffer({
+  packName = 'Kuro Sound Sticker',
+  packAuthor = 'Kuro Studio',
+  emojis = ['🎵', '✨']
+} = {}) {
+  const meta = {
+    'sticker-pack-id': 'kuro.sound.sticker',
+    'sticker-pack-name': String(packName || 'Kuro Sound Sticker').slice(0, 64),
+    'sticker-pack-publisher': String(packAuthor || 'Kuro Studio').slice(0, 64),
+    emojis: Array.isArray(emojis) && emojis.length > 0 ? emojis : ['🎵', '✨']
+  };
+  const jsonBytes = Buffer.from(JSON.stringify(meta), 'utf8');
+  const header = Buffer.from([
+    0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x41,
+    0x57, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00
+  ]);
+  writeUint32LE(header, 14, jsonBytes.length);
+  return Buffer.concat([header, jsonBytes]);
+}
+
+/**
+ * Pastikan WebP untuk Stiker Audio berformat Animated WebP valid (VP8X flag ANIM+EXIF+ALPHA, ANIM loop=0, 2x ANMF, EXIF).
+ */
+function ensureAnimatedAudioStickerWebp(webpBuf, meta = {}) {
+  if (!Buffer.isBuffer(webpBuf) || webpBuf.length < 30) {
+    throw new Error('Buffer WebP tidak valid.');
+  }
+  if (webpBuf.toString('ascii', 0, 4) !== 'RIFF' || webpBuf.toString('ascii', 8, 12) !== 'WEBP') {
+    throw new Error('Header RIFF/WEBP tidak valid.');
+  }
+
+  let off = 12;
+  let vp8xData = null;
+  let exifData = null;
+  let hasAnim = false;
+  let hasAnmf = false;
+  let hasAlpha = false;
+  const frameSubChunks = [];
+
+  while (off + 8 <= webpBuf.length) {
+    const fcc = webpBuf.toString('ascii', off, off + 4);
+    const sz = webpBuf.readUInt32LE(off + 4);
+    const dataStart = off + 8;
+    const dataEnd = Math.min(webpBuf.length, dataStart + sz);
+    const dataBuf = webpBuf.subarray(dataStart, dataEnd);
+
+    if (fcc === 'VP8X' && dataBuf.length >= 10) {
+      vp8xData = Buffer.from(dataBuf);
+      if ((dataBuf[0] & 0x10) !== 0) hasAlpha = true;
+    } else if (fcc === 'ANIM') {
+      hasAnim = true;
+    } else if (fcc === 'ANMF') {
+      hasAnmf = true;
+    } else if (fcc === 'EXIF') {
+      exifData = Buffer.from(dataBuf);
+    } else if (fcc === 'ALPH' || fcc === 'VP8 ' || fcc === 'VP8L') {
+      if (fcc === 'ALPH' || (fcc === 'VP8L' && dataBuf.length >= 5 && (dataBuf[4] & 0x10) !== 0)) {
+        hasAlpha = true;
+      }
+      frameSubChunks.push(buildRiffChunkBuffer(fcc, dataBuf));
+    }
+
+    off = dataStart + sz + (sz % 2);
+  }
+
+  if (hasAnim && hasAnmf && vp8xData && (vp8xData[0] & 0x02) !== 0) {
+    return { webpBuf, isAnimated: true };
+  }
+  if (frameSubChunks.length === 0) {
+    throw new Error('Frame VP8/VP8L tidak ditemukan untuk konversi Animated WebP.');
+  }
+
+  const vp8xPayload = Buffer.alloc(10);
+  vp8xPayload[0] = (hasAlpha ? 0x10 : 0x00) | 0x08 | 0x02;
+  writeUint24LE(vp8xPayload, 4, 511);
+  writeUint24LE(vp8xPayload, 7, 511);
+
+  const animPayload = Buffer.alloc(6, 0);
+  const encodedSub = Buffer.concat(frameSubChunks);
+  const anmfHeader = Buffer.alloc(16);
+  writeUint24LE(anmfHeader, 0, 0);
+  writeUint24LE(anmfHeader, 3, 0);
+  writeUint24LE(anmfHeader, 6, 511);
+  writeUint24LE(anmfHeader, 9, 511);
+  writeUint24LE(anmfHeader, 12, 500);
+  anmfHeader[15] = 0x03;
+
+  const anmfChunk = buildRiffChunkBuffer('ANMF', Buffer.concat([anmfHeader, encodedSub]));
+  const exifChunk = buildRiffChunkBuffer('EXIF', exifData || buildWaExifPayloadBuffer(meta));
+  const body = Buffer.concat([
+    buildRiffChunkBuffer('VP8X', vp8xPayload),
+    buildRiffChunkBuffer('ANIM', animPayload),
+    anmfChunk,
+    anmfChunk,
+    exifChunk
+  ]);
+
+  const out = Buffer.alloc(12 + body.length);
+  out.write('RIFF', 0, 4, 'ascii');
+  writeUint32LE(out, 4, 4 + body.length);
+  out.write('WEBP', 8, 4, 'ascii');
+  body.copy(out, 12);
+
+  if (out.length > MAX_ANIMATED_STICKER_BYTES) {
+    return { webpBuf, isAnimated: false };
+  }
+  return { webpBuf: out, isAnimated: true };
+}
+
 /**
  * Pengirim Native WA Audio Sticker (#134 -> #1 -> #26 StickerMessage + #26 AudioMessage Ogg/Opus) — Zero-Disk & Anti "Menunggu pesan ini".
  */
@@ -1983,6 +2098,8 @@ async function sendNativeProto134AudioSticker({
   audioMime = '',
   durationSec = 3,
   stickerEmoji = '✨',
+  packName = 'Kuro Sound Sticker',
+  packAuthor = 'Kuro Studio',
   queueId = null
 }) {
   if (!session?.sock?.user?.id) {
@@ -1990,11 +2107,16 @@ async function sendNativeProto134AudioSticker({
   }
 
   let oggOpusBuf = null;
+  let finalWebpBuf = stickerWebpBuf;
   try {
+    const animResult = ensureAnimatedAudioStickerWebp(stickerWebpBuf, { packName, packAuthor });
+    finalWebpBuf = animResult.webpBuf;
+    const finalIsAnimated = Boolean(animResult.isAnimated || isAnimated);
+
     oggOpusBuf = await ensureValidOggOpusBuffer(audioBuf, audioMime);
     const safeSeconds = Math.max(1, Math.round(Number(durationSec) || 1));
 
-    const uploadedSticker = await uploadMediaNodeForCloner(session, 'sticker', stickerWebpBuf);
+    const uploadedSticker = await uploadMediaNodeForCloner(session, 'sticker', finalWebpBuf);
     const uploadedAudio = await uploadMediaNodeForCloner(session, 'audio', oggOpusBuf, {
       mimetype: 'audio/ogg; codecs=opus',
       ptt: false,
@@ -2010,7 +2132,6 @@ async function sendNativeProto134AudioSticker({
       fileSha256: uploadedAudio.fileSha256,
       fileLength: uploadedAudio.fileLength || oggOpusBuf.length,
       seconds: safeSeconds,
-      ptt: false,
       mediaKey: uploadedAudio.mediaKey,
       fileEncSha256: uploadedAudio.fileEncSha256,
       directPath: uploadedAudio.directPath,
@@ -2032,11 +2153,11 @@ async function sendNativeProto134AudioSticker({
       height: 64,
       width: 64,
       directPath: uploadedSticker.directPath,
-      fileLength: uploadedSticker.fileLength || stickerWebpBuf.length,
+      fileLength: uploadedSticker.fileLength || finalWebpBuf.length,
       mediaKeyTimestamp: uploadedSticker.mediaKeyTimestamp || nowSec,
       ...(uploadedSticker.firstFrameLength ? { firstFrameLength: uploadedSticker.firstFrameLength } : {}),
       ...(uploadedSticker.firstFrameSidecar ? { firstFrameSidecar: uploadedSticker.firstFrameSidecar } : {}),
-      isAnimated: Boolean(isAnimated),
+      isAnimated: finalIsAnimated,
       contextInfo: {
         mediaKeyContext: {
           type: 1,
@@ -2097,15 +2218,16 @@ async function sendNativeProto134AudioSticker({
       hasTag134: Boolean(f134),
       hasTag26Audio: Boolean(f26Audio),
       hasMsgSecret: Boolean(f35Secret && f35Secret.len === 32),
-      webpBytes: stickerWebpBuf.length,
-      oggBytes: oggOpusBuf.length,
-      isAnimated: Boolean(isAnimated)
+      isAnimated: finalIsAnimated,
+      stanzaType: 'text',
+      webpBytes: finalWebpBuf.length,
+      oggBytes: oggOpusBuf.length
     }));
 
+    // Gunakan stanza standar Baileys FutureProof (type="text", tanpa additionalAttributes.type="media") agar tidak dibuang silent oleh WA Android
     await session.sock.relayMessage(selfJid, protoMsg, {
       messageId: msgId,
-      useUserDevicesCache: true,
-      additionalAttributes: { type: 'media' }
+      useUserDevicesCache: true
     });
 
     const traceLabel = queueId ? `Stiker Audio #134 #${String(queueId).slice(-5)}` : 'Stiker Audio #134';
@@ -2114,18 +2236,20 @@ async function sendNativeProto134AudioSticker({
       phase: 'sent',
       event: 'proto134-relay',
       isError: false,
-      detail: `${traceLabel} (${encodedBytes.length} B proto, Ogg/Opus ${(oggOpusBuf.length / 1024).toFixed(1)} KB) -> menunggu ACK HP`
+      detail: `${traceLabel} (${encodedBytes.length} B proto, WebP ${(finalWebpBuf.length / 1024).toFixed(1)} KB, Ogg ${(oggOpusBuf.length / 1024).toFixed(1)} KB) -> menunggu ACK HP`
     });
     emitAuthSnapshotNow(io, sessionId, session);
-    console.log(`[WA-AUDIO-STICKER] Terkirim id=${msgId} (${encodedBytes.length} B proto, WebP=${stickerWebpBuf.length} B, Ogg=${oggOpusBuf.length} B)`);
 
     return {
       messageId: msgId,
       encodedBytes: encodedBytes.length,
-      oggBytes: oggOpusBuf.length
+      webpBytes: finalWebpBuf.length,
+      oggBytes: oggOpusBuf.length,
+      isAnimated: finalIsAnimated
     };
   } finally {
     oggOpusBuf = null;
+    finalWebpBuf = null;
   }
 }
 
@@ -2195,28 +2319,30 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     let sendRes = null;
     let oggBytes = 0;
 
-    if (bestAudioBuf) {
-      sendRes = await sendNativeProto134AudioSticker({
-        io,
-        sessionId,
-        session,
-        selfJid,
-        stickerWebpBuf,
-        isAnimated: isAnimatedBitstream,
-        audioBuf: bestAudioBuf,
-        audioMime: bestAudioMime,
-        durationSec,
-        stickerEmoji,
-        queueId
-      });
-      modeUsed = 'wa_proto_134_audio_sticker_v1';
-      audioEmbedded = true;
-      isAudioSticker = true;
-      needsCalibration = false;
-      oggBytes = sendRes.oggBytes || 0;
-      reason = 'Stiker Audio Native (#134 • WebP + Ogg/Opus) terkirim bersih ke WhatsApp Anda.';
-      note = 'Dikirim lewat Protokol Native #134 -> #1 -> #26 (WebP + AudioMessage audio/ogg; codecs=opus).';
-    } else {
+      if (bestAudioBuf) {
+        sendRes = await sendNativeProto134AudioSticker({
+          io,
+          sessionId,
+          session,
+          selfJid,
+          stickerWebpBuf,
+          isAnimated: isAnimatedBitstream,
+          audioBuf: bestAudioBuf,
+          audioMime: bestAudioMime,
+          durationSec,
+          stickerEmoji,
+          packName: payload?.packName,
+          packAuthor: payload?.packAuthor,
+          queueId
+        });
+        modeUsed = 'wa_proto_134_audio_sticker_v1';
+        audioEmbedded = true;
+        isAudioSticker = true;
+        needsCalibration = false;
+        oggBytes = sendRes.oggBytes || 0;
+        reason = 'Stiker Audio Native (#134 • Animated WebP + Ogg/Opus) terkirim bersih ke WhatsApp Anda.';
+        note = 'Dikirim lewat Protokol Native #134 -> #1 -> #26 (Animated WebP + AudioMessage audio/ogg; codecs=opus).';
+      } else {
       sendRes = await sendOfficialSelfMessage(
         io,
         sessionId,
@@ -2251,9 +2377,9 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       globalSpecMode: activeSpec.mode,
       hasBlueprint: true,
       needsCalibration,
-      isAnimated: Boolean(isAnimatedBitstream),
+      isAnimated: Boolean(sendRes?.isAnimated ?? isAnimatedBitstream),
       encodedBytes: sendRes.encodedBytes,
-      webpBytes,
+      webpBytes: sendRes?.webpBytes || webpBytes,
       oggBytes,
       durationSec: Math.max(0.5, Number(durationSec) || 1),
       note,
@@ -2775,6 +2901,7 @@ module.exports = {
   handleKlonReplyCommand,
   inspectAndDumpSticker,
   sendNativeProto134AudioSticker,
+  ensureAnimatedAudioStickerWebp,
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,
