@@ -1,13 +1,11 @@
 const baileysModule = require('@whiskeysockets/baileys');
-const { Writer } = require('protobufjs');
 const { sessions } = require('../state/sessionStore');
-const { verifyDeviceOwner, emitToDevice } = require('../services/deviceAuthService');
+const { verifyDeviceOwner, emitToDevice, joinExclusiveDeviceRoom } = require('../services/deviceAuthService');
 const { rememberSentMessage, getSentMessage, triggerAuthSnapshotSync } = require('./whatsappSessionHandler');
 const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
 
 const {
   proto,
-  prepareWAMessageMedia,
   generateMessageIDV2,
   generateMessageID,
   downloadMediaMessage,
@@ -26,9 +24,9 @@ const jidNormalizedUser =
 const MAX_STICKER_BYTES = 1024 * 1024;
 const MAX_MUXED_BYTES = 3.5 * 1024 * 1024;
 const MIN_MEDIA_BYTES = 100;
-const RATE_LIMIT_MS = 4000;
+const RATE_LIMIT_MS = 1300;
 const CALIBRATION_WINDOW_MS = 5 * 60 * 1000;
-const DELIVERY_WATCH_MS = 15 * 1000;
+const DELIVERY_WATCH_MS = 20 * 1000;
 
 const STANDARD_WEBP_CHUNKS = new Set([
   'VP8X',
@@ -454,33 +452,56 @@ function applyBlueprintToWebp(webpBuf, blueprint, { audioBuf, durationSec } = {}
   return { finalWebpBuf: riff, customized: true };
 }
 
-function attachStickerDeliveryWatcher(io, sessionId, session, messageId) {
+function attachStickerDeliveryWatcher(io, sessionId, session, messageId, queueId = null) {
   const sock = session?.sock;
   if (!sock?.ev || !messageId) return;
 
   const statusLabels = {
-    2: 'Diterima server WhatsApp (✓)',
-    3: 'Terkirim utuh ke perangkat WA Anda (✓✓)',
-    4: 'Dibaca di perangkat WA Anda (✓✓)'
+    0: 'Gagal dekripsi / ditolak perangkat (coba Reset E2EE)',
+    2: 'Terkirim ke Server ✓',
+    3: 'Diterima HP ✓✓',
+    4: 'Dibaca di HP ✓✓'
   };
 
   let timer = null;
+  const emitAck = (status, stubParams = []) => {
+    const isError = status === 0;
+    const extraErr = isError && stubParams?.length ? ` (${stubParams.join(', ')})` : '';
+    const payload = {
+      ...(queueId ? { queueId } : {}),
+      messageId,
+      status,
+      isError,
+      canResetE2ee: isError,
+      label: (statusLabels[status] || 'Terkirim') + extraErr
+    };
+    emitToDevice(io, sessionId, 'sound-sticker-item-ack', payload);
+    emitToDevice(io, sessionId, 'sound-sticker-delivery-update', payload);
+  };
+
   const onMessagesUpdate = (updates) => {
     if (!Array.isArray(updates)) return;
     for (const upd of updates) {
       if (upd?.key?.id !== messageId) continue;
       const st = Number(upd?.update?.status);
-      if (st >= 2) {
-        emitToDevice(io, sessionId, 'sound-sticker-delivery-update', {
-          messageId,
-          status: st,
-          label: statusLabels[st] || 'Terkirim'
-        });
-        if (st >= 3) {
+      if (Number.isFinite(st) && (st === 0 || st >= 2)) {
+        emitAck(st, upd?.update?.messageStubParameters);
+        if (st === 0 || st >= 3) {
           cleanup();
           break;
         }
       }
+    }
+  };
+
+  const onReceiptUpdate = (updates) => {
+    if (!Array.isArray(updates)) return;
+    for (const upd of updates) {
+      if (upd?.key?.id !== messageId) continue;
+      const st = upd?.receipt?.readTimestamp || upd?.receipt?.playedTimestamp ? 4 : 3;
+      emitAck(st);
+      cleanup();
+      break;
     }
   };
 
@@ -491,10 +512,12 @@ function attachStickerDeliveryWatcher(io, sessionId, session, messageId) {
     }
     try {
       sock.ev.off('messages.update', onMessagesUpdate);
+      sock.ev.off('message-receipt.update', onReceiptUpdate);
     } catch (_) {}
   };
 
   sock.ev.on('messages.update', onMessagesUpdate);
+  sock.ev.on('message-receipt.update', onReceiptUpdate);
   timer = setTimeout(cleanup, DELIVERY_WATCH_MS);
 }
 
@@ -670,6 +693,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
 
   try {
     const {
+      queueId = null,
       stickerWebpBase64,
       muxedWebmBase64,
       muxedMp4Base64,
@@ -689,9 +713,14 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     audioOpusBuf = decodeOptionalBase64(audioOpusBase64, 'ogg', 'audio Opus');
     audioM4aBuf = decodeOptionalBase64(audioM4aBase64, 'mp4', 'audio M4A');
 
-    // Segarkan sesi Signal perangkat utama sebelum enkripsi E2EE self-chat
+    // Segarkan sesi Signal perangkat utama (+ LID jika ada) sebelum enkripsi E2EE self-chat
+    const assertTargets = [selfJid];
+    if (session.sock?.user?.lid) {
+      const selfLid = jidNormalizedUser(session.sock.user.lid);
+      if (selfLid) assertTargets.push(selfLid);
+    }
     try {
-      await session.sock.assertSessions([selfJid], false);
+      await session.sock.assertSessions(assertTargets, false);
     } catch (_) {}
 
     const activeBlueprint = sanitizeBlueprint(clientBlueprint) || session.soundStickerBlueprint || null;
@@ -712,83 +741,70 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
 
     const bpMime = String(activeBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
     const bpContainer = activeBlueprint?.mediaInspection?.detectedContainer || '';
-
-    if (
+    const useMuxedBlueprint = Boolean(
       activeBlueprint &&
-      (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('video/mp4') || bpMime.includes('video/webm')) &&
-      (muxedMp4Buf || muxedWebmBuf)
-    ) {
-      // Pola B1: Blueprint menggunakan stickerMessage dengan container MP4 / WebM
+        (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('video/mp4') || bpMime.includes('video/webm')) &&
+        (muxedMp4Buf || muxedWebmBuf)
+    );
+
+    let mediaToSend = null;
+    let patchMime = null;
+    let patchAnimated = Boolean(isAnimatedBitstream);
+
+    if (useMuxedBlueprint) {
       const preferWebm = bpContainer === 'webm' || bpMime.includes('webm');
       containerBuf = preferWebm && muxedWebmBuf ? muxedWebmBuf : muxedMp4Buf || muxedWebmBuf;
       const targetMime = preferWebm && muxedWebmBuf ? 'video/webm' : 'video/mp4';
-
-      const mediaMsg = await prepareWAMessageMedia(
-        { sticker: containerBuf },
-        { upload: session.sock.waUploadToServer }
-      );
-      if (mediaMsg?.stickerMessage) {
-        mediaMsg.stickerMessage.mimetype = bpMime || targetMime;
-        mediaMsg.stickerMessage.isAnimated = true;
-        mediaMsg.stickerMessage.width = safeWidth;
-        mediaMsg.stickerMessage.height = safeHeight;
-      }
-
-      const verifyErr = proto?.Message?.verify?.(mediaMsg);
-      if (verifyErr) throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
-      const encodedWire = proto?.Message?.encode ? proto.Message.encode(mediaMsg).finish() : null;
-      if (!encodedWire || encodedWire.length <= 16) {
-        throw new Error('Payload protobuf stiker kosong (<= 16 byte), dibatalkan.');
-      }
-      encodedLen = encodedWire.length;
-
-      sentMsg = await session.sock.sendMessage(
-        selfJid,
-        { forward: { key: { fromMe: true, remoteJid: selfJid, id: customMsgId }, message: mediaMsg } },
-        { messageId: customMsgId }
-      );
+      mediaToSend = containerBuf;
+      patchMime = bpMime || targetMime;
+      patchAnimated = true;
       modeUsed = `blueprint-${targetMime}`;
       note = `Dikirim via jalur resmi E2EE mengikuti blueprint ${targetMime} asli WhatsApp.`;
     } else {
-      // Pola A (Blueprint WebP custom EXIF/chunk) atau Pola C (Default WebP 512x512 aman lewat sock.sendMessage)
       const bestAudioBuf = audioOpusBuf || audioM4aBuf;
       const { finalWebpBuf, customized } = activeBlueprint
         ? applyBlueprintToWebp(stickerWebpBuf, activeBlueprint, { audioBuf: bestAudioBuf, durationSec })
         : { finalWebpBuf: stickerWebpBuf, customized: false };
-
       if (customized) {
         validateStickerWebpBuffer(finalWebpBuf);
         modeUsed = 'blueprint-webp-injected';
         note = 'Dikirim via jalur resmi sock.sendMessage mengikuti blueprint WebP hasil deteksi.';
       }
+      mediaToSend = finalWebpBuf;
+    }
 
-      // Hook patchMessageBeforeSending sementara agar proto.Message terverifikasi > 16 byte & masuk sentMessageStore SEBELUM stanza terkirim
-      const prevPatch = session._patchOutgoingWire;
-      session._patchOutgoingWire = (outgoingMsg) => {
-        const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
-        if (inner?.stickerMessage) {
-          inner.stickerMessage.isAnimated = Boolean(isAnimatedBitstream);
-          inner.stickerMessage.width = safeWidth;
-          inner.stickerMessage.height = safeHeight;
-          const wire = proto?.Message?.encode ? proto.Message.encode(inner).finish() : null;
-          if (wire && wire.length > 16) {
-            encodedLen = wire.length;
-            if (customMsgId) rememberSentMessage(session, customMsgId, inner);
-          }
+    // Hook patchMessageBeforeSending sementara agar proto.Message terverifikasi > 16 byte & masuk sentMessageStore SEBELUM stanza terkirim
+    const prevPatch = session._patchOutgoingWire;
+    session._patchOutgoingWire = (outgoingMsg) => {
+      const inner = outgoingMsg?.deviceSentMessage?.message || outgoingMsg;
+      if (inner?.stickerMessage) {
+        if (patchMime) inner.stickerMessage.mimetype = patchMime;
+        inner.stickerMessage.isAnimated = patchAnimated;
+        inner.stickerMessage.width = safeWidth;
+        inner.stickerMessage.height = safeHeight;
+        const verifyErr = proto?.Message?.verify?.(inner);
+        if (verifyErr) {
+          throw new Error(`Struktur WAProto stiker tidak valid: ${verifyErr}`);
         }
-        return outgoingMsg;
-      };
-
-      try {
-        attachStickerDeliveryWatcher(io, sessionId, session, customMsgId);
-        sentMsg = await session.sock.sendMessage(
-          selfJid,
-          { sticker: finalWebpBuf },
-          { ...(customMsgId ? { messageId: customMsgId } : {}) }
-        );
-      } finally {
-        session._patchOutgoingWire = prevPatch;
+        const wire = proto?.Message?.encode ? proto.Message.encode(inner).finish() : null;
+        if (!wire || wire.length <= 16) {
+          throw new Error('Payload protobuf stiker kosong (<= 16 byte), dibatalkan.');
+        }
+        encodedLen = wire.length;
+        if (customMsgId) rememberSentMessage(session, customMsgId, inner);
       }
+      return outgoingMsg;
+    };
+
+    try {
+      attachStickerDeliveryWatcher(io, sessionId, session, customMsgId, queueId);
+      sentMsg = await session.sock.sendMessage(
+        selfJid,
+        { sticker: mediaToSend },
+        { ...(customMsgId ? { messageId: customMsgId } : {}) }
+      );
+    } finally {
+      session._patchOutgoingWire = prevPatch;
     }
 
     const finalMsgId = sentMsg?.key?.id || customMsgId;
@@ -802,7 +818,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     }
 
     if (finalMsgId && finalMsgId !== customMsgId) {
-      attachStickerDeliveryWatcher(io, sessionId, session, finalMsgId);
+      attachStickerDeliveryWatcher(io, sessionId, session, finalMsgId, queueId);
     }
 
     // Sinkronkan snapshot kunci Signal terbaru agar ratchet key HP & server tetap sinkron
@@ -810,12 +826,13 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
 
     return {
       ok: true,
+      ...(queueId ? { queueId } : {}),
       messageId: finalMsgId,
       protocol: 'official-sendMessage-sticker',
       modeUsed,
       hasBlueprint: Boolean(activeBlueprint),
       needsCalibration: !activeBlueprint,
-      isAnimated: Boolean(isAnimatedBitstream),
+      isAnimated: patchAnimated,
       encodedBytes: encodedLen,
       note,
       selfJid,
@@ -837,6 +854,7 @@ function registerStickerSenderHandler(io, socket) {
       const { sessionId, deviceToken } = payload || {};
       const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
       if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
 
       const session = sessions.get(sessionId);
       if (!session || session.status !== 'connected' || !session.sock?.user?.id) {
@@ -863,6 +881,7 @@ function registerStickerSenderHandler(io, socket) {
       const { sessionId, deviceToken } = payload || {};
       const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
       if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
 
       const session = sessions.get(sessionId);
       if (!session || session.status !== 'connected' || !session.sock?.user?.id) {
@@ -873,7 +892,12 @@ function registerStickerSenderHandler(io, socket) {
       }
 
       const selfJid = jidNormalizedUser(session.sock.user.id);
-      await session.sock.assertSessions([selfJid], true);
+      const targets = [selfJid];
+      if (session.sock?.user?.lid) {
+        const lidNorm = jidNormalizedUser(session.sock.user.lid);
+        if (lidNorm) targets.push(lidNorm);
+      }
+      await session.sock.assertSessions(targets, true);
       triggerAuthSnapshotSync(io, sessionId, session);
 
       emitToDevice(io, sessionId, 'wa-e2ee-refreshed', {
@@ -894,11 +918,12 @@ function registerStickerSenderHandler(io, socket) {
   });
 
   socket.on('send-self-sound-sticker', async (payload) => {
-    const { sessionId, deviceToken } = payload || {};
+    const { sessionId, deviceToken, queueId = null } = payload || {};
 
     try {
       const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
       if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
 
       const session = sessions.get(sessionId);
       if (
@@ -910,6 +935,7 @@ function registerStickerSenderHandler(io, socket) {
       ) {
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
+          ...(queueId ? { queueId } : {}),
           error: 'Perangkat WhatsApp belum tertaut aktif. Tautkan WhatsApp Anda terlebih dahulu.'
         });
       }
@@ -920,6 +946,7 @@ function registerStickerSenderHandler(io, socket) {
         const waitSec = Math.ceil((RATE_LIMIT_MS - (now - prevSentAt)) / 1000);
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
+          ...(queueId ? { queueId } : {}),
           error: `Jeda anti-spam aktif. Tunggu ${waitSec} detik sebelum mengirim ulang.`
         });
       }
@@ -928,6 +955,7 @@ function registerStickerSenderHandler(io, socket) {
       if (!selfJid || !selfJid.endsWith('@s.whatsapp.net')) {
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
+          ...(queueId ? { queueId } : {}),
           error: 'Nomor WhatsApp pemilik sesi tidak dapat diverifikasi.'
         });
       }
@@ -943,6 +971,7 @@ function registerStickerSenderHandler(io, socket) {
       if (sessionId) {
         emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
+          ...(queueId ? { queueId } : {}),
           error: err.message || 'Gagal mengirim stiker ke WhatsApp.'
         });
       }
@@ -956,6 +985,5 @@ module.exports = {
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,
-  sanitizeBlueprint,
-  Writer
+  sanitizeBlueprint
 };

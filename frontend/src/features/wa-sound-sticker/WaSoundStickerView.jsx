@@ -22,7 +22,11 @@ import {
   LogOut,
   ShieldCheck,
   Info,
-  Wrench
+  Wrench,
+  Plus,
+  Layers,
+  Sparkles,
+  ArrowRight
 } from 'lucide-react';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { isValidPairingPhone, formatPairingCodeDisplay } from '../../shared/utils/waPhoneUtils';
@@ -30,15 +34,19 @@ import {
   decodeMediaToAudioBuffer,
   extractWaveformPeaks,
   renderTrimmedAudioBuffer,
-  encodeTrimmedAudio,
+  probeVideoMetadata,
   createSnippetPlayer
 } from './audioTrimmerEngine';
 import {
-  buildWaWebpStickerBlob,
-  composeMuxedStickerContainer,
-  validateSourceMediaDimensions
+  validateSourceMediaDimensions,
+  createSquareThumbnailDataUrl,
+  composeSoundVideoStage1,
+  loadMediaElementFromFile,
+  releaseMediaElement,
+  buildStickerSendPayload
 } from './soundStickerComposer';
 import WaSoundStickerPreview from './WaSoundStickerPreview';
+import StickerQueueList from './StickerQueueList';
 import {
   getWaBackendUrl,
   getOrCreateDeviceCredentials,
@@ -48,14 +56,14 @@ import {
   loadDeviceAuthSnapshotLocal,
   saveDeviceAuthSnapshotLocal,
   clearDeviceAuthSnapshotLocal,
-  blobToBase64String,
   normalizeWaPhone
 } from './deviceSessionHelper';
 
 const MAX_VISUAL_FILE_BYTES = 25 * 1024 * 1024;
-const MAX_AUDIO_FILE_BYTES = 25 * 1024 * 1024;
+const MAX_AUDIO_FILE_BYTES = 15 * 1024 * 1024;
 const RECOMMENDED_FULL_SEC = 15;
 const MAX_CLIP_DURATION_SEC = 30;
+const BATCH_DELAY_MS = 1500;
 
 function formatTimeSec(sec = 0) {
   const safe = Math.max(0, Number(sec) || 0);
@@ -65,25 +73,30 @@ function formatTimeSec(sec = 0) {
 }
 
 export default function WaSoundStickerView({ onBack, onShowToast }) {
-  // ─── 1. VISUAL STATE (FOTO / VIDEO 512x512) ───
+  // ─── NAVIGASI MOBILE & MODE INPUT ───
+  const [mobileTab, setMobileTab] = useState('create'); // 'create' | 'queue' | 'wa'
+  const [inputMode, setInputMode] = useState('single'); // 'single' | 'multi'
+
+  // ─── 1. MODE A: VISUAL & SOUND (1-PER-1 -> ANTREAN) ───
   const [visualFileMeta, setVisualFileMeta] = useState(null);
+  const [visualFileObj, setVisualFileObj] = useState(null);
   const [sourceMedia, setSourceMedia] = useState(null);
   const [isVideoSource, setIsVideoSource] = useState(false);
-  const [visualVideoFile, setVisualVideoFile] = useState(null);
   const [visualPreviewUrl, setVisualPreviewUrl] = useState('');
 
   const [cropMode, setCropMode] = useState('cover'); // 'cover' | 'contain'
   const [bgStyle, setBgStyle] = useState('solid'); // 'solid' | 'blur' | 'transparent'
   const [bgColor, setBgColor] = useState('#111827');
-  const [motionEffect, setMotionEffect] = useState('static'); // 'static' | 'zoom' | 'bounce' | 'wobble'
+  const [motionEffect, setMotionEffect] = useState('static');
   const [stickerText, setStickerText] = useState('');
-  const [textPosition, setTextPosition] = useState('bottom'); // 'bottom' | 'middle' | 'top'
+  const [textPosition, setTextPosition] = useState('bottom');
   const [textSize, setTextSize] = useState(46);
   const [packName, setPackName] = useState('Kuro Sound Sticker');
   const [packPublisher, setPackPublisher] = useState('Kuro Studio');
 
-  // ─── 2. SOUND & WAVEFORM TRIMMER STATE ───
+  // Sound & Waveform Trimmer
   const [audioFileMeta, setAudioFileMeta] = useState(null);
+  const [audioFileObj, setAudioFileObj] = useState(null);
   const [audioBuffer, setAudioBuffer] = useState(null);
   const [waveformPeaks, setWaveformPeaks] = useState([]);
   const [trimMode, setTrimMode] = useState('cut'); // 'full' | 'cut'
@@ -96,13 +109,26 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [isTestingSound, setIsTestingSound] = useState(false);
   const [testPlayheadSec, setTestPlayheadSec] = useState(0);
   const [isDecodingAudio, setIsDecodingAudio] = useState(false);
+  const [isComposingStage1, setIsComposingStage1] = useState(false);
+
+  // ─── 2. MODE B: MULTI-UPLOAD VIDEO BERSUARA SEKALIGUS ───
+  const [multiMaxCapSec, setMultiMaxCapSec] = useState(8);
+  const [isImportingMulti, setIsImportingMulti] = useState(false);
+
+  // ─── 3. ANTREAN BATCH ───
+  const [stickerQueue, setStickerQueue] = useState([]);
+  const [isBatchSending, setIsBatchSending] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(null);
+  const pendingSendResolversRef = useRef(new Map());
+  const activeVisualUrlRef = useRef('');
 
   const waveformCanvasRef = useRef(null);
   const trimPlayerRef = useRef(null);
   const visualInputRef = useRef(null);
   const audioInputRef = useRef(null);
+  const multiVideoInputRef = useRef(null);
 
-  // ─── 3. KONEKSI WA TERISOLASI PER-PERANGKAT & KALIBRASI SKEMA ───
+  // ─── 4. KONEKSI WA TERISOLASI PER-PERANGKAT & KALIBRASI SKEMA ───
   const [{ sessionId, deviceToken }] = useState(() => getOrCreateDeviceCredentials());
   const backendUrl = useMemo(() => getWaBackendUrl(), []);
   const socketRef = useRef(null);
@@ -119,10 +145,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [waError, setWaError] = useState(null);
   const [hasSavedAuth, setHasSavedAuth] = useState(() => hasSavedDeviceLink(sessionId));
 
-  const [sendProgress, setSendProgress] = useState({ active: false, label: '', percent: 0 });
+  const [isRefreshingE2ee, setIsRefreshingE2ee] = useState(false);
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
-  const [isRefreshingE2ee, setIsRefreshingE2ee] = useState(false);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
   const [calibrationLogs, setCalibrationLogs] = useState([]);
   const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
@@ -155,12 +180,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     trimPlayerRef.current = createSnippetPlayer();
     return () => {
       trimPlayerRef.current?.stop();
-      if (visualPreviewUrl) {
-        try { URL.revokeObjectURL(visualPreviewUrl); } catch {}
+      if (activeVisualUrlRef.current) {
+        try { URL.revokeObjectURL(activeVisualUrlRef.current); } catch {}
       }
-      if (sourceMedia instanceof HTMLVideoElement) {
-        try { sourceMedia.pause(); } catch {}
+      for (const rejector of pendingSendResolversRef.current.values()) {
+        try { rejector.reject(new Error('Halaman ditutup.')); } catch {}
       }
+      pendingSendResolversRef.current.clear();
     };
   }, []);
 
@@ -273,7 +299,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       if (unmounted) return;
       setIsRequestingPairing(false);
       setWaError(data?.message || 'Terjadi gangguan pada koneksi WhatsApp.');
-      setSendProgress({ active: false, label: '', percent: 0 });
     });
 
     sock.on('sound-sticker-calibration-armed', () => {
@@ -315,18 +340,44 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     sock.on('sound-sticker-blueprint-ready', handleBlueprintCaptured);
     sock.on('sound-sticker-schema-detected', handleBlueprintCaptured);
 
-    sock.on('sound-sticker-delivery-update', (upd) => {
-      if (unmounted || !upd?.messageId) return;
-      setDeliveryStatus((prev) => {
-        if (prev?.messageId && prev.messageId !== upd.messageId) return prev;
-        return upd;
-      });
-    });
+    const handleAckEvent = (upd) => {
+      if (unmounted || !upd) return;
+      if (upd.queueId) {
+        setStickerQueue((prev) =>
+          prev.map((it) => {
+            if (it.id !== upd.queueId && it.messageId !== upd.messageId) return it;
+            if (upd.isError) {
+              return { ...it, status: 'failed', error: upd.label };
+            }
+            return {
+              ...it,
+              status: upd.status >= 3 ? 'delivered' : 'server_ack',
+              error: null
+            };
+          })
+        );
+      }
+      if (upd.messageId) {
+        setDeliveryStatus((prev) => {
+          if (prev?.messageId && prev.messageId !== upd.messageId) return prev;
+          return upd;
+        });
+      }
+    };
+
+    sock.on('sound-sticker-item-ack', handleAckEvent);
+    sock.on('sound-sticker-delivery-update', handleAckEvent);
 
     sock.on('sound-sticker-result', (res) => {
-      if (unmounted) return;
-      setSendProgress({ active: false, label: '', percent: 0 });
-      if (res?.ok) {
+      if (unmounted || !res) return;
+      if (res.queueId && pendingSendResolversRef.current.has(res.queueId)) {
+        const entry = pendingSendResolversRef.current.get(res.queueId);
+        pendingSendResolversRef.current.delete(res.queueId);
+        if (res.ok) entry.resolve(res);
+        else entry.reject(new Error(res.error || 'Gagal mengirim stiker ke WA.'));
+      }
+
+      if (res.ok) {
         setLastSendResult(res);
         setDeliveryStatus((prev) =>
           prev?.messageId === res.messageId
@@ -334,9 +385,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             : { messageId: res.messageId, status: 1, label: 'Terkirim via E2EE (menunggu ACK perangkat)' }
         );
         setWaError(null);
-        onShowToast?.('Stiker terkirim ke WA Anda via jalur native stickerMessage!', 'success');
-      } else {
-        const errText = res?.error || 'Gagal mengirim stiker ke WhatsApp.';
+      } else if (!res.queueId) {
+        const errText = res.error || 'Gagal mengirim stiker ke WhatsApp.';
         setWaError(errText);
         onShowToast?.(errText, 'error');
       }
@@ -349,7 +399,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     };
   }, [backendUrl, sessionId, deviceToken, onShowToast]);
 
-  // ─── HANDLE UNGGAH VISUAL (FOTO / VIDEO) ───
+  // ─── HANDLE UNGGAH VISUAL (MODE A) ───
   const handleSelectVisualFile = async (file) => {
     if (!file) return;
     if (file.size > MAX_VISUAL_FILE_BYTES) {
@@ -366,76 +416,33 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       return;
     }
 
-    if (visualPreviewUrl) {
-      try { URL.revokeObjectURL(visualPreviewUrl); } catch {}
-    }
-    const objUrl = URL.createObjectURL(file);
+    releaseMediaElement(sourceMedia, visualPreviewUrl);
 
     try {
-      if (isVideo) {
-        const videoEl = document.createElement('video');
-        videoEl.muted = true;
-        videoEl.playsInline = true;
-        videoEl.crossOrigin = 'anonymous';
-        videoEl.preload = 'auto';
-        videoEl.src = objUrl;
-
-        await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('Waktu muat video habis.')), 10000);
-          videoEl.onloadeddata = () => { clearTimeout(timer); resolve(); };
-          videoEl.onerror = () => { clearTimeout(timer); reject(new Error('Browser gagal memuat video ini.')); };
-        });
-
-        validateSourceMediaDimensions(videoEl);
-        setSourceMedia(videoEl);
-        setIsVideoSource(true);
-        setVisualVideoFile(file);
-        setVisualPreviewUrl(objUrl);
-        setVisualFileMeta({
-          name: file.name,
-          kind: 'video',
-          duration: Number(videoEl.duration || 0),
-          width: videoEl.videoWidth,
-          height: videoEl.videoHeight
-        });
-        onShowToast?.('Video dimuat ke stiker kotak 512×512.', 'success');
-      } else {
-        const imgEl = new Image();
-        imgEl.crossOrigin = 'anonymous';
-        imgEl.src = objUrl;
-
-        await new Promise((resolve, reject) => {
-          imgEl.onload = resolve;
-          imgEl.onerror = () => reject(new Error('Gagal memuat file foto.'));
-        });
-        if (imgEl.decode) {
-          await imgEl.decode().catch(() => {});
-        }
-        validateSourceMediaDimensions(imgEl);
-
-        setSourceMedia(imgEl);
-        setIsVideoSource(false);
-        setVisualVideoFile(null);
-        setVisualPreviewUrl(objUrl);
-        setVisualFileMeta({
-          name: file.name,
-          kind: 'image',
-          width: imgEl.naturalWidth,
-          height: imgEl.naturalHeight
-        });
-        onShowToast?.('Foto dimuat ke stiker kotak 512×512.', 'success');
-      }
+      const { mediaEl, objectUrl, isVideo: loadedVideo } = await loadMediaElementFromFile(file);
+      activeVisualUrlRef.current = objectUrl;
+      setVisualPreviewUrl(objectUrl);
+      setSourceMedia(mediaEl);
+      setVisualFileObj(file);
+      setIsVideoSource(loadedVideo);
+      setVisualFileMeta({
+        name: file.name,
+        kind: loadedVideo ? 'video' : 'image',
+        duration: loadedVideo ? Number(mediaEl.duration || 0) : 0,
+        width: loadedVideo ? mediaEl.videoWidth : mediaEl.naturalWidth,
+        height: loadedVideo ? mediaEl.videoHeight : mediaEl.naturalHeight
+      });
+      onShowToast?.(`${loadedVideo ? 'Video' : 'Foto'} dimuat ke pratinjau 512×512.`, 'success');
     } catch (err) {
-      try { URL.revokeObjectURL(objUrl); } catch {}
       onShowToast?.(err.message || 'Gagal membaca berkas visual.', 'error');
     }
   };
 
-  // ─── HANDLE UNGGAH / EKSTRAK AUDIO ───
+  // ─── HANDLE UNGGAH / EKSTRAK AUDIO (MODE A) ───
   const loadAudioSource = async (file, labelPrefix = '') => {
     if (!file) return;
-    if (file.size > MAX_AUDIO_FILE_BYTES) {
-      onShowToast?.('Ukuran file audio melebihi batas maksimal 25 MB.', 'error');
+    if (file.size > MAX_AUDIO_FILE_BYTES && labelPrefix === '') {
+      onShowToast?.('Ukuran file audio melebihi batas maksimal 15 MB.', 'error');
       return;
     }
 
@@ -448,11 +455,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       const peaks = extractWaveformPeaks(decoded, 96);
       const capSec = limitFull15s ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
       const safeFullEnd = Number(Math.min(decoded.duration, capSec).toFixed(1));
-      const initialCutEnd = decoded.duration <= 6
-        ? safeFullEnd
-        : Number(Math.min(5.0, safeFullEnd).toFixed(1));
+      const initialCutEnd = decoded.duration <= 6 ? safeFullEnd : Number(Math.min(5.0, safeFullEnd).toFixed(1));
 
       setAudioBuffer(decoded);
+      setAudioFileObj(file);
       setWaveformPeaks(peaks);
       setAudioFileMeta({ name: `${labelPrefix}${file.name}`, duration: decoded.duration });
       setTrimMode(decoded.duration <= capSec ? 'full' : 'cut');
@@ -524,10 +530,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     ctx.fillRect(0, 0, w, h);
 
     if (!audioBuffer || waveformPeaks.length === 0) {
-      ctx.fillStyle = '#9ca3af';
+      ctx.fillStyle = '#71717a';
       ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Unggah sound atau klik "Pakai Suara Asli dari Video"', w * 0.5, h * 0.54);
+      ctx.fillText('Pilih file sound atau klik "Pakai Suara Video"', w * 0.5, h * 0.54);
       return;
     }
 
@@ -571,11 +577,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     const clickedSec = Number((clickRatio * audioBuffer.duration).toFixed(1));
     const distToStart = Math.abs(clickedSec - startSec);
     const distToEnd = Math.abs(clickedSec - endSec);
-    if (distToStart <= distToEnd) {
-      updateSafeStart(clickedSec);
-    } else {
-      updateSafeEnd(clickedSec);
-    }
+    if (distToStart <= distToEnd) updateSafeStart(clickedSec);
+    else updateSafeEnd(clickedSec);
   };
 
   const handleToggleTestSound = async () => {
@@ -599,7 +602,359 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     });
   };
 
-  // ─── TAUTAN WHATSAPP PER PERANGKAT ───
+  // ─── TAHAP 1 MODE A: GABUNG VIDEO+SOUND & MASUKKAN KE ANTREAN ───
+  const handleAddModeAToQueue = async () => {
+    if (isComposingStage1) return;
+    if (!sourceMedia || !visualFileObj) {
+      onShowToast?.('Pilih Foto atau Video di Langkah 1 terlebih dahulu.', 'error');
+      return;
+    }
+    if (!audioBuffer) {
+      onShowToast?.('Masukkan Audio/Sound terlebih dahulu.', 'error');
+      return;
+    }
+
+    setIsComposingStage1(true);
+    try {
+      validateSourceMediaDimensions(sourceMedia);
+      const thumbnailUrl = createSquareThumbnailDataUrl(sourceMedia, renderOptions);
+
+      let stagedMuxedBlob = null;
+      let stagedMuxedExt = null;
+      const bpContainer = soundStickerBlueprint?.mediaInspection?.detectedContainer || '';
+      const bpMime = String(soundStickerBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
+      if (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm')) {
+        try {
+          const trimmed = await renderTrimmedAudioBuffer(audioBuffer, { startSec, endSec, volume, fadeSmooth });
+          const stage1 = await composeSoundVideoStage1({ sourceMedia, trimmedAudioBuffer: trimmed, renderOptions });
+          stagedMuxedBlob = stage1.blob;
+          stagedMuxedExt = stage1.ext;
+        } catch {}
+      }
+
+      const itemId = `stk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const newItem = {
+        id: itemId,
+        title: visualFileMeta?.name || `Stiker #${stickerQueue.length + 1}`,
+        sourceKind: 'composed',
+        visualFile: visualFileObj,
+        audioFile: audioFileObj,
+        audioBuffer,
+        thumbnailUrl,
+        totalDuration: audioBuffer.duration,
+        startSec,
+        endSec,
+        volume,
+        fadeSmooth,
+        cropMode,
+        bgStyle,
+        bgColor,
+        motionEffect: isVideoSource ? 'static' : motionEffect,
+        stickerText,
+        textPosition,
+        textSize,
+        packName,
+        packPublisher,
+        stagedMuxedBlob,
+        stagedMuxedExt,
+        status: 'ready',
+        error: null
+      };
+
+      setStickerQueue((prev) => [...prev, newItem]);
+      setStickerText('');
+      onShowToast?.('Ditambahkan ke Antrean Stiker Audio!', 'success');
+    } catch (err) {
+      onShowToast?.(err.message || 'Gagal merakit item antrean.', 'error');
+    } finally {
+      setIsComposingStage1(false);
+    }
+  };
+
+  // ─── MODE B: MULTI-UPLOAD BANYAK VIDEO SEKALIGUS KE ANTREAN ───
+  const handleSelectMultiVideos = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    if (files.length > 10) {
+      onShowToast?.('Maksimal 10 video per batch upload agar browser HP tetap ringan.', 'info');
+    }
+    const chosen = files.slice(0, 10);
+    setIsImportingMulti(true);
+
+    const addedItems = [];
+    let firstVisualFile = null;
+
+    for (const file of chosen) {
+      if (file.size > MAX_VISUAL_FILE_BYTES) {
+        onShowToast?.(`${file.name} melebihi batas 25 MB, dilewati.`, 'error');
+        continue;
+      }
+
+      let tempLoaded = null;
+      try {
+        const meta = await probeVideoMetadata(file);
+        tempLoaded = await loadMediaElementFromFile(file);
+        const clipEnd = Number(Math.max(0.5, Math.min(meta.duration, multiMaxCapSec)).toFixed(1));
+        const itemRenderOpts = {
+          cropMode,
+          bgStyle: 'solid',
+          bgColor: '#111827',
+          motionEffect: 'static',
+          stickerText: '',
+          textPosition: 'bottom',
+          textSize: 46
+        };
+        const thumbUrl = createSquareThumbnailDataUrl(tempLoaded.mediaEl, itemRenderOpts);
+        const itemId = `mv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        addedItems.push({
+          id: itemId,
+          title: file.name,
+          sourceKind: 'multi-video',
+          visualFile: file,
+          audioFile: null,
+          audioBuffer: null,
+          thumbnailUrl: thumbUrl,
+          totalDuration: meta.duration,
+          startSec: 0,
+          endSec: clipEnd,
+          volume: 1.0,
+          fadeSmooth: true,
+          cropMode,
+          bgStyle: 'solid',
+          bgColor: '#111827',
+          motionEffect: 'static',
+          stickerText: '',
+          textPosition: 'bottom',
+          textSize: 46,
+          packName,
+          packPublisher,
+          status: 'ready',
+          error: null
+        });
+
+        if (!firstVisualFile) firstVisualFile = file;
+      } catch (err) {
+        onShowToast?.(err.message || `Gagal memuat ${file.name}.`, 'error');
+      } finally {
+        if (tempLoaded) releaseMediaElement(tempLoaded.mediaEl, tempLoaded.objectUrl);
+      }
+    }
+
+    setIsImportingMulti(false);
+    if (addedItems.length > 0) {
+      setStickerQueue((prev) => [...prev, ...addedItems]);
+      onShowToast?.(`${addedItems.length} video bersuara masuk ke Antrean Stiker Audio!`, 'success');
+      if (firstVisualFile) {
+        handleSelectVisualFile(firstVisualFile);
+        loadAudioSource(firstVisualFile, '[Video] ').catch(() => {});
+      }
+    }
+  };
+
+  // ─── PREVIEW ITEM ANTREAN KE LIVE STAGE ───
+  const handlePreviewQueueItem = async (item) => {
+    if (!item?.visualFile) return;
+    setCropMode(item.cropMode || 'cover');
+    setStickerText(item.stickerText || '');
+    setPackName(item.packName || 'Kuro Sound Sticker');
+    setPackPublisher(item.packPublisher || 'Kuro Studio');
+
+    await handleSelectVisualFile(item.visualFile);
+    if (item.audioBuffer) {
+      setAudioBuffer(item.audioBuffer);
+      setWaveformPeaks(extractWaveformPeaks(item.audioBuffer, 96));
+      setStartSec(item.startSec || 0);
+      setEndSec(item.endSec || 5);
+    } else {
+      await loadAudioSource(item.visualFile, '[Video] ');
+      setStartSec(item.startSec || 0);
+      setEndSec(item.endSec || 5);
+    }
+    setInputMode('single');
+    setMobileTab('create');
+  };
+
+  // ─── KIRIM 1 ITEM (LANGSUNG / RETRY / BAGIAN DARI BATCH) ───
+  const sendSingleQueueItem = useCallback(
+    async (item) => {
+      if (!socketRef.current || connectionStatus !== 'connected') {
+        throw new Error('Perangkat WA belum tertaut aktif.');
+      }
+
+      setStickerQueue((prev) =>
+        prev.map((it) => (it.id === item.id ? { ...it, status: 'composing', error: null } : it))
+      );
+
+      const payload = await buildStickerSendPayload({
+        item,
+        blueprint: soundStickerBlueprint
+      });
+
+      setStickerQueue((prev) =>
+        prev.map((it) => (it.id === item.id ? { ...it, status: 'sending', error: null } : it))
+      );
+
+      const res = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pendingSendResolversRef.current.delete(item.id);
+          reject(new Error('Batas waktu tunggu server (30s) terlampaui.'));
+        }, 30000);
+
+        pendingSendResolversRef.current.set(item.id, {
+          resolve: (r) => {
+            clearTimeout(timer);
+            resolve(r);
+          },
+          reject: (e) => {
+            clearTimeout(timer);
+            reject(e);
+          }
+        });
+
+        socketRef.current.emit('send-self-sound-sticker', {
+          sessionId,
+          deviceToken,
+          ...payload
+        });
+      });
+
+      setStickerQueue((prev) =>
+        prev.map((it) =>
+          it.id === item.id
+            ? {
+                ...it,
+                messageId: res.messageId,
+                status: it.status === 'delivered' ? 'delivered' : 'server_ack',
+                error: null
+              }
+            : it
+        )
+      );
+
+      return res;
+    },
+    [connectionStatus, deviceToken, sessionId, soundStickerBlueprint]
+  );
+
+  // Kirim Langsung 1 Ini dari Mode A
+  const handleSendCurrentSingle = async () => {
+    if (isBatchSending) return;
+    if (!sourceMedia || !visualFileObj || !audioBuffer) {
+      onShowToast?.('Lengkapi visual dan audio terlebih dahulu.', 'error');
+      return;
+    }
+    if (connectionStatus !== 'connected') {
+      onShowToast?.('Tautkan WhatsApp terlebih dahulu.', 'error');
+      setMobileTab('wa');
+      return;
+    }
+
+    const tempItem = {
+      id: `direct_${Date.now()}`,
+      title: visualFileMeta?.name || 'Stiker Suara',
+      sourceKind: 'composed',
+      visualFile: visualFileObj,
+      audioFile: audioFileObj,
+      audioBuffer,
+      thumbnailUrl: createSquareThumbnailDataUrl(sourceMedia, renderOptions),
+      totalDuration: audioBuffer.duration,
+      startSec,
+      endSec,
+      volume,
+      fadeSmooth,
+      cropMode,
+      bgStyle,
+      bgColor,
+      motionEffect: isVideoSource ? 'static' : motionEffect,
+      stickerText,
+      textPosition,
+      textSize,
+      packName,
+      packPublisher,
+      status: 'composing',
+      error: null
+    };
+
+    setIsBatchSending(true);
+    setBatchProgress({ current: 1, total: 1, label: 'Merakit & mengirim Stiker ke WA...' });
+    try {
+      await sendSingleQueueItem(tempItem);
+      onShowToast?.('Stiker terkirim ke chat WA Anda sendiri!', 'success');
+    } catch (err) {
+      setWaError(err.message || 'Gagal mengirim stiker.');
+      onShowToast?.(err.message || 'Gagal mengirim stiker.', 'error');
+    } finally {
+      setIsBatchSending(false);
+      setBatchProgress(null);
+    }
+  };
+
+  // Kirim Semua Antrean Berurutan (Jeda 1500ms Antar Item)
+  const handleSendAllQueue = async () => {
+    if (isBatchSending) return;
+    if (connectionStatus !== 'connected') {
+      onShowToast?.('Tautkan WhatsApp terlebih dahulu di Koneksi WA.', 'error');
+      setMobileTab('wa');
+      return;
+    }
+
+    const targets = stickerQueue.filter((it) => it.status !== 'delivered' && it.status !== 'server_ack');
+    if (targets.length === 0) return;
+
+    setIsBatchSending(true);
+    let okCount = 0;
+
+    for (let i = 0; i < targets.length; i++) {
+      const item = targets[i];
+      setBatchProgress({
+        current: i + 1,
+        total: targets.length,
+        label: `Mengirim Stiker ${i + 1} dari ${targets.length}: ${item.title}`
+      });
+
+      try {
+        await sendSingleQueueItem(item);
+        okCount++;
+      } catch (err) {
+        setStickerQueue((prev) =>
+          prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: err.message } : it))
+        );
+      }
+
+      if (i < targets.length - 1) {
+        await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+      }
+    }
+
+    setIsBatchSending(false);
+    setBatchProgress(null);
+    if (okCount === targets.length) {
+      onShowToast?.(`${okCount} Stiker berhasil dikirim ke chat WA Anda!`, 'success');
+    } else {
+      onShowToast?.(`${okCount}/${targets.length} terkirim. Item gagal dapat dicoba ulang 1 klik.`, 'info');
+    }
+  };
+
+  const handleRetryQueueItem = async (item) => {
+    if (isBatchSending || connectionStatus !== 'connected') return;
+    setIsBatchSending(true);
+    setBatchProgress({ current: 1, total: 1, label: `Mengirim ulang ${item.title}...` });
+    try {
+      await sendSingleQueueItem(item);
+      onShowToast?.(`${item.title} berhasil dikirim ulang!`, 'success');
+    } catch (err) {
+      setStickerQueue((prev) =>
+        prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: err.message } : it))
+      );
+      onShowToast?.(err.message || 'Gagal kirim ulang.', 'error');
+    } finally {
+      setIsBatchSending(false);
+      setBatchProgress(null);
+    }
+  };
+
+  // ─── TAUTAN WHATSAPP & DETEKSI FORMAT ───
   const handleStartPairing = (method) => {
     const sock = socketRef.current;
     if (!sock || !socketConnected) {
@@ -651,117 +1006,6 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     setConnectionStatus('disconnected');
   };
 
-  // ─── KIRIM NATIVE STIKER WA (ZERO VIDEO / ZERO AUDIO MESSAGE) ───
-  const handleSendToSelfWa = async () => {
-    if (sendProgress.active) return;
-    if (!sourceMedia) {
-      onShowToast?.('Pilih Foto atau Video di Langkah 1 terlebih dahulu.', 'error');
-      return;
-    }
-    if (!audioBuffer) {
-      onShowToast?.('Masukkan Audio/Sound di Langkah 2 terlebih dahulu.', 'error');
-      return;
-    }
-    if (connectionStatus !== 'connected' || !socketRef.current) {
-      onShowToast?.('Perangkat WA belum tertaut aktif. Tautkan di Langkah 4.', 'error');
-      return;
-    }
-
-    setWaError(null);
-    setLastSendResult(null);
-    setDeliveryStatus(null);
-    setSendProgress({ active: true, label: 'Memvalidasi Visual 512×512...', percent: 15 });
-
-    try {
-      validateSourceMediaDimensions(sourceMedia);
-
-      setSendProgress({
-        active: true,
-        label: `Memotong Audio (${startSec.toFixed(1)}s – ${endSec.toFixed(1)}s)...`,
-        percent: 30
-      });
-      const trimmedAudio = await renderTrimmedAudioBuffer(audioBuffer, {
-        startSec,
-        endSec,
-        volume,
-        fadeSmooth
-      });
-
-      const willAnimate = isVideoSource || motionEffect !== 'static';
-      setSendProgress({ active: true, label: 'Merakit Stiker 512×512 (WebP + EXIF)...', percent: 50 });
-      const webpBlob = await buildWaWebpStickerBlob({
-        sourceMedia,
-        isAnimated: willAnimate,
-        durationSec: Math.min(5, selectedDuration),
-        renderOptions,
-        packMeta: { packName, publisher: packPublisher },
-        onProgress: (p) => setSendProgress({
-          active: true,
-          label: `Merakit Paket Stiker (${p}%)...`,
-          percent: 50 + Math.round(p * 0.25)
-        })
-      });
-
-      if (!webpBlob || webpBlob.size <= 200 || webpBlob.size > 1024 * 1024) {
-        throw new Error('Ukuran stiker WebP tidak valid atau melebihi batas 1 MB.');
-      }
-
-      const stickerWebpBase64 = await blobToBase64String(webpBlob);
-      let audioM4aBase64;
-      let muxedMp4Base64;
-
-      const bpContainer = soundStickerBlueprint?.mediaInspection?.detectedContainer || '';
-      const bpMime = String(soundStickerBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
-      const needsMuxed = bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm');
-      const needsCustomAudio = (soundStickerBlueprint?.mediaInspection?.customChunks?.length || 0) > 0;
-
-      if (needsCustomAudio) {
-        setSendProgress({ active: true, label: 'Mengemas potongan suara M4A...', percent: 78 });
-        try {
-          const encodedAudio = await encodeTrimmedAudio(trimmedAudio);
-          if (encodedAudio?.blob && encodedAudio.ext === 'm4a' && encodedAudio.blob.size > 100) {
-            audioM4aBase64 = await blobToBase64String(encodedAudio.blob);
-          }
-        } catch {}
-      }
-
-      if (needsMuxed) {
-        setSendProgress({ active: true, label: 'Merakit kontainer stiker bersuara 512×512...', percent: 82 });
-        try {
-          const muxedBlob = await composeMuxedStickerContainer({
-            sourceMedia,
-            trimmedAudioBuffer: trimmedAudio,
-            renderOptions
-          });
-          if (muxedBlob && muxedBlob.size > 100) {
-            muxedMp4Base64 = await blobToBase64String(muxedBlob);
-          }
-        } catch {}
-      }
-
-      setSendProgress({ active: true, label: 'Mengirim ke Nomor WA Anda (stickerMessage)...', percent: 92 });
-
-      socketRef.current.emit('send-self-sound-sticker', {
-        sessionId,
-        deviceToken,
-        stickerWebpBase64,
-        ...(audioM4aBase64 ? { audioM4aBase64 } : {}),
-        ...(muxedMp4Base64 ? { muxedMp4Base64 } : {}),
-        durationSec: selectedDuration,
-        isAnimated: willAnimate,
-        width: 512,
-        height: 512,
-        packName,
-        packAuthor: packPublisher,
-        blueprint: soundStickerBlueprint || undefined
-      });
-    } catch (err) {
-      setSendProgress({ active: false, label: '', percent: 0 });
-      setWaError(err.message || 'Gagal menyiapkan stiker untuk WhatsApp.');
-      onShowToast?.(err.message || 'Gagal menyiapkan stiker.', 'error');
-    }
-  };
-
   const handleArmCalibration = () => {
     if (connectionStatus !== 'connected' || !socketRef.current) {
       onShowToast?.('Tautkan WhatsApp terlebih dahulu sebelum memulai deteksi format.', 'error');
@@ -778,14 +1022,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-5 overflow-x-hidden min-w-0">
+    <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-20 lg:pb-8 space-y-4 overflow-x-hidden min-w-0">
       {/* Header Studio */}
-      <div className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <header className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
             onClick={onBack}
-            className="p-2 bg-white hover:bg-neutral-100 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 cursor-pointer shrink-0"
+            className="w-10 h-10 flex items-center justify-center bg-white hover:bg-neutral-100 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 cursor-pointer shrink-0"
             title="Kembali ke Beranda"
             aria-label="Kembali ke Beranda"
           >
@@ -798,456 +1042,659 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <span>Stiker Suara WA</span>
               </h1>
               <span className="px-2 py-0.5 bg-emerald-300 border border-black font-mono font-black text-[10px]">
-                WA SOUND
+                STIKER AUDIO
               </span>
             </div>
-            <p className="text-xs text-neutral-700 font-semibold mt-0.5">
-              Buat Stiker Suara kotak 1:1 (512&times;512) dengan teks meme &amp; potongan detik presisi, cek live chat WA, lalu kirim langsung ke WA Anda.
+            <p className="text-xs text-neutral-700 font-semibold mt-0.5 leading-snug">
+              Rakit stiker 1:1 bersuara, kumpulkan di antrean, lalu kirim sekaligus langsung ke chat WhatsApp Anda.
             </p>
           </div>
         </div>
 
-        <span className={`px-2.5 py-1 border-2 border-black font-mono font-black text-[10px] self-start sm:self-center shrink-0 ${
-          connectionStatus === 'connected' ? 'bg-emerald-300 text-black' : 'bg-yellow-200 text-black'
-        }`}>
+        <button
+          type="button"
+          onClick={() => setMobileTab('wa')}
+          className={`px-2.5 py-1.5 border-2 border-black font-mono font-black text-[10px] self-start sm:self-center shrink-0 cursor-pointer ${
+            connectionStatus === 'connected' ? 'bg-emerald-300 text-black' : 'bg-yellow-200 text-black'
+          }`}
+        >
           {connectionStatus === 'connected' ? `WA AKTIF +${connectedPhone}` : 'WA BELUM TERTAUT'}
-        </span>
-      </div>
+        </button>
+      </header>
+
+      {/* Navigasi 3 Tab Mobile (< 1024px) */}
+      <nav className="grid grid-cols-3 border-2 border-black bg-white shadow-[3px_3px_0px_#000] lg:hidden">
+        <button
+          type="button"
+          onClick={() => setMobileTab('create')}
+          className={`py-2.5 px-2 font-black text-xs min-h-[42px] truncate cursor-pointer ${
+            mobileTab === 'create' ? 'bg-black text-yellow-300' : 'text-black hover:bg-neutral-100'
+          }`}
+        >
+          Buat Stiker
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab('queue')}
+          className={`py-2.5 px-2 font-black text-xs border-l-2 border-black min-h-[42px] truncate cursor-pointer ${
+            mobileTab === 'queue' ? 'bg-black text-emerald-300' : 'text-black hover:bg-neutral-100'
+          }`}
+        >
+          Antrean ({stickerQueue.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab('wa')}
+          className={`py-2.5 px-2 font-black text-xs border-l-2 border-black min-h-[42px] truncate cursor-pointer ${
+            mobileTab === 'wa' ? 'bg-black text-cyan-300' : 'text-black hover:bg-neutral-100'
+          }`}
+        >
+          Koneksi WA
+        </button>
+      </nav>
 
       {/* Workspace 2 Kolom Responsif */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        {/* ─── KOLOM KIRI: INPUT VISUAL & PEMOTONG SOUND ─── */}
-        <div className="lg:col-span-7 space-y-5 min-w-0">
-          {/* LANGKAH 1 */}
-          <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
-            <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 bg-yellow-300 border border-black font-black text-[10px] uppercase">
-                  Langkah 1
-                </span>
-                <h2 className="font-black text-sm uppercase text-black">
-                  Visual Stiker Kotak 1:1 &amp; Teks Meme
-                </h2>
-              </div>
-              {visualFileMeta && (
-                <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black">
-                  {visualFileMeta.kind === 'video' ? 'VIDEO' : 'FOTO'} ({visualFileMeta.width}&times;{visualFileMeta.height})
-                </span>
-              )}
-            </div>
-
+        {/* ─── KOLOM KIRI: 2-MODE CREATOR & LIVE PREVIEW ─── */}
+        <div className={`lg:col-span-7 space-y-4 min-w-0 ${mobileTab === 'create' ? 'block' : 'hidden lg:block'}`}>
+          {/* Switcher Mode A vs Mode B */}
+          <div className="grid grid-cols-2 border-2 border-black bg-white shadow-[4px_4px_0px_#000]">
             <button
               type="button"
-              onClick={() => visualInputRef.current?.click()}
-              className="w-full p-4 border-2 border-dashed border-black bg-neutral-50 hover:bg-yellow-50 transition-colors flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer min-h-[104px]"
+              onClick={() => setInputMode('single')}
+              className={`py-2.5 px-3 font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer ${
+                inputMode === 'single' ? 'bg-yellow-300 text-black' : 'bg-white text-neutral-700 hover:bg-neutral-50'
+              }`}
             >
-              <div className="flex items-center gap-2 text-black">
-                <ImageIcon className="w-5 h-5" />
-                <Film className="w-5 h-5" />
-              </div>
-              <span className="font-black text-xs text-black break-all">
-                {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih Foto (JPG/PNG/WebP) atau Video (MP4/WebM/MOV)'}
-              </span>
-              <span className="text-[11px] font-semibold text-neutral-600">
-                1:1 Persegi 512&times;512 px &bull; Diproses 100% di browser Anda (maks 25 MB)
-              </span>
+              <Sparkles className="w-4 h-4 shrink-0" />
+              <span className="truncate">Video + Sound</span>
             </button>
-            <input
-              ref={visualInputRef}
-              type="file"
-              accept="image/*,video/*"
-              onChange={(e) => handleSelectVisualFile(e.target.files?.[0])}
-              className="hidden"
-            />
+            <button
+              type="button"
+              onClick={() => setInputMode('multi')}
+              className={`py-2.5 px-3 font-black text-xs sm:text-sm border-l-2 border-black flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer ${
+                inputMode === 'multi' ? 'bg-cyan-300 text-black' : 'bg-white text-neutral-700 hover:bg-neutral-50'
+              }`}
+            >
+              <Layers className="w-4 h-4 shrink-0" />
+              <span className="truncate">Video Bersuara Banyak</span>
+            </button>
+          </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="space-y-1.5">
-                <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Framing 1:1:
-                </label>
+          {inputMode === 'single' ? (
+            <>
+              {/* MODE A — INPUT VISUAL + OPSI 1:1 */}
+              <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-yellow-300 border border-black font-black text-[10px] uppercase">
+                      Mode A • 1
+                    </span>
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black">
+                      Pilih Foto atau Video (1:1)
+                    </h2>
+                  </div>
+                  {visualFileMeta && (
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black">
+                      {visualFileMeta.kind === 'video' ? 'VIDEO' : 'FOTO'} ({visualFileMeta.width}&times;{visualFileMeta.height})
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => visualInputRef.current?.click()}
+                  className="w-full p-4 border-2 border-dashed border-black bg-neutral-50 hover:bg-yellow-50 transition-colors flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer min-h-[96px]"
+                >
+                  <div className="flex items-center gap-2 text-black">
+                    <ImageIcon className="w-5 h-5" />
+                    <Film className="w-5 h-5" />
+                  </div>
+                  <span className="font-black text-xs text-black break-all">
+                    {visualFileMeta ? `Ganti Visual: ${visualFileMeta.name}` : 'Pilih 1 Foto atau Video (MP4/WebM/JPG/PNG)'}
+                  </span>
+                  <span className="text-[11px] font-semibold text-neutral-600">
+                    Kotak 512&times;512 px &bull; Diproses lokal di perangkat (maks 25 MB)
+                  </span>
+                </button>
+                <input
+                  ref={visualInputRef}
+                  type="file"
+                  accept="image/*,video/*"
+                  onChange={(e) => handleSelectVisualFile(e.target.files?.[0])}
+                  className="hidden"
+                />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Framing 1:1:</label>
+                    <div className="grid grid-cols-2 border-2 border-black bg-white">
+                      <button
+                        type="button"
+                        onClick={() => setCropMode('cover')}
+                        className={`py-2 px-2 font-black text-[11px] min-h-[38px] cursor-pointer ${
+                          cropMode === 'cover' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
+                        }`}
+                      >
+                        Crop Penuh
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCropMode('contain')}
+                        className={`py-2 px-2 font-black text-[11px] border-l-2 border-black min-h-[38px] cursor-pointer ${
+                          cropMode === 'contain' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
+                        }`}
+                      >
+                        Pas (Fit)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Latar Belakang:</label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={bgStyle}
+                        onChange={(e) => setBgStyle(e.target.value)}
+                        className="flex-1 bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer min-h-[38px]"
+                      >
+                        <option value="solid">Warna Solid</option>
+                        <option value="blur">Blur Otomatis</option>
+                        <option value="transparent">Transparan</option>
+                      </select>
+                      {bgStyle === 'solid' && (
+                        <input
+                          type="color"
+                          value={bgColor}
+                          onChange={(e) => setBgColor(e.target.value)}
+                          className="w-10 h-9 border-2 border-black bg-white p-0.5 cursor-pointer shrink-0"
+                          aria-label="Warna latar stiker"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  {!isVideoSource && (
+                    <div className="space-y-1">
+                      <label className="font-black uppercase text-[10px] text-neutral-700 block">Efek Gerak Foto:</label>
+                      <select
+                        value={motionEffect}
+                        onChange={(e) => setMotionEffect(e.target.value)}
+                        className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer min-h-[38px]"
+                      >
+                        <option value="static">Diam (Statis)</option>
+                        <option value="zoom">Zoom Halus</option>
+                        <option value="bounce">Denyut Irama</option>
+                        <option value="wobble">Goyang Meme</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <div className={`space-y-1 ${isVideoSource ? 'sm:col-span-2' : ''}`}>
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">
+                      Teks Meme Stiker (Opsional):
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={stickerText}
+                        maxLength={40}
+                        onChange={(e) => setStickerText(e.target.value)}
+                        placeholder="Contoh: JAWA JAWA JAWA"
+                        className="flex-1 min-w-0 bg-white border-2 border-black px-2.5 py-2 font-bold text-xs min-h-[38px]"
+                      />
+                      <select
+                        value={textPosition}
+                        onChange={(e) => setTextPosition(e.target.value)}
+                        className="bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer min-h-[38px]"
+                      >
+                        <option value="bottom">Bawah</option>
+                        <option value="middle">Tengah</option>
+                        <option value="top">Atas</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {stickerText.trim() && (
+                    <div className="sm:col-span-2 space-y-1">
+                      <div className="flex justify-between font-bold text-[11px]">
+                        <span>Ukuran Teks:</span>
+                        <span className="font-mono">{textSize}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="28"
+                        max="64"
+                        step="2"
+                        value={textSize}
+                        onChange={(e) => setTextSize(Number(e.target.value))}
+                        className="w-full accent-black cursor-pointer h-2"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Nama Pack:</label>
+                    <input
+                      type="text"
+                      value={packName}
+                      maxLength={50}
+                      onChange={(e) => setPackName(e.target.value)}
+                      className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Pembuat:</label>
+                    <input
+                      type="text"
+                      value={packPublisher}
+                      maxLength={50}
+                      onChange={(e) => setPackPublisher(e.target.value)}
+                      className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* MODE A — INPUT SOUND & WAVEFORM TRIMMER */}
+              <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase">
+                      Mode A • 2
+                    </span>
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black flex items-center gap-1.5">
+                      <Scissors className="w-4 h-4" />
+                      Sound &amp; Atur Detik Potongan
+                    </h2>
+                  </div>
+                  {audioFileMeta && (
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-100 border border-black">
+                      Asli: {audioFileMeta.duration.toFixed(1)}s
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button
+                    type="button"
+                    onClick={() => audioInputRef.current?.click()}
+                    disabled={isDecodingAudio}
+                    className="flex-1 p-3 border-2 border-black bg-neutral-50 hover:bg-cyan-50 font-black text-xs flex items-center justify-center gap-2 cursor-pointer min-w-0 min-h-[42px]"
+                  >
+                    {isDecodingAudio ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Music className="w-4 h-4 shrink-0" />}
+                    <span className="truncate">
+                      {audioFileMeta ? `Ganti Sound (${audioFileMeta.name})` : 'Pilih File Audio (MP3/WAV/M4A/OGG)'}
+                    </span>
+                  </button>
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept="audio/*,video/*"
+                    onChange={(e) => loadAudioSource(e.target.files?.[0])}
+                    className="hidden"
+                  />
+
+                  {isVideoSource && visualFileObj && (
+                    <button
+                      type="button"
+                      onClick={() => loadAudioSource(visualFileObj, '[Suara Video] ')}
+                      disabled={isDecodingAudio}
+                      className="px-3 py-2.5 bg-yellow-300 hover:bg-yellow-400 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 min-h-[42px]"
+                    >
+                      <Film className="w-4 h-4" />
+                      <span>Pakai Suara Video</span>
+                    </button>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-2 border-2 border-black bg-white">
                   <button
                     type="button"
-                    onClick={() => setCropMode('cover')}
-                    className={`py-2 px-2 font-black text-[11px] cursor-pointer ${
-                      cropMode === 'cover' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
+                    onClick={() => handleChangeTrimMode('full')}
+                    className={`py-2 px-3 font-black text-xs min-h-[38px] cursor-pointer ${
+                      trimMode === 'full' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
                     }`}
                   >
-                    Crop Penuh
+                    Full Sound
                   </button>
                   <button
                     type="button"
-                    onClick={() => setCropMode('contain')}
-                    className={`py-2 px-2 font-black text-[11px] border-l-2 border-black cursor-pointer ${
-                      cropMode === 'contain' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
+                    onClick={() => handleChangeTrimMode('cut')}
+                    className={`py-2 px-3 font-black text-xs border-l-2 border-black min-h-[38px] cursor-pointer ${
+                      trimMode === 'cut' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
                     }`}
                   >
-                    Pas (Fit)
+                    Atur Detik (Potong)
                   </button>
                 </div>
-              </div>
 
-              <div className="space-y-1.5">
-                <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Latar Belakang Kotak:
-                </label>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={bgStyle}
-                    onChange={(e) => setBgStyle(e.target.value)}
-                    className="flex-1 bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer"
-                  >
-                    <option value="solid">Latar Warna Solid</option>
-                    <option value="blur">Latar Blur Otomatis (Fit)</option>
-                    <option value="transparent">Transparan</option>
-                  </select>
-                  {bgStyle === 'solid' && (
-                    <input
-                      type="color"
-                      value={bgColor}
-                      onChange={(e) => setBgColor(e.target.value)}
-                      className="w-10 h-9 border-2 border-black bg-white p-0.5 cursor-pointer"
-                      aria-label="Warna latar stiker"
-                    />
-                  )}
-                </div>
-              </div>
-
-              {!isVideoSource && (
-                <div className="space-y-1.5">
-                  <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                    Efek Gerak Foto:
-                  </label>
-                  <select
-                    value={motionEffect}
-                    onChange={(e) => setMotionEffect(e.target.value)}
-                    className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer"
-                  >
-                    <option value="static">Diam (Statis)</option>
-                    <option value="zoom">Zoom Halus</option>
-                    <option value="bounce">Denyut Irama (Beat Bounce)</option>
-                    <option value="wobble">Goyang Meme</option>
-                  </select>
-                </div>
-              )}
-
-              <div className={`space-y-1.5 ${isVideoSource ? 'sm:col-span-2' : ''}`}>
-                <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Teks Meme Stiker WA (Putih Outline Hitam):
-                </label>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={stickerText}
-                    maxLength={40}
-                    onChange={(e) => setStickerText(e.target.value)}
-                    placeholder="Contoh: JAWA JAWA JAWA"
-                    className="flex-1 min-w-0 bg-white border-2 border-black px-2.5 py-2 font-bold text-xs"
-                  />
-                  <select
-                    value={textPosition}
-                    onChange={(e) => setTextPosition(e.target.value)}
-                    className="bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer"
-                  >
-                    <option value="bottom">Bawah</option>
-                    <option value="middle">Tengah</option>
-                    <option value="top">Atas</option>
-                  </select>
-                </div>
-              </div>
-
-              {stickerText.trim() && (
-                <div className="sm:col-span-2 space-y-1">
-                  <div className="flex justify-between font-bold text-[11px]">
-                    <span>Ukuran Teks Meme:</span>
-                    <span className="font-mono">{textSize}px</span>
+                {trimMode === 'full' && audioBuffer && audioBuffer.duration > RECOMMENDED_FULL_SEC && (
+                  <div className="p-2.5 bg-amber-50 border border-black text-[11px] font-semibold flex items-center justify-between gap-2 flex-wrap">
+                    <span className="flex items-center gap-1.5">
+                      <Info className="w-4 h-4 text-amber-700 shrink-0" />
+                      Durasi &gt; 15s. Batasi 15s agar ukuran aman?
+                    </span>
+                    <label className="flex items-center gap-1.5 font-black cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={limitFull15s}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          setLimitFull15s(next);
+                          applyFullModeBounds(audioBuffer, next);
+                        }}
+                        className="w-4 h-4 accent-black"
+                      />
+                      <span>Batasi 15s</span>
+                    </label>
                   </div>
-                  <input
-                    type="range"
-                    min="28"
-                    max="64"
-                    step="2"
-                    value={textSize}
-                    onChange={(e) => setTextSize(Number(e.target.value))}
-                    className="w-full accent-black cursor-pointer h-2"
+                )}
+
+                <div className="border-2 border-black bg-neutral-50 overflow-hidden">
+                  <canvas
+                    ref={waveformCanvasRef}
+                    width={640}
+                    height={88}
+                    onClick={handleWaveformClick}
+                    className="w-full h-22 block cursor-pointer"
+                    title="Ketuk waveform untuk mengatur titik mulai atau selesai"
                   />
                 </div>
-              )}
 
-              <div className="space-y-1">
-                <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Nama Pack WA:
-                </label>
-                <input
-                  type="text"
-                  value={packName}
-                  maxLength={50}
-                  onChange={(e) => setPackName(e.target.value)}
-                  className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
-                />
+                {audioBuffer && (
+                  <div className="space-y-3 text-xs">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="p-2 bg-neutral-50 border border-black space-y-1">
+                        <div className="flex items-center justify-between font-black text-[11px]">
+                          <span>Mulai:</span>
+                          <span className="font-mono text-emerald-700">{formatTimeSec(startSec)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateSafeStart(startSec - 0.5)}
+                            className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            -0.5s
+                          </button>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max={Math.max(0, audioBuffer.duration - 0.2).toFixed(1)}
+                            value={startSec}
+                            onChange={(e) => updateSafeStart(e.target.value)}
+                            className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateSafeStart(startSec + 0.5)}
+                            className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            +0.5s
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-2 bg-neutral-50 border border-black space-y-1">
+                        <div className="flex items-center justify-between font-black text-[11px]">
+                          <span>Selesai:</span>
+                          <span className="font-mono text-emerald-700">{formatTimeSec(endSec)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => updateSafeEnd(endSec - 0.5)}
+                            className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            -0.5s
+                          </button>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.2"
+                            max={audioBuffer.duration.toFixed(1)}
+                            value={endSec}
+                            onChange={(e) => updateSafeEnd(e.target.value)}
+                            className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateSafeEnd(endSec + 0.5)}
+                            className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
+                          >
+                            +0.5s
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-emerald-50 border-2 border-black">
+                      <span className="font-black text-xs">
+                        Durasi Stiker: <span className="font-mono text-emerald-800">{selectedDuration} detik</span>
+                      </span>
+
+                      <button
+                        type="button"
+                        onClick={handleToggleTestSound}
+                        className={`px-3 py-2 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px] ${
+                          isTestingSound ? 'bg-rose-500 text-white' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
+                        }`}
+                      >
+                        {isTestingSound ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-black" />}
+                        <span>{isTestingSound ? 'Hentikan Tes' : 'Tes Sound'}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                      <div>
+                        <div className="flex justify-between font-bold text-[11px] mb-1">
+                          <span>Volume Sound:</span>
+                          <span className="font-mono">{Math.round(volume * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="1.5"
+                          step="0.05"
+                          value={volume}
+                          onChange={(e) => setVolume(Number(e.target.value))}
+                          className="w-full accent-black cursor-pointer h-2"
+                        />
+                      </div>
+
+                      <label className="flex items-center justify-between gap-2 text-[11px] font-bold cursor-pointer">
+                        <span>Fade Halus 40ms</span>
+                        <input
+                          type="checkbox"
+                          checked={fadeSmooth}
+                          onChange={(e) => setFadeSmooth(e.target.checked)}
+                          className="w-4 h-4 accent-black cursor-pointer"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              {/* LIVE PREVIEW STIKER + AKSI TAMBAH ANTREAN / KIRIM LANGSUNG */}
+              <WaSoundStickerPreview
+                sourceMedia={sourceMedia}
+                isVideoSource={isVideoSource}
+                audioBuffer={audioBuffer}
+                waveformPeaks={waveformPeaks}
+                startSec={startSec}
+                endSec={endSec}
+                volume={volume}
+                fadeSmooth={fadeSmooth}
+                renderOptions={renderOptions}
+              />
+
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleAddModeAToQueue}
+                  disabled={isComposingStage1 || !sourceMedia || !audioBuffer}
+                  className="flex-1 py-3 px-4 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
+                >
+                  {isComposingStage1 ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4 stroke-[2.5]" />}
+                  <span>+ Tambah ke Antrean Stiker Audio</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSendCurrentSingle}
+                  disabled={isBatchSending || isComposingStage1 || !sourceMedia || !audioBuffer}
+                  className="py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px] shrink-0"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>Kirim Langsung 1 Ini</span>
+                </button>
               </div>
-
-              <div className="space-y-1">
-                <label className="font-black uppercase text-[10px] text-neutral-700 block">
-                  Nama Pembuat:
-                </label>
-                <input
-                  type="text"
-                  value={packPublisher}
-                  maxLength={50}
-                  onChange={(e) => setPackPublisher(e.target.value)}
-                  className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* LANGKAH 2 */}
-          <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
-            <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase">
-                  Langkah 2
+            </>
+          ) : (
+            /* MODE B — MULTI-UPLOAD VIDEO BERSUARA SEKALIGUS */
+            <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
+              <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase">
+                    Mode B • Batch
+                  </span>
+                  <h2 className="font-black text-xs sm:text-sm uppercase text-black">
+                    Unggah Banyak Video Bersuara Sekaligus
+                  </h2>
+                </div>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black">
+                  Maks 10 Video
                 </span>
-                <h2 className="font-black text-sm uppercase text-black flex items-center gap-1.5">
-                  <Scissors className="w-4 h-4" />
-                  Sound &amp; Atur Detik Potongan
-                </h2>
               </div>
-              {audioFileMeta && (
-                <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-emerald-100 border border-black">
-                  Asli: {audioFileMeta.duration.toFixed(1)}s
-                </span>
-              )}
-            </div>
 
-            <div className="flex flex-col sm:flex-row gap-2">
               <button
                 type="button"
-                onClick={() => audioInputRef.current?.click()}
-                disabled={isDecodingAudio}
-                className="flex-1 p-3 border-2 border-black bg-neutral-50 hover:bg-cyan-50 font-black text-xs flex items-center justify-center gap-2 cursor-pointer min-w-0"
+                onClick={() => multiVideoInputRef.current?.click()}
+                disabled={isImportingMulti}
+                className="w-full p-5 border-2 border-dashed border-black bg-cyan-50/70 hover:bg-cyan-100 transition-colors flex flex-col items-center justify-center gap-2 text-center cursor-pointer min-h-[130px]"
               >
-                {isDecodingAudio ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Music className="w-4 h-4 shrink-0" />}
-                <span className="truncate">
-                  {audioFileMeta ? `Ganti Sound (${audioFileMeta.name})` : 'Pilih File Audio (MP3/WAV/M4A/OGG/AAC)'}
+                {isImportingMulti ? (
+                  <Loader2 className="w-7 h-7 animate-spin text-black" />
+                ) : (
+                  <Layers className="w-7 h-7 text-black" />
+                )}
+                <span className="font-black text-xs sm:text-sm text-black">
+                  {isImportingMulti ? 'Membaca video & membuat thumbnail 1:1...' : 'Pilih Banyak Video Bersuara Sekaligus'}
+                </span>
+                <span className="text-[11px] font-semibold text-neutral-700 max-w-md">
+                  Cocok jika video Anda sudah ada suaranya (MP4/WebM/MOV). Semua file langsung masuk ke Antrean Stiker Audio (crop 1:1 &amp; pertahankan audio asli).
                 </span>
               </button>
               <input
-                ref={audioInputRef}
+                ref={multiVideoInputRef}
                 type="file"
-                accept="audio/*,video/*"
-                onChange={(e) => loadAudioSource(e.target.files?.[0])}
+                multiple
+                accept="video/mp4,video/webm,video/quicktime,video/*"
+                onChange={(e) => {
+                  handleSelectMultiVideos(e.target.files);
+                  e.target.value = '';
+                }}
                 className="hidden"
               />
 
-              {isVideoSource && visualVideoFile && (
-                <button
-                  type="button"
-                  onClick={() => loadAudioSource(visualVideoFile, '[Suara Video] ')}
-                  disabled={isDecodingAudio}
-                  className="px-3 py-3 bg-yellow-300 hover:bg-yellow-400 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
-                >
-                  <Film className="w-4 h-4" />
-                  <span>Pakai Suara Asli dari Video</span>
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 border-2 border-black bg-white">
-              <button
-                type="button"
-                onClick={() => handleChangeTrimMode('full')}
-                className={`py-2 px-3 font-black text-xs cursor-pointer ${
-                  trimMode === 'full' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
-                }`}
-              >
-                Full Sound
-              </button>
-              <button
-                type="button"
-                onClick={() => handleChangeTrimMode('cut')}
-                className={`py-2 px-3 font-black text-xs border-l-2 border-black cursor-pointer ${
-                  trimMode === 'cut' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
-                }`}
-              >
-                Atur Detik (Potong)
-              </button>
-            </div>
-
-            {trimMode === 'full' && audioBuffer && audioBuffer.duration > RECOMMENDED_FULL_SEC && (
-              <div className="p-2.5 bg-amber-50 border border-black text-[11px] font-semibold flex items-center justify-between gap-2 flex-wrap">
-                <span className="flex items-center gap-1.5">
-                  <Info className="w-4 h-4 text-amber-700 shrink-0" />
-                  Audio lebih dari 15 detik. Batasi otomatis 15s agar stiker ringan &amp; cepat?
-                </span>
-                <label className="flex items-center gap-1.5 font-black cursor-pointer shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={limitFull15s}
-                    onChange={(e) => {
-                      const next = e.target.checked;
-                      setLimitFull15s(next);
-                      applyFullModeBounds(audioBuffer, next);
-                    }}
-                    className="w-4 h-4 accent-black"
-                  />
-                  <span>Batasi 15s</span>
-                </label>
-              </div>
-            )}
-
-            <div className="border-2 border-black bg-neutral-50 overflow-hidden">
-              <canvas
-                ref={waveformCanvasRef}
-                width={640}
-                height={96}
-                onClick={handleWaveformClick}
-                className="w-full h-24 block cursor-pointer"
-                title="Klik pada waveform untuk mengatur titik mulai atau selesai"
-              />
-            </div>
-
-            {audioBuffer && (
-              <div className="space-y-3 text-xs">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="p-2.5 bg-neutral-50 border border-black space-y-1.5">
-                    <div className="flex items-center justify-between font-black text-[11px]">
-                      <span>Mulai (detik):</span>
-                      <span className="font-mono text-emerald-700">{formatTimeSec(startSec)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => updateSafeStart(startSec - 0.5)}
-                        className="px-2 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
-                      >
-                        -0.5s
-                      </button>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max={Math.max(0, audioBuffer.duration - 0.2).toFixed(1)}
-                        value={startSec}
-                        onChange={(e) => updateSafeStart(e.target.value)}
-                        className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => updateSafeStart(startSec + 0.5)}
-                        className="px-2 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
-                      >
-                        +0.5s
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="p-2.5 bg-neutral-50 border border-black space-y-1.5">
-                    <div className="flex items-center justify-between font-black text-[11px]">
-                      <span>Selesai (detik):</span>
-                      <span className="font-mono text-emerald-700">{formatTimeSec(endSec)}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => updateSafeEnd(endSec - 0.5)}
-                        className="px-2 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
-                      >
-                        -0.5s
-                      </button>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0.2"
-                        max={audioBuffer.duration.toFixed(1)}
-                        value={endSec}
-                        onChange={(e) => updateSafeEnd(e.target.value)}
-                        className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => updateSafeEnd(endSec + 0.5)}
-                        className="px-2 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
-                      >
-                        +0.5s
-                      </button>
-                    </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
+                <div className="space-y-1">
+                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Framing Batch 1:1:</label>
+                  <div className="grid grid-cols-2 border-2 border-black bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setCropMode('cover')}
+                      className={`py-2 px-2 font-black text-[11px] min-h-[38px] cursor-pointer ${
+                        cropMode === 'cover' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
+                      }`}
+                    >
+                      Crop Penuh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCropMode('contain')}
+                      className={`py-2 px-2 font-black text-[11px] border-l-2 border-black min-h-[38px] cursor-pointer ${
+                        cropMode === 'contain' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
+                      }`}
+                    >
+                      Pas (Fit)
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-emerald-50 border-2 border-black">
-                  <span className="font-black text-xs">
-                    Durasi Stiker Suara: <span className="font-mono text-emerald-800">{selectedDuration} detik</span>
-                  </span>
-
-                  <button
-                    type="button"
-                    onClick={handleToggleTestSound}
-                    className={`px-3 py-2 border-2 border-black shadow-[2px_2px_0px_#000] font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer ${
-                      isTestingSound ? 'bg-rose-500 text-white' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
-                    }`}
+                <div className="space-y-1">
+                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Batas Potong Otomatis:</label>
+                  <select
+                    value={multiMaxCapSec}
+                    onChange={(e) => setMultiMaxCapSec(Number(e.target.value))}
+                    className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer min-h-[38px]"
                   >
-                    {isTestingSound ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-black" />}
-                    <span>{isTestingSound ? 'Hentikan Tes' : 'Tes Potongan Sound'}</span>
-                  </button>
+                    <option value={5}>Maksimal 5 detik</option>
+                    <option value={8}>Maksimal 8 detik (Disarankan)</option>
+                    <option value={10}>Maksimal 10 detik</option>
+                    <option value={15}>Maksimal 15 detik</option>
+                  </select>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
-                  <div>
-                    <div className="flex justify-between font-bold text-[11px] mb-1">
-                      <span>Volume Sound:</span>
-                      <span className="font-mono">{Math.round(volume * 100)}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="1.5"
-                      step="0.05"
-                      value={volume}
-                      onChange={(e) => setVolume(Number(e.target.value))}
-                      className="w-full accent-black cursor-pointer h-2"
-                    />
-                  </div>
+                <div className="space-y-1">
+                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Nama Pack WA:</label>
+                  <input
+                    type="text"
+                    value={packName}
+                    maxLength={50}
+                    onChange={(e) => setPackName(e.target.value)}
+                    className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
+                  />
+                </div>
 
-                  <label className="flex items-center justify-between gap-2 text-[11px] font-bold cursor-pointer">
-                    <span>Fade Halus Awal/Akhir (40ms anti klik)</span>
-                    <input
-                      type="checkbox"
-                      checked={fadeSmooth}
-                      onChange={(e) => setFadeSmooth(e.target.checked)}
-                      className="w-4 h-4 accent-black cursor-pointer"
-                    />
-                  </label>
+                <div className="space-y-1">
+                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Pembuat:</label>
+                  <input
+                    type="text"
+                    value={packPublisher}
+                    maxLength={50}
+                    onChange={(e) => setPackPublisher(e.target.value)}
+                    className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
+                  />
                 </div>
               </div>
-            )}
-          </section>
+            </section>
+          )}
         </div>
 
-        {/* ─── KOLOM KANAN: LIVE PREVIEW & KIRIM KE WA SAYA ─── */}
-        <div className="lg:col-span-5 space-y-5 min-w-0">
-          <WaSoundStickerPreview
-            sourceMedia={sourceMedia}
-            isVideoSource={isVideoSource}
-            audioBuffer={audioBuffer}
-            waveformPeaks={waveformPeaks}
-            startSec={startSec}
-            endSec={endSec}
-            volume={volume}
-            fadeSmooth={fadeSmooth}
-            renderOptions={renderOptions}
-          />
+        {/* ─── KOLOM KANAN: ANTREAN BATCH & KONEKSI WA + DETEKSI FORMAT ─── */}
+        <div className={`lg:col-span-5 space-y-4 min-w-0 ${mobileTab === 'create' ? 'hidden lg:block' : 'block'}`}>
+          <div className={mobileTab === 'queue' ? 'block' : 'hidden lg:block'}>
+            <StickerQueueList
+              items={stickerQueue}
+              isBatchSending={isBatchSending}
+              batchProgress={batchProgress}
+              waConnected={connectionStatus === 'connected'}
+              onPreviewItem={handlePreviewQueueItem}
+              onUpdateItem={(id, patch) =>
+                setStickerQueue((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
+              }
+              onRetryItem={handleRetryQueueItem}
+              onRemoveItem={(id) => setStickerQueue((prev) => prev.filter((it) => it.id !== id))}
+              onSendAll={handleSendAllQueue}
+              onClearAll={() => setStickerQueue([])}
+            />
+          </div>
 
-          {/* LANGKAH 4 */}
-          <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
+          <section className={`bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0 ${
+            mobileTab === 'wa' ? 'block' : 'hidden lg:block'
+          }`}>
             <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 bg-black text-yellow-300 border border-black font-black text-[10px] uppercase">
-                  Langkah 4
+                  Koneksi WA
                 </span>
                 <h3 className="font-black text-xs sm:text-sm uppercase text-black">
-                  Kirim Stiker Suara ke WA Saya
+                  Tautan &amp; Deteksi Format
                 </h3>
               </div>
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1267,16 +1714,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       type="button"
                       onClick={handleRefreshE2ee}
                       disabled={isRefreshingE2ee}
-                      className="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                      className="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer min-h-[32px]"
                       title="Segarkan sesi kunci enkripsi E2EE WhatsApp tanpa scan ulang"
                     >
                       <RefreshCw className={`w-3 h-3 ${isRefreshingE2ee ? 'animate-spin' : ''}`} />
-                      <span>Segarkan E2EE</span>
+                      <span>Reset E2EE</span>
                     </button>
                     <button
                       type="button"
                       onClick={handleLogoutWa}
-                      className="px-2 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                      className="px-2 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer min-h-[32px]"
                     >
                       <LogOut className="w-3 h-3" />
                       <span>Putus</span>
@@ -1284,15 +1731,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </div>
                 </div>
                 <p className="text-[11px] font-semibold text-neutral-700">
-                  Pengiriman terkunci ke nomor WA Anda sendiri via jalur resmi <code className="font-mono">sock.sendMessage</code>.
+                  Target terkunci ke nomor Anda sendiri via jalur resmi <code className="font-mono">sock.sendMessage</code>.
                 </p>
               </div>
             ) : (
               <div className="p-3 bg-neutral-50 border-2 border-black space-y-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-black text-xs text-black">
-                    Tautkan Perangkat WA Anda
-                  </span>
+                  <span className="font-black text-xs text-black">Tautkan Perangkat WA Anda</span>
                   <span className="text-[10px] font-mono font-bold text-neutral-600">
                     {socketConnected ? (hasSavedAuth ? 'Memulihkan...' : 'Server Siap') : 'Menghubungkan...'}
                   </span>
@@ -1302,7 +1747,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => setAuthMethod('pairing')}
-                    className={`py-1.5 font-black flex items-center justify-center gap-1 cursor-pointer ${
+                    className={`py-2 font-black flex items-center justify-center gap-1 cursor-pointer min-h-[38px] ${
                       authMethod === 'pairing' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
                     }`}
                   >
@@ -1312,7 +1757,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <button
                     type="button"
                     onClick={() => setAuthMethod('qr')}
-                    className={`py-1.5 font-black border-l-2 border-black flex items-center justify-center gap-1 cursor-pointer ${
+                    className={`py-2 font-black border-l-2 border-black flex items-center justify-center gap-1 cursor-pointer min-h-[38px] ${
                       authMethod === 'qr' ? 'bg-black text-yellow-300' : 'hover:bg-neutral-100'
                     }`}
                   >
@@ -1329,13 +1774,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         value={pairingPhone}
                         onChange={(e) => setPairingPhone(e.target.value)}
                         placeholder="Nomor WA Anda: 62812xxxx"
-                        className="flex-1 min-w-0 bg-white border-2 border-black px-2.5 py-2 text-xs font-bold"
+                        className="flex-1 min-w-0 bg-white border-2 border-black px-2.5 py-2 text-xs font-bold min-h-[40px]"
                       />
                       <button
                         type="button"
                         onClick={() => handleStartPairing('pairing')}
                         disabled={isRequestingPairing || !socketConnected}
-                        className="px-3 py-2 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 border-2 border-black font-black text-xs cursor-pointer shrink-0 flex items-center gap-1"
+                        className="px-3 py-2 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 border-2 border-black font-black text-xs cursor-pointer shrink-0 flex items-center gap-1 min-h-[40px]"
                       >
                         {isRequestingPairing ? (
                           <>
@@ -1380,7 +1825,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       <button
                         type="button"
                         onClick={() => handleStartPairing('qr')}
-                        className="w-full py-2.5 bg-yellow-300 hover:bg-yellow-400 border-2 border-black font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="w-full py-2.5 bg-yellow-300 hover:bg-yellow-400 border-2 border-black font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px]"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
                         <span>Muat QR Code Tautan</span>
@@ -1403,7 +1848,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <div className="font-black flex items-center justify-between gap-1.5 flex-wrap">
                   <span className="flex items-center gap-1.5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                    <span>{deliveryStatus?.label || 'Stiker terkirim ke chat WA Anda sendiri!'}</span>
+                    <span>{deliveryStatus?.label || 'Terkirim ke chat WA Anda!'}</span>
                   </span>
                   {lastSendResult.messageId && (
                     <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white border border-black">
@@ -1412,41 +1857,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   )}
                 </div>
                 {lastSendResult.note && (
-                  <p className="text-[10px] text-neutral-800 leading-snug">
-                    {lastSendResult.note}
-                  </p>
+                  <p className="text-[10px] text-neutral-800 leading-snug">{lastSendResult.note}</p>
                 )}
               </div>
             )}
-
-            {sendProgress.active && (
-              <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-1.5">
-                <div className="flex items-center justify-between text-[11px] font-black">
-                  <span className="flex items-center gap-1.5">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    {sendProgress.label}
-                  </span>
-                  <span className="font-mono">{sendProgress.percent}%</span>
-                </div>
-                <div className="w-full h-2.5 bg-white border border-black overflow-hidden">
-                  <div
-                    style={{ width: `${Math.max(5, Math.min(100, sendProgress.percent))}%` }}
-                    className="h-full bg-emerald-500 transition-all duration-200"
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* 1 TOMBOL AKSI UTAMA */}
-            <button
-              type="button"
-              onClick={handleSendToSelfWa}
-              disabled={sendProgress.active || !sourceMedia || !audioBuffer || connectionStatus !== 'connected'}
-              className="w-full py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-sm flex items-center justify-center gap-2 cursor-pointer transition-all"
-            >
-              {sendProgress.active ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              <span>Kirim Stiker Suara ke WA Saya</span>
-            </button>
 
             {/* Kalibrasi Blueprint Stiker Suara WA (1x Saja Per Perangkat) */}
             <div className="pt-2 border-t-2 border-black space-y-2">
@@ -1464,7 +1878,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                           setCopiedSchema(true);
                           setTimeout(() => setCopiedSchema(false), 1800);
                         }}
-                        className="px-2 py-0.5 bg-white hover:bg-neutral-100 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
+                        className="px-2 py-1 bg-white hover:bg-neutral-100 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
                       >
                         {copiedSchema ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
                         <span>{copiedSchema ? 'Tersalin' : 'Salin Blueprint JSON'}</span>
@@ -1473,7 +1887,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         type="button"
                         onClick={handleArmCalibration}
                         disabled={connectionStatus !== 'connected'}
-                        className="px-2 py-0.5 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border border-black font-bold text-[10px] cursor-pointer"
+                        className="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border border-black font-bold text-[10px] cursor-pointer"
                       >
                         Deteksi Ulang
                       </button>
@@ -1508,13 +1922,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
                     {calibrationArmed
                       ? 'Deteksi aktif! Teruskan atau kirim 1 contoh stiker suara dari HP ke Pesan Diri Sendiri atau chat lain.'
-                      : "Teruskan 1 contoh stiker suara dari chat WA ke chat 'Pesan Diri Sendiri' Anda — web akan menyalin format aslinya otomatis!"}
+                      : "Teruskan 1 contoh stiker suara dari bot/chat ke 'Pesan Diri Sendiri' Anda — web menyalin format aslinya otomatis!"}
                   </p>
                   <button
                     type="button"
                     onClick={handleArmCalibration}
                     disabled={connectionStatus !== 'connected'}
-                    className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px]"
                   >
                     {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
                     <span>
@@ -1549,6 +1963,23 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           </section>
         </div>
       </div>
+
+      {/* Floating/Sticky Mini-Bar Mobile saat Antrean Terisi */}
+      {mobileTab === 'create' && stickerQueue.length > 0 && (
+        <div className="lg:hidden sticky bottom-2 z-20 bg-black text-white border-2 border-black shadow-[4px_4px_0px_#10b981] px-3 py-2.5 flex items-center justify-between gap-2">
+          <div className="text-xs font-black truncate">
+            {stickerQueue.length} Stiker di Antrean
+          </div>
+          <button
+            type="button"
+            onClick={() => setMobileTab('queue')}
+            className="px-3 py-1.5 bg-emerald-400 hover:bg-emerald-300 text-black border border-black font-black text-xs inline-flex items-center gap-1 cursor-pointer shrink-0"
+          >
+            <span>Lihat &amp; Kirim</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

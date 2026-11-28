@@ -6,6 +6,60 @@ function getAudioContextCtor() {
 }
 
 /**
+ * Baca durasi, dimensi, dan petunjuk trek audio dari berkas video tanpa membebani RAM (revoke langsung).
+ */
+export async function probeVideoMetadata(file) {
+  if (!file) throw new Error('File video belum dipilih.');
+  const url = URL.createObjectURL(file);
+  const videoEl = document.createElement('video');
+  videoEl.muted = true;
+  videoEl.playsInline = true;
+  videoEl.preload = 'metadata';
+
+  try {
+    videoEl.src = url;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Waktu muat metadata habis: ${file.name}`)), 9000);
+      videoEl.onloadedmetadata = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      videoEl.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error(`Video tidak dapat dibaca browser: ${file.name}`));
+      };
+    });
+
+    const duration = Number.isFinite(videoEl.duration) && videoEl.duration > 0 ? videoEl.duration : 5;
+    const width = Number(videoEl.videoWidth) || 512;
+    const height = Number(videoEl.videoHeight) || 512;
+    const hasAudioTrackHint =
+      typeof videoEl.mozHasAudio === 'boolean'
+        ? videoEl.mozHasAudio
+        : videoEl.audioTracks
+          ? videoEl.audioTracks.length > 0
+          : true;
+
+    return {
+      duration,
+      width,
+      height,
+      hasAudioTrackHint,
+      defaultStartSec: 0,
+      defaultEndSec: Number(Math.max(0.5, Math.min(duration, 8.0)).toFixed(1))
+    };
+  } finally {
+    try {
+      videoEl.removeAttribute('src');
+      videoEl.load();
+    } catch {}
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  }
+}
+
+/**
  * Decode berkas audio (MP3/WAV/M4A/OGG) atau ekstrak trek audio dari video (MP4/WebM/MOV)
  */
 export async function decodeMediaToAudioBuffer(file) {

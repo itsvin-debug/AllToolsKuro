@@ -1,4 +1,9 @@
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
+import {
+  decodeMediaToAudioBuffer,
+  renderTrimmedAudioBuffer,
+  encodeTrimmedAudio
+} from './audioTrimmerEngine.js';
 
 const TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
 const MAX_SAFE_MP4_BYTES = 1.5 * 1024 * 1024;
@@ -141,6 +146,25 @@ function assembleRiffWebp(chunkBuffers) {
   return riff;
 }
 
+export function verifyWebpRiffIntegrity(webpBytes) {
+  if (!webpBytes || webpBytes.length < 30) {
+    throw new Error('Berkas WebP terlalu pendek atau tidak lengkap.');
+  }
+  if (readFourCC(webpBytes, 0) !== 'RIFF' || readFourCC(webpBytes, 8) !== 'WEBP') {
+    throw new Error('Header RIFF/WEBP tidak valid.');
+  }
+  const declaredSize = readUint32LE(webpBytes, 4);
+  if (declaredSize !== webpBytes.length - 8) {
+    throw new Error('Ukuran header RIFF WebP tidak cocok dengan panjang biner.');
+  }
+  const chunks = parseWebPChunks(webpBytes);
+  const fourCCs = chunks.map((c) => c.fourCC);
+  if (fourCCs[0] !== 'VP8X' || !fourCCs.includes('EXIF')) {
+    throw new Error('Stiker WebP wajib memiliki header Extended VP8X dan chunk EXIF WhatsApp.');
+  }
+  return chunks;
+}
+
 export function injectExifIntoStaticWebp(webpBytes, meta = {}) {
   const chunks = parseWebPChunks(webpBytes);
   const imageChunks = chunks.filter(
@@ -160,11 +184,13 @@ export function injectExifIntoStaticWebp(webpBytes, meta = {}) {
 
   const exifPayload = buildWhatsAppExifPayload(meta);
 
-  return assembleRiffWebp([
+  const out = assembleRiffWebp([
     buildRiffChunk('VP8X', vp8xPayload),
     ...imageChunks.map((c) => buildRiffChunk(c.fourCC, c.data)),
     buildRiffChunk('EXIF', exifPayload)
   ]);
+  verifyWebpRiffIntegrity(out);
+  return out;
 }
 
 export function injectWhatsAppExifToWebp(webpBytes, packName = 'Kuro Sound Sticker', publisher = 'Kuro Studio') {
@@ -185,7 +211,7 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
       (c) => c.fourCC === 'ALPH' || c.fourCC === 'VP8 ' || c.fourCC === 'VP8L'
     );
     if (subChunks.length === 0) continue;
-    if (subChunks.some((c) => c.fourCC === 'ALPH' || c.fourCC === 'VP8L')) {
+    if (subChunks.some((c) => c.fourCC === 'ALPH' || (c.fourCC === 'VP8L' && c.data.length >= 5 && (c.data[4] & 0x10) !== 0))) {
       hasAlpha = true;
     }
 
@@ -214,12 +240,14 @@ export function muxAnimatedWebp(framesPayload = [], meta = {}) {
   const animPayload = new Uint8Array([0, 0, 0, 0, 0, 0]);
   const exifPayload = buildWhatsAppExifPayload(meta);
 
-  return assembleRiffWebp([
+  const out = assembleRiffWebp([
     buildRiffChunk('VP8X', vp8xPayload),
     buildRiffChunk('ANIM', animPayload),
     ...anmfChunks,
     buildRiffChunk('EXIF', exifPayload)
   ]);
+  verifyWebpRiffIntegrity(out);
+  return out;
 }
 
 /**
@@ -571,5 +599,325 @@ export async function composeMuxedStickerContainer({
   } finally {
     try { videoEncoder?.close?.(); } catch {}
     try { audioEncoder?.close?.(); } catch {}
+  }
+}
+
+function blobToBase64Local(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = String(reader.result || '');
+      const idx = result.indexOf(',');
+      resolve(idx !== -1 ? result.slice(idx + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Gagal membaca berkas ke base64.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function loadMediaElementFromFile(file) {
+  if (!file) throw new Error('Berkas visual belum dipilih.');
+  const mime = String(file.type || '').toLowerCase();
+  const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    if (isVideo) {
+      const videoEl = document.createElement('video');
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.crossOrigin = 'anonymous';
+      videoEl.preload = 'auto';
+      videoEl.src = objectUrl;
+
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Waktu muat video habis: ${file.name}`)), 10000);
+        videoEl.onloadeddata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        videoEl.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error(`Browser gagal memuat video: ${file.name}`));
+        };
+      });
+
+      validateSourceMediaDimensions(videoEl);
+      return { mediaEl: videoEl, objectUrl, isVideo: true };
+    }
+
+    const imgEl = new Image();
+    imgEl.crossOrigin = 'anonymous';
+    imgEl.src = objectUrl;
+    await new Promise((resolve, reject) => {
+      imgEl.onload = resolve;
+      imgEl.onerror = () => reject(new Error(`Gagal memuat foto: ${file.name}`));
+    });
+    if (imgEl.decode) {
+      await imgEl.decode().catch(() => {});
+    }
+    validateSourceMediaDimensions(imgEl);
+    return { mediaEl: imgEl, objectUrl, isVideo: false };
+  } catch (err) {
+    try { URL.revokeObjectURL(objectUrl); } catch {}
+    throw err;
+  }
+}
+
+export function releaseMediaElement(mediaEl, objectUrl) {
+  if (typeof HTMLVideoElement !== 'undefined' && mediaEl instanceof HTMLVideoElement) {
+    try {
+      mediaEl.pause();
+      mediaEl.removeAttribute('src');
+      mediaEl.load();
+    } catch {}
+  }
+  if (objectUrl) {
+    try { URL.revokeObjectURL(objectUrl); } catch {}
+  }
+}
+
+export function createSquareThumbnailDataUrl(sourceMedia, renderOptions = {}) {
+  try {
+    validateSourceMediaDimensions(sourceMedia);
+    const fullCanvas = document.createElement('canvas');
+    fullCanvas.width = 512;
+    fullCanvas.height = 512;
+    const fullCtx = fullCanvas.getContext('2d', { alpha: true });
+    renderStickerCanvasFrame(fullCtx, sourceMedia, renderOptions, 0);
+
+    const thumbCanvas = document.createElement('canvas');
+    thumbCanvas.width = 160;
+    thumbCanvas.height = 160;
+    const thumbCtx = thumbCanvas.getContext('2d', { alpha: true });
+    thumbCtx.drawImage(fullCanvas, 0, 0, 160, 160);
+    return thumbCanvas.toDataURL('image/webp', 0.72);
+  } catch {
+    return '';
+  }
+}
+
+async function composeViaMediaRecorderFallback({ sourceMedia, trimmedAudioBuffer, renderOptions, onProgress }) {
+  if (typeof window.MediaRecorder !== 'function') {
+    throw new Error('Browser tidak mendukung MediaRecorder maupun WebCodecs.');
+  }
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) throw new Error('AudioContext tidak tersedia.');
+
+  const durSec = Math.max(0.5, Math.min(12, trimmedAudioBuffer.duration));
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  const stream = canvas.captureStream(24);
+  const audioCtx = new AudioCtx();
+  const dest = audioCtx.createMediaStreamDestination();
+  const srcNode = audioCtx.createBufferSource();
+  srcNode.buffer = trimmedAudioBuffer;
+  srcNode.connect(dest);
+
+  const combined = new MediaStream([
+    ...stream.getVideoTracks(),
+    ...dest.stream.getAudioTracks()
+  ]);
+
+  const mimeType = window.MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
+    ? 'video/webm;codecs=vp8,opus'
+    : 'video/webm';
+
+  let rafId = 0;
+  let recorder = null;
+  try {
+    const chunks = [];
+    recorder = new window.MediaRecorder(combined, { mimeType, videoBitsPerSecond: 450_000 });
+    const donePromise = new Promise((resolve, reject) => {
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = () => resolve();
+      recorder.onerror = (ev) => reject(ev?.error || new Error('MediaRecorder gagal.'));
+    });
+
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    recorder.start(200);
+    srcNode.start(0);
+
+    const startWall = performance.now();
+    const isVideoEl = typeof HTMLVideoElement !== 'undefined' && sourceMedia instanceof HTMLVideoElement;
+    if (isVideoEl) {
+      try {
+        sourceMedia.muted = true;
+        sourceMedia.currentTime = 0;
+        await sourceMedia.play();
+      } catch {}
+    }
+
+    await new Promise((resolve) => {
+      const step = () => {
+        const elapsed = (performance.now() - startWall) / 1000;
+        renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, bgStyle: 'solid' }, elapsed);
+        onProgress?.(Math.min(92, Math.round((elapsed / durSec) * 90)));
+        if (elapsed >= durSec) {
+          resolve();
+          return;
+        }
+        rafId = requestAnimationFrame(step);
+      };
+      rafId = requestAnimationFrame(step);
+    });
+
+    if (recorder.state === 'recording') recorder.stop();
+    await donePromise;
+    onProgress?.(100);
+    return new Blob(chunks, { type: mimeType.split(';')[0] });
+  } finally {
+    if (rafId) cancelAnimationFrame(rafId);
+    try { srcNode.stop(); } catch {}
+    try { combined.getTracks().forEach((t) => t.stop()); } catch {}
+    try { await audioCtx.close(); } catch {}
+  }
+}
+
+/**
+ * Tahap 1 Kompositor: Gabungkan Visual + Audio menjadi Video 512x512 Bersuara.
+ */
+export async function composeSoundVideoStage1({
+  sourceMedia,
+  trimmedAudioBuffer,
+  renderOptions = {},
+  onProgress
+}) {
+  try {
+    const blob = await composeMuxedStickerContainer({
+      sourceMedia,
+      trimmedAudioBuffer,
+      renderOptions,
+      onProgress
+    });
+    return { blob, mimeType: 'video/mp4', ext: 'mp4', durationSec: trimmedAudioBuffer.duration };
+  } catch {
+    const blob = await composeViaMediaRecorderFallback({
+      sourceMedia,
+      trimmedAudioBuffer,
+      renderOptions,
+      onProgress
+    });
+    return { blob, mimeType: 'video/webm', ext: 'webm', durationSec: trimmedAudioBuffer.duration };
+  }
+}
+
+/**
+ * Tahap 2 Kompositor: Siapkan paket Stiker WebP 512x512 + optional audio/muxed container siap kirim WA.
+ */
+export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
+  let loaded = null;
+  try {
+    if (!item?.visualFile) {
+      throw new Error('Berkas visual item antrean tidak tersedia.');
+    }
+
+    loaded = await loadMediaElementFromFile(item.visualFile);
+    const { mediaEl, isVideo } = loaded;
+
+    let audioBuf = item.audioBuffer || null;
+    if (!audioBuf && item.audioFile) {
+      audioBuf = await decodeMediaToAudioBuffer(item.audioFile);
+    } else if (!audioBuf && isVideo) {
+      audioBuf = await decodeMediaToAudioBuffer(item.visualFile).catch(() => null);
+    }
+
+    const totalAudioDur = audioBuf ? audioBuf.duration : Number(item.totalDuration) || 5;
+    const safeStart = Math.max(0, Number(item.startSec) || 0);
+    const safeEnd = Math.max(safeStart + 0.3, Math.min(totalAudioDur, Number(item.endSec) || totalAudioDur));
+    const durationSec = Math.max(0.5, Number((safeEnd - safeStart).toFixed(1)));
+
+    const renderOptions = {
+      cropMode: item.cropMode || 'cover',
+      bgStyle: item.bgStyle || 'solid',
+      bgColor: item.bgColor || '#111827',
+      motionEffect: isVideo ? 'static' : item.motionEffect || 'static',
+      stickerText: item.stickerText || '',
+      textPosition: item.textPosition || 'bottom',
+      textSize: Number(item.textSize) || 46
+    };
+
+    const willAnimate = isVideo || renderOptions.motionEffect !== 'static';
+    const webpBlob = await buildWaWebpStickerBlob({
+      sourceMedia: mediaEl,
+      isAnimated: willAnimate,
+      durationSec: Math.min(5, durationSec),
+      renderOptions,
+      packMeta: { packName: item.packName || 'Kuro Sound Sticker', publisher: item.packPublisher || 'Kuro Studio' },
+      onProgress: (p) => onProgress?.(Math.min(72, Math.round(p * 0.72)))
+    });
+
+    if (!webpBlob || webpBlob.size <= 200 || webpBlob.size > 1024 * 1024) {
+      throw new Error('Ukuran stiker WebP tidak valid atau melebihi batas 1 MB.');
+    }
+
+    const stickerWebpBase64 = await blobToBase64Local(webpBlob);
+    let audioM4aBase64;
+    let muxedMp4Base64;
+    let muxedWebmBase64;
+
+    const bpContainer = blueprint?.mediaInspection?.detectedContainer || '';
+    const bpMime = String(blueprint?.stickerMeta?.mimetype || '').toLowerCase();
+    const needsMuxed = bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm');
+    const needsCustomAudio = (blueprint?.mediaInspection?.customChunks?.length || 0) > 0;
+
+    let trimmedAudio = null;
+    if (audioBuf && (needsMuxed || needsCustomAudio)) {
+      trimmedAudio = await renderTrimmedAudioBuffer(audioBuf, {
+        startSec: safeStart,
+        endSec: safeEnd,
+        volume: item.volume ?? 1,
+        fadeSmooth: item.fadeSmooth !== false
+      });
+    }
+
+    if (trimmedAudio && needsCustomAudio) {
+      onProgress?.(80);
+      try {
+        const enc = await encodeTrimmedAudio(trimmedAudio);
+        if (enc?.blob && enc.ext === 'm4a' && enc.blob.size > 100) {
+          audioM4aBase64 = await blobToBase64Local(enc.blob);
+        }
+      } catch {}
+    }
+
+    if (trimmedAudio && needsMuxed) {
+      onProgress?.(86);
+      try {
+        const muxed = item.stagedMuxedBlob
+          ? { blob: item.stagedMuxedBlob, ext: item.stagedMuxedExt || 'mp4' }
+          : await composeSoundVideoStage1({ sourceMedia: mediaEl, trimmedAudioBuffer: trimmedAudio, renderOptions });
+        if (muxed?.blob && muxed.blob.size > 100 && muxed.blob.size <= 3.5 * 1024 * 1024) {
+          const b64 = await blobToBase64Local(muxed.blob);
+          if (muxed.ext === 'webm') muxedWebmBase64 = b64;
+          else muxedMp4Base64 = b64;
+        }
+      } catch {}
+    }
+
+    onProgress?.(95);
+    return {
+      queueId: item.id,
+      stickerWebpBase64,
+      ...(audioM4aBase64 ? { audioM4aBase64 } : {}),
+      ...(muxedMp4Base64 ? { muxedMp4Base64 } : {}),
+      ...(muxedWebmBase64 ? { muxedWebmBase64 } : {}),
+      durationSec,
+      isAnimated: willAnimate,
+      width: 512,
+      height: 512,
+      packName: item.packName || 'Kuro Sound Sticker',
+      packAuthor: item.packPublisher || 'Kuro Studio',
+      blueprint: blueprint || undefined
+    };
+  } finally {
+    if (loaded) {
+      releaseMediaElement(loaded.mediaEl, loaded.objectUrl);
+    }
   }
 }

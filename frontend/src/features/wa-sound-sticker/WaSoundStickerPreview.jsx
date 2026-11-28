@@ -187,14 +187,14 @@ export default function WaSoundStickerPreview({
       <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
         <div className="flex items-center gap-2 min-w-0">
           <span className="px-2 py-0.5 bg-emerald-400 border border-black font-black text-[10px] uppercase shrink-0">
-            Langkah 3
+            Pratinjau
           </span>
           <h3 className="font-black text-xs sm:text-sm uppercase text-black truncate">
-            Pratinjau Tampilan di WhatsApp Anda
+            Stiker Suara WA
           </h3>
         </div>
         <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black shrink-0">
-          1:1 &bull; 512&times;512
+          1:1 &bull; 512px
         </span>
       </div>
 

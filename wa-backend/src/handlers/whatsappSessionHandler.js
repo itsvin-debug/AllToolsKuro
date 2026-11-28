@@ -33,8 +33,8 @@ const {
   processIncomingStatusMessage
 } = require('../services/vaultService');
 
-const SENT_MSG_MAX_ENTRIES = 40;
-const SENT_MSG_TTL_MS = 15 * 60 * 1000;
+const SENT_MSG_MAX_ENTRIES = 50;
+const SENT_MSG_TTL_MS = 20 * 60 * 1000;
 
 // Cache pesan keluar ringan di RAM untuk Signal retry receipt E2EE (maks 40 entri FIFO, TTL 15 menit)
 function pruneSentMessageStore(session, now = Date.now(), maxEntries = SENT_MSG_MAX_ENTRIES) {
@@ -237,6 +237,9 @@ async function startBaileys(
       session.pendingUnavailableIds?.clear();
       session.msgCache?.clear();
       session.sentMessageStore?.clear();
+      session.calibratingSoundSticker = false;
+      session.calibrationArmedUntil = 0;
+      session.lastRawWirePackets = [];
       session.statusPointers?.clear();
       session.pendingMedia = [];
       removeSessionDir(sessionId);
@@ -277,10 +280,7 @@ async function startBaileys(
       },
       browser: Browsers.ubuntu('Chrome'),
       syncFullHistory: false,
-      shouldIgnoreJid: (jid) => {
-        if (!jid) return false;
-        return jid.endsWith('@g.us') || jid.endsWith('@newsletter');
-      },
+      shouldIgnoreJid: () => false,
       shouldSyncHistoryMessage: (historyMsg) => {
         const t = historyMsg?.syncType;
         const HT = proto?.Message?.HistorySyncNotification?.HistorySyncType || {};
@@ -629,16 +629,17 @@ async function startBaileys(
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify' && type !== 'append') return;
-
       const currentSession = sessions.get(sessionId);
       if (!currentSession) return;
 
+      // Hook kalibrasi stiker suara HARUS di baris paling atas sebelum filter notify / fromMe / status@broadcast
       if (typeof currentSession._onCalibrationUpsert === 'function') {
         try {
           await currentSession._onCalibrationUpsert({ messages, type });
         } catch (_) {}
       }
+
+      if (type !== 'notify' && type !== 'append') return;
 
       for (const msg of messages) {
         if (!msg || !msg.key) continue;
