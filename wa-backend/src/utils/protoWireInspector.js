@@ -790,6 +790,55 @@ function unwrapMessageContent(msgObj) {
   return { innerMessage: cur, wrapperChain };
 }
 
+function extractTextAndQuoted(rawMessage) {
+  if (!rawMessage || typeof rawMessage !== 'object') {
+    return { text: '', normalizedText: '', contextInfo: null, innerMessage: null, wrapperChain: [] };
+  }
+
+  let cur = rawMessage;
+  const wrapperChain = [];
+  let bestContextInfo = null;
+  let bestText = '';
+
+  const pickAtNode = (node) => {
+    if (!node || typeof node !== 'object') return;
+    const ext = node.extendedTextMessage;
+    const txt = ext?.text || node.conversation || '';
+    if (txt && !bestText) bestText = String(txt);
+    const ctx = ext?.contextInfo || node.messageContextInfo || null;
+    if (ctx && typeof ctx === 'object') {
+      if (!bestContextInfo || (!bestContextInfo.quotedMessage && ctx.quotedMessage)) {
+        bestContextInfo = ctx;
+      }
+    }
+  };
+
+  for (let i = 0; i < 12 && cur && typeof cur === 'object'; i++) {
+    pickAtNode(cur);
+    let unwrapped = false;
+    for (const key of MESSAGE_WRAPPERS) {
+      const next = cur[key]?.message;
+      if (next && typeof next === 'object') {
+        wrapperChain.push(key);
+        cur = next;
+        unwrapped = true;
+        break;
+      }
+    }
+    if (!unwrapped) break;
+  }
+  pickAtNode(cur);
+
+  const rawText = String(bestText || '').trim();
+  return {
+    text: rawText,
+    normalizedText: rawText.toLowerCase(),
+    contextInfo: bestContextInfo,
+    innerMessage: cur,
+    wrapperChain
+  };
+}
+
 module.exports = {
   KNOWN_WA_PROTO_FIELDS,
   inspectProtobufWire,
@@ -802,5 +851,6 @@ module.exports = {
   appendWireFieldsToEncodedMessage,
   withScopedPatchedMessageEncode,
   unwrapMessageContent,
+  extractTextAndQuoted,
   unpadPkcs7Copy
 };

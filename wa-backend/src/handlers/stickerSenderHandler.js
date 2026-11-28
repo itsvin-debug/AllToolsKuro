@@ -28,7 +28,8 @@ const {
   getEncodedProtoSize,
   syncCalibrationProtoObserver,
   registerCalibrationUpsertProcessor,
-  registerKlonCommandProcessor
+  registerKlonCommandProcessor,
+  isOwnerSelfMessage
 } = require('./whatsappSessionHandler');
 const {
   inspectProtobufWire,
@@ -38,7 +39,8 @@ const {
   getRecentRawWireBytesSnapshots,
   appendWireFieldsToEncodedMessage,
   withScopedPatchedMessageEncode,
-  unwrapMessageContent
+  unwrapMessageContent,
+  extractTextAndQuoted
 } = require('../utils/protoWireInspector');
 
 const {
@@ -478,6 +480,7 @@ function sanitizeBlueprint(raw) {
         }
       : null,
     innerKeys: Array.isArray(raw.innerKeys) ? raw.innerKeys.slice(0, 16).map(String) : [],
+    matchedCachedSticker: Boolean(raw.matchedCachedSticker),
     decryptErrors: raw.decryptErrors && typeof raw.decryptErrors === 'object' ? raw.decryptErrors : undefined,
     topLevelKeys: topKeys,
     wrapperChain: Array.isArray(raw.wrapperChain) ? raw.wrapperChain.slice(0, 8).map(String) : [],
@@ -1003,57 +1006,48 @@ registerCalibrationUpsertProcessor(processCalibrationUpsert);
  * Jurus Anti-Gagal (.klon): inspeksi & klon format asli dari quotedMessage ketika pemilik membalas stiker audio di WA.
  */
 async function handleKlonReplyCommand(io, sessionId, session, msg) {
+  let activeSession = sessions.get(sessionId) || session;
+  let selfJid = '';
   try {
-    const curSession = sessions.get(sessionId) || session;
-    if (!curSession || !msg?.key || msg.key.fromMe !== true || !curSession.sock?.user?.id) return null;
-    if (msg.key.id && getSentMessage(curSession, msg.key.id)) return null;
+    if (!activeSession || !msg?.key || !activeSession.sock?.user?.id) return null;
+    if (!isOwnerSelfMessage(msg, activeSession.sock)) return null;
+    if (msg.key.id && getSentMessage(activeSession, msg.key.id)) return null;
 
-    if (!curSession._handledKlonIds) curSession._handledKlonIds = new Set();
-    if (msg.key.id && curSession._handledKlonIds.has(msg.key.id)) return null;
+    if (!activeSession._handledKlonIds) activeSession._handledKlonIds = new Set();
+    if (msg.key.id && activeSession._handledKlonIds.has(msg.key.id)) return null;
     if (msg.key.id) {
-      curSession._handledKlonIds.add(msg.key.id);
-      if (curSession._handledKlonIds.size > 30) {
-        const firstId = curSession._handledKlonIds.keys().next().value;
-        if (firstId) curSession._handledKlonIds.delete(firstId);
+      activeSession._handledKlonIds.add(msg.key.id);
+      if (activeSession._handledKlonIds.size > 30) {
+        const firstId = activeSession._handledKlonIds.keys().next().value;
+        if (firstId) activeSession._handledKlonIds.delete(firstId);
       }
     }
 
-    const selfJid = jidNormalizedUser(curSession.sock.user.id);
+    selfJid = jidNormalizedUser(activeSession.sock.user.id);
     if (!selfJid || !selfJid.endsWith('@s.whatsapp.net')) return null;
 
-    const { innerMessage } = unwrapMessageContent(msg.message);
-    const cmdText = String(
-      innerMessage?.extendedTextMessage?.text ||
-        innerMessage?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        msg.message?.conversation ||
-        ''
-    )
-      .trim()
-      .toLowerCase();
-    if (cmdText !== '.klon') return null;
-
-    const contextInfo =
-      innerMessage?.extendedTextMessage?.contextInfo ||
-      msg.message?.extendedTextMessage?.contextInfo ||
-      innerMessage?.messageContextInfo ||
-      msg.message?.messageContextInfo ||
-      null;
-    const quotedRaw = contextInfo?.quotedMessage || null;
-    if (!quotedRaw || typeof quotedRaw !== 'object') {
-      await sendOfficialSelfMessage(
-        io,
-        sessionId,
-        curSession,
-        selfJid,
-        { text: '⚠️ Perintah .klon harus membalas (Reply) 1 stiker audio di chat WA Anda.' },
-        '.klon missing-quote'
-      ).catch(() => {});
+    const { normalizedText, contextInfo } = extractTextAndQuoted(msg.message);
+    if (normalizedText !== '.klon' && !normalizedText.startsWith('.klon ') && !normalizedText.startsWith('.klon\n')) {
       return null;
     }
 
-    const { innerMessage: qInner, wrapperChain } = unwrapMessageContent(quotedRaw);
-    const quotedTopKeys = Object.keys(quotedRaw || {});
+    const quotedRaw = contextInfo?.quotedMessage || null;
+    const stanzaId = contextInfo?.stanzaId || null;
+    const cachedSticker =
+      stanzaId && activeSession.recentOwnerStickers instanceof Map
+        ? activeSession.recentOwnerStickers.get(stanzaId) || null
+        : null;
+
+    if (!quotedRaw && !cachedSticker) {
+      const guideText = '⚠️ .klon aktif! Silakan Balas (Reply) 1 stiker audio lalu ketik .klon.';
+      console.log('[KLON-RESULT]', JSON.stringify({ status: 'no-quoted-message', msgId: msg.key.id || null }));
+      await sendOfficialSelfMessage(io, sessionId, activeSession, selfJid, { text: guideText }, '.klon missing-quote');
+      return null;
+    }
+
+    const inspectedSource = quotedRaw || {};
+    const { innerMessage: qInner, wrapperChain } = unwrapMessageContent(inspectedSource);
+    const quotedTopKeys = Object.keys(inspectedSource);
     const quotedInnerKeys = Object.keys(qInner || {});
     const quotedNonContext = quotedInnerKeys.filter((k) => k !== 'messageContextInfo');
     const dynamicMedia = scanDynamicMediaNode(qInner);
@@ -1073,7 +1067,7 @@ async function handleKlonReplyCommand(io, sessionId, session, msg) {
     let encodedBytes = 0;
     let encodedWireTree = [];
     try {
-      if (proto?.Message?.encode) {
+      if (quotedRaw && proto?.Message?.encode) {
         const bytes = proto.Message.encode(quotedRaw).finish();
         encodedBytes = bytes.length;
         encodedWireTree = inspectProtobufWire(bytes, 7);
@@ -1087,7 +1081,7 @@ async function handleKlonReplyCommand(io, sessionId, session, msg) {
       wireTree: inspectProtobufWire(s.rawBytes, 7)
     }));
     const globalFrames = getRecentRawWireFrames();
-    const sessionFrames = Array.isArray(curSession.lastRawWirePackets) ? curSession.lastRawWirePackets : [];
+    const sessionFrames = Array.isArray(activeSession.lastRawWirePackets) ? activeSession.lastRawWirePackets : [];
     const now = Date.now();
     const candidates = [...rawSnaps, ...sessionFrames, ...globalFrames].filter(
       (f) => f && Array.isArray(f.wireTree) && f.wireTree.length > 0 && now - (f.capturedAt || f.at || 0) <= 5000
@@ -1099,31 +1093,46 @@ async function handleKlonReplyCommand(io, sessionId, session, msg) {
       candidates[candidates.length - 1] ||
       null;
 
+    const cachedWireTree = cachedSticker?.rawWireBytes ? inspectProtobufWire(cachedSticker.rawWireBytes, 7) : [];
     const rawWireTree = matchedWirePacket?.wireTree?.length ? matchedWirePacket.wireTree : encodedWireTree;
-    const unknownWireFields = diffUnknownWireFields(rawWireTree);
+
+    // Gabungkan unknown tags dari pesan reply & pesan stiker asli yang ter-cache (deduplikasi)
+    const unknownMap = new Map();
+    for (const entry of [...diffUnknownWireFields(rawWireTree), ...diffUnknownWireFields(cachedWireTree)]) {
+      const k = `${entry.scope}:${entry.parentField || 0}:${entry.field}:${entry.wireType}`;
+      if (!unknownMap.has(k)) unknownMap.set(k, entry);
+    }
+    const unknownWireFields = Array.from(unknownMap.values());
 
     const { mediaInspection, decryptedByMediaType, decryptErrors } = await inspectMediaCandidateInRam({
-      curSession,
-      keyObj: { remoteJid: msg.key.remoteJid || selfJid, fromMe: false, id: contextInfo.stanzaId || msg.key.id },
-      innerMessage: qInner || quotedRaw,
+      curSession: activeSession,
+      keyObj: { remoteJid: msg.key.remoteJid || selfJid, fromMe: false, id: stanzaId || msg.key.id },
+      innerMessage: qInner || inspectedSource,
       mediaTarget,
       stickerNode
     });
 
+    const mergedInnerKeys = quotedInnerKeys.length > 0 ? quotedInnerKeys : (cachedSticker?.innerKeys || []);
+    const mergedNonContext = quotedNonContext.length > 0 ? quotedNonContext : mergedInnerKeys.filter((k) => k !== 'messageContextInfo');
     const primaryMsgType =
-      quotedNonContext[0] ||
+      mergedNonContext[0] ||
       (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : 'stickerMessage');
-    const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || qInner?.[primaryMsgType] || qInner || {});
-    const recentStanzas = Array.isArray(curSession.recentSelfStanzas) ? curSession.recentSelfStanzas : [];
-    const matchedStanza = recentStanzas[recentStanzas.length - 1] || null;
+    const innerMeta = summarizeNonBufferFields(
+      stickerNode || ptvOrMedia || qInner?.[primaryMsgType] || qInner || cachedSticker?.stickerMeta || {}
+    );
+    const recentStanzas = Array.isArray(activeSession.recentSelfStanzas) ? activeSession.recentSelfStanzas : [];
+    const matchedStanza =
+      recentStanzas.find((s) => stanzaId && s.id === stanzaId) ||
+      recentStanzas[recentStanzas.length - 1] ||
+      null;
 
     const rawBlueprint = {
       capturedAt: Date.now(),
       baileysVersion: BAILEYS_VERSION,
       source: 'klon-reply',
-      msgId: contextInfo.stanzaId || msg.key.id || null,
+      msgId: stanzaId || msg.key.id || null,
       upsertType: 'klon-reply',
-      fromMe: true,
+      fromMe: Boolean(msg.key.fromMe),
       remoteJid: msg.key.remoteJid || selfJid,
       stubType: null,
       stanzaMeta: matchedStanza
@@ -1136,9 +1145,9 @@ async function handleKlonReplyCommand(io, sessionId, session, msg) {
             at: matchedStanza.at || Date.now()
           }
         : null,
-      wrapperChain,
-      topLevelKeys: quotedTopKeys,
-      innerKeys: quotedInnerKeys,
+      wrapperChain: wrapperChain.length > 0 ? wrapperChain : (cachedSticker?.wrapperChain || []),
+      topLevelKeys: quotedTopKeys.length > 0 ? quotedTopKeys : (cachedSticker?.topLevelKeys || []),
+      innerKeys: mergedInnerKeys,
       messageType: primaryMsgType,
       hkdfMediaType: decryptedByMediaType,
       decryptedByMediaType,
@@ -1147,23 +1156,41 @@ async function handleKlonReplyCommand(io, sessionId, session, msg) {
       stickerMeta: innerMeta,
       unknownWireFields,
       unknownWireTags: unknownWireFields,
-      rawWireTree,
+      rawWireTree: rawWireTree.length > 0 ? rawWireTree : cachedWireTree,
       mediaInspection,
       decryptErrors,
-      messageKeys: quotedInnerKeys,
+      messageKeys: mergedInnerKeys,
       stickerFields: innerMeta,
       binarySummary: mediaInspection,
-      quotedWireBytes: encodedBytes
+      quotedWireBytes: encodedBytes,
+      matchedCachedSticker: Boolean(cachedSticker)
     };
 
     const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
-    curSession.soundStickerBlueprint = blueprint;
+    activeSession.soundStickerBlueprint = blueprint;
     const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
 
-    pushCalibrationLog(io, sessionId, curSession, {
+    const compactReport = {
+      status: 'captured',
+      msgId: blueprint.msgId,
+      matchedCachedSticker: Boolean(cachedSticker),
+      keys: mergedInnerKeys,
+      mime: innerMeta?.mimetype || '-',
+      hkdf: decryptedByMediaType || '-',
+      container: mediaInspection?.detectedContainer || 'unknown',
+      chunks: Array.isArray(mediaInspection?.chunks) ? mediaInspection.chunks : [],
+      exifKeys: mediaInspection?.exifJson ? Object.keys(mediaInspection.exifJson) : [],
+      unknownTags: unknownWireFields.map((t) => `#${t.field}:w${t.wireType}:${t.scope}`),
+      decryptErrors,
+      specMode: globalSpec.mode,
+      deliveryRoute: globalSpec.deliveryRoute
+    };
+    console.log('[KLON-RESULT]', JSON.stringify(compactReport));
+
+    pushCalibrationLog(io, sessionId, activeSession, {
       upsertType: 'BLUEPRINT-CAPTURED',
       remoteJid: msg.key.remoteJid || selfJid,
-      fromMe: true,
+      fromMe: Boolean(msg.key.fromMe),
       wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'no-media'],
       keys: [
         `source:klon`,
@@ -1178,30 +1205,38 @@ async function handleKlonReplyCommand(io, sessionId, session, msg) {
     emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint, globalSpec });
     emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
 
-    const chunksText = Array.isArray(mediaInspection?.chunks) && mediaInspection.chunks.length > 0
-      ? mediaInspection.chunks.slice(0, 8).join(', ')
-      : '-';
-    const unknownText = unknownWireFields.length > 0
-      ? unknownWireFields.map((t) => `#${t.field}(w${t.wireType}:${t.scope})`).join(', ')
-      : '0';
+    const chunksText = compactReport.chunks.length > 0 ? compactReport.chunks.slice(0, 8).join(', ') : '-';
+    const exifText = mediaInspection?.exifJson ? JSON.stringify(mediaInspection.exifJson).slice(0, 140) : '-';
+    const unknownText = compactReport.unknownTags.length > 0 ? compactReport.unknownTags.join(', ') : '0';
     const errKeys = Object.keys(decryptErrors || {});
     const replyLines = [
       '✅ *.klon Blueprint Stiker Audio Terdeteksi!*',
       `• Spec Aktif: ${globalSpec.mode} (${globalSpec.deliveryRoute})`,
-      `• Tipe Pesan: ${primaryMsgType}`,
-      `• Container & Mime: ${mediaInspection?.detectedContainer || 'unknown'} (${innerMeta?.mimetype || '-'})`,
-      `• HKDF Key: ${decryptedByMediaType || '-'}`,
+      `• Keys: ${mergedInnerKeys.join(', ') || primaryMsgType}`,
+      `• Mime: ${innerMeta?.mimetype || '-'}`,
+      `• HKDF: ${decryptedByMediaType || '-'}`,
+      `• Container: ${mediaInspection?.detectedContainer || 'unknown'}`,
       `• Chunks/Atoms: ${chunksText}`,
+      `• EXIF: ${exifText}`,
       `• Unknown Wire Tags: ${unknownText}`,
-      ...(errKeys.length && !decryptedByMediaType ? [`• Decrypt Errors: ${errKeys.map((k) => `${k}=${decryptErrors[k]}`).join('; ')}`] : []),
-      '',
-      'Silakan kembali ke web Kuro Studio dan kirim stiker suara Anda!'
+      `• Cache Stiker Asli: ${cachedSticker ? 'Cocok' : 'Quote Only'}`,
+      ...(errKeys.length && !decryptedByMediaType ? [`• Decrypt Errors: ${errKeys.map((k) => `${k}=${decryptErrors[k]}`).join('; ')}`] : [])
     ];
-    await sendOfficialSelfMessage(io, sessionId, curSession, selfJid, { text: replyLines.join('\n') }, '.klon Blueprint Report').catch(() => {});
+    await sendOfficialSelfMessage(io, sessionId, activeSession, selfJid, { text: replyLines.join('\n') }, '.klon Blueprint Report');
 
     return blueprint;
   } catch (err) {
-    console.warn(`[KlonInspector ${sessionId}] Error:`, err.message);
+    console.error('[KLON-ERR]', err);
+    if (activeSession && selfJid && selfJid.endsWith('@s.whatsapp.net')) {
+      await sendOfficialSelfMessage(
+        io,
+        sessionId,
+        activeSession,
+        selfJid,
+        { text: `❌ .klon error: ${err?.message || 'Gagal menganalisis stiker.'}` },
+        '.klon error'
+      ).catch(() => {});
+    }
     return null;
   }
 }

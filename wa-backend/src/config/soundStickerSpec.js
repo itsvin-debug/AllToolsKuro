@@ -242,6 +242,8 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
     unknownWireFields,
     rawWireTree: Array.isArray(blueprint.rawWireTree) ? blueprint.rawWireTree.slice(0, 32) : [],
     decryptErrors: blueprint.decryptErrors && typeof blueprint.decryptErrors === 'object' ? blueprint.decryptErrors : undefined,
+    quotedWireBytes: Number(blueprint.quotedWireBytes) || undefined,
+    matchedCachedSticker: Boolean(blueprint.matchedCachedSticker),
     stanzaMeta: blueprint.stanzaMeta && typeof blueprint.stanzaMeta === 'object'
       ? {
           id: blueprint.stanzaMeta.id ? String(blueprint.stanzaMeta.id).slice(0, 64) : undefined,

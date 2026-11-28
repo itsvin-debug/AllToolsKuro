@@ -24,8 +24,14 @@ const {
   clearOwnSignalSessionFilesOnDisk,
   consumeColdRestoredFlag
 } = require('../utils/authFiles');
-const { armSafeProtoDecodeObserver, unwrapMessageContent } = require('../utils/protoWireInspector');
+const {
+  armSafeProtoDecodeObserver,
+  unwrapMessageContent,
+  extractTextAndQuoted,
+  getRecentRawWireBytesSnapshots
+} = require('../utils/protoWireInspector');
 const { isCalibrated } = require('../config/soundStickerSpec');
+const { proto: baileysProtoAlias } = baileysModule;
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
 const {
@@ -147,17 +153,109 @@ function registerKlonCommandProcessor(fn) {
   klonCommandProcessor = typeof fn === 'function' ? fn : null;
 }
 
-function extractCommandText(msg) {
-  const { innerMessage } = unwrapMessageContent(msg?.message);
-  return String(
-    innerMessage?.extendedTextMessage?.text ||
-      innerMessage?.conversation ||
-      msg?.message?.extendedTextMessage?.text ||
-      msg?.message?.conversation ||
-      ''
+function getOwnerDigitsSet(sock) {
+  const ownPnDigits = String(
+    sock?.user?.id || sock?.authState?.creds?.me?.id || ''
   )
-    .trim()
-    .toLowerCase();
+    .split('@')[0]
+    .split(':')[0]
+    .replace(/\D/g, '');
+  const ownLidDigits = String(
+    sock?.user?.lid || sock?.authState?.creds?.me?.lid || ''
+  )
+    .split('@')[0]
+    .split(':')[0]
+    .replace(/\D/g, '');
+  return { ownPnDigits, ownLidDigits };
+}
+
+function jidMatchesOwner(jid, sock) {
+  if (!jid) return false;
+  const num = String(jid).split('@')[0].split(':')[0].replace(/\D/g, '');
+  if (!num) return false;
+  const { ownPnDigits, ownLidDigits } = getOwnerDigitsSet(sock);
+  return Boolean((ownPnDigits && num === ownPnDigits) || (ownLidDigits && num === ownLidDigits));
+}
+
+function isOwnerSelfMessage(msg, sock) {
+  if (!msg?.key) return false;
+  if (msg.key.fromMe === true) return true;
+  return Boolean(
+    jidMatchesOwner(msg.key.remoteJid, sock) ||
+      jidMatchesOwner(msg.key.remoteJidAlt, sock) ||
+      jidMatchesOwner(msg.key.participant, sock) ||
+      jidMatchesOwner(msg.key.participantAlt, sock)
+  );
+}
+
+function cacheRecentOwnerSticker(session, msg, type) {
+  try {
+    if (!session || !msg?.key?.id || !msg?.message) return;
+    if (!isOwnerSelfMessage(msg, session.sock)) return;
+    if (getSentMessage(session, msg.key.id)) return;
+
+    const { innerMessage, wrapperChain } = unwrapMessageContent(msg.message);
+    if (!innerMessage || typeof innerMessage !== 'object') return;
+    const innerKeys = Object.keys(innerMessage);
+    const hasStickerOrMedia = Boolean(
+      innerMessage.stickerMessage ||
+        innerMessage.lottieStickerMessage ||
+        innerMessage.ptvMessage ||
+        innerKeys.some((k) => k.toLowerCase().includes('sticker'))
+    );
+    if (!hasStickerOrMedia) return;
+
+    const topLevelKeys = Object.keys(msg.message);
+    let rawWireBytes = null;
+    const snaps = getRecentRawWireBytesSnapshots(4000);
+    const matchedSnap = [...snaps]
+      .reverse()
+      .find((s) => s && Array.isArray(s.decodedKeys) && topLevelKeys.some((tk) => tk !== 'messageContextInfo' && s.decodedKeys.includes(tk)));
+    if (matchedSnap?.rawBytes && matchedSnap.rawBytes.length <= 16384) {
+      rawWireBytes = Uint8Array.from(matchedSnap.rawBytes);
+    } else if (baileysProtoAlias?.Message?.encode) {
+      const encoded = baileysProtoAlias.Message.encode(msg.message).finish();
+      if (encoded && encoded.length <= 16384) {
+        rawWireBytes = Uint8Array.from(encoded);
+      }
+    }
+
+    const mediaNode =
+      innerMessage.stickerMessage ||
+      innerMessage.lottieStickerMessage?.message?.stickerMessage ||
+      innerMessage.ptvMessage ||
+      {};
+    if (!(session.recentOwnerStickers instanceof Map)) {
+      session.recentOwnerStickers = new Map();
+    }
+    if (session.recentOwnerStickers.has(msg.key.id)) {
+      session.recentOwnerStickers.delete(msg.key.id);
+    }
+    session.recentOwnerStickers.set(msg.key.id, {
+      id: msg.key.id,
+      at: Date.now(),
+      upsertType: type || 'notify',
+      fromMe: Boolean(msg.key.fromMe),
+      remoteJid: msg.key.remoteJid || '',
+      wrapperChain,
+      topLevelKeys,
+      innerKeys,
+      stickerMeta: {
+        mimetype: mediaNode.mimetype || null,
+        isAnimated: Boolean(mediaNode.isAnimated),
+        isLottie: Boolean(mediaNode.isLottie),
+        width: mediaNode.width || null,
+        height: mediaNode.height || null,
+        fileLength: mediaNode.fileLength ? Number(mediaNode.fileLength) : null
+      },
+      rawWireBytes
+    });
+    while (session.recentOwnerStickers.size > 5) {
+      const oldestKey = session.recentOwnerStickers.keys().next().value;
+      if (oldestKey === undefined) break;
+      session.recentOwnerStickers.delete(oldestKey);
+    }
+  } catch (_) {}
 }
 
 /**
@@ -171,11 +269,30 @@ function attachSoundStickerSniffer(io, session, sock) {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       const currentSession = sessions.get(sessionId) || session;
       if (!currentSession) return;
-      if (typeof klonCommandProcessor === 'function' && Array.isArray(messages)) {
+      if (Array.isArray(messages)) {
         for (const msg of messages) {
-          if (msg?.key?.fromMe === true && (!msg.key.id || !getSentMessage(currentSession, msg.key.id))) {
-            if (extractCommandText(msg) === '.klon') {
-              klonCommandProcessor(io, sessionId, currentSession, msg).catch(() => {});
+          if (!msg?.key) continue;
+          if (msg.key.id && getSentMessage(currentSession, msg.key.id)) continue;
+
+          cacheRecentOwnerSticker(currentSession, msg, type);
+
+          if (typeof klonCommandProcessor === 'function') {
+            const { normalizedText, contextInfo } = extractTextAndQuoted(msg.message);
+            const isKlonCmd = normalizedText === '.klon' || normalizedText.startsWith('.klon ') || normalizedText.startsWith('.klon\n');
+            if (isKlonCmd && isOwnerSelfMessage(msg, sock)) {
+              console.log('[KLON-TRIGGER]', {
+                sessionId,
+                id: msg.key.id || null,
+                upsertType: type || null,
+                fromMe: Boolean(msg.key.fromMe),
+                remoteJid: msg.key.remoteJid || null,
+                participant: msg.key.participant || null,
+                hasQuoted: Boolean(contextInfo?.quotedMessage),
+                stanzaId: contextInfo?.stanzaId || null
+              });
+              klonCommandProcessor(io, sessionId, currentSession, msg).catch((err) => {
+                console.error('[KLON-ERR]', err);
+              });
             }
           }
         }
@@ -1388,5 +1505,8 @@ module.exports = {
   attachSoundStickerSniffer,
   registerCalibrationUpsertProcessor,
   registerKlonCommandProcessor,
+  getOwnerDigitsSet,
+  jidMatchesOwner,
+  isOwnerSelfMessage,
   triggerAuthSnapshotSync
 };
