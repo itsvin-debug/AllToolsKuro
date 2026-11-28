@@ -23,7 +23,8 @@ const {
   pushCalibrationLog,
   pushDeliveryTrace,
   getEncodedProtoSize,
-  syncCalibrationProtoObserver
+  syncCalibrationProtoObserver,
+  registerCalibrationUpsertProcessor
 } = require('./whatsappSessionHandler');
 const {
   inspectProtobufWire,
@@ -275,7 +276,7 @@ function inspectMediaBufferMetadata(buf) {
     return { magicHex: '', magicAscii: '', totalBytes: 0, detectedContainer: 'unknown', container: 'unknown', chunks: [] };
   }
 
-  const head = buf.subarray(0, Math.min(48, buf.length));
+  const head = buf.subarray(0, Math.min(64, buf.length));
   const magicHex = head.toString('hex');
   const magicAscii = Array.from(head, (b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
 
@@ -468,8 +469,8 @@ function sanitizeBlueprint(raw) {
     mediaInspection: {
       container: typeof (mi.container || mi.detectedContainer) === 'string' ? String(mi.container || mi.detectedContainer).slice(0, 24) : 'webp',
       detectedContainer: typeof (mi.detectedContainer || mi.container) === 'string' ? String(mi.detectedContainer || mi.container).slice(0, 24) : 'webp',
-      magicHex: typeof mi.magicHex === 'string' ? mi.magicHex.slice(0, 96) : undefined,
-      magicAscii: typeof mi.magicAscii === 'string' ? mi.magicAscii.slice(0, 48) : undefined,
+      magicHex: typeof mi.magicHex === 'string' ? mi.magicHex.slice(0, 128) : undefined,
+      magicAscii: typeof mi.magicAscii === 'string' ? mi.magicAscii.slice(0, 64) : undefined,
       totalBytes: Number(mi.totalBytes) || 0,
       vp8xFlags: Number.isFinite(Number(mi.vp8xFlags)) ? Number(mi.vp8xFlags) : undefined,
       chunks: Array.isArray(mi.chunks) ? mi.chunks.slice(0, 48).map(String) : [],
@@ -645,230 +646,244 @@ function scanDynamicMediaNode(innerMessage) {
   return null;
 }
 
+async function processCalibrationUpsert(io, sessionId, session, { messages, type }) {
+  try {
+    const curSession = sessions.get(sessionId) || session;
+    if (!curSession || !Array.isArray(messages) || messages.length === 0) return;
+
+    const isArmed = Boolean(
+      curSession.calibratingSoundSticker &&
+        (!curSession.calibrationArmedUntil || Date.now() <= curSession.calibrationArmedUntil)
+    );
+    if (curSession.calibratingSoundSticker && !isArmed) {
+      curSession.calibratingSoundSticker = false;
+      syncCalibrationProtoObserver();
+    }
+
+    const selfPn = curSession.sock?.user?.id ? jidNormalizedUser(curSession.sock.user.id) : '';
+    const selfLid = curSession.sock?.user?.lid ? jidNormalizedUser(curSession.sock.user.lid) : '';
+
+    for (const msg of messages) {
+      if (!msg?.key) continue;
+
+      const remoteRaw = String(msg.key.remoteJid || '');
+      const remoteAlt = String(msg.key.remoteJidAlt || '');
+      const participantRaw = String(msg.key.participant || '');
+      const remoteNorm = remoteRaw ? jidNormalizedUser(remoteRaw) : '';
+      const altNorm = remoteAlt ? jidNormalizedUser(remoteAlt) : '';
+      const participantNorm = participantRaw ? jidNormalizedUser(participantRaw) : '';
+
+      const isSelfOwner = Boolean(
+        msg.key.fromMe === true ||
+          (selfPn && (remoteNorm === selfPn || altNorm === selfPn || participantNorm === selfPn)) ||
+          (selfLid && (remoteNorm === selfLid || altNorm === selfLid || participantNorm === selfLid))
+      );
+
+      // Jangan kalibrasi ulang dari pesan outgoing yang dikirim oleh web ini sendiri
+      if (msg.key.id && getSentMessage(curSession, msg.key.id)) {
+        continue;
+      }
+
+      const { innerMessage, wrapperChain } = unwrapMessageContent(msg.message);
+      const innerKeys = Object.keys(innerMessage || {});
+      const displayKeys = innerKeys.length > 0
+        ? innerKeys
+        : (msg.messageStubType ? [`stub:${msg.messageStubType}`] : ['empty-message']);
+
+      // Saat mode deteksi aktif, log SEMUA pesan masuk (notify/append, fromMe true/false, self-chat/bot/grup)
+      if (isArmed) {
+        pushCalibrationLog(io, sessionId, curSession, {
+          upsertType: type || 'notify',
+          remoteJid: remoteRaw || participantRaw,
+          fromMe: Boolean(msg.key.fromMe),
+          wrapperChain,
+          keys: displayKeys,
+          stubType: msg.messageStubType || null
+        });
+      }
+
+      if (!innerMessage || typeof innerMessage !== 'object') continue;
+      if (!isArmed && !isSelfOwner) continue;
+
+      const dynamicMedia = scanDynamicMediaNode(innerMessage);
+      const stickerNode =
+        innerMessage.stickerMessage ||
+        innerMessage.lottieStickerMessage?.message?.stickerMessage ||
+        null;
+      const ptvOrMedia =
+        innerMessage.ptvMessage ||
+        (isArmed
+          ? innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || dynamicMedia?.node
+          : null);
+      const mediaTarget = stickerNode || ptvOrMedia;
+
+      const globalFrames = getRecentRawWireFrames();
+      const latestSessionPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
+        ? curSession.lastRawWirePackets[curSession.lastRawWirePackets.length - 1]
+        : null;
+      const latestGlobalPacket = globalFrames.length > 0 ? globalFrames[globalFrames.length - 1] : null;
+      const latestRawPacket = latestSessionPacket || latestGlobalPacket;
+
+      let encodedProtoWireTree = [];
+      try {
+        if (proto?.Message?.encode) {
+          const bytes = proto.Message.encode(innerMessage).finish();
+          encodedProtoWireTree = inspectProtobufWire(bytes, 4);
+        }
+      } catch (_) {}
+
+      const rawWireTree = latestRawPacket?.wireTree?.length ? latestRawPacket.wireTree : encodedProtoWireTree;
+      const unknownWireFields = diffUnknownWireFields(rawWireTree);
+
+      const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
+      const hasUnrecognizedWirePayload = isArmed && nonContextKeys.length === 0 && rawWireTree.length > 0;
+      const lastCb = Array.isArray(curSession.lastCbMessageMeta) && curSession.lastCbMessageMeta.length > 0
+        ? curSession.lastCbMessageMeta[curSession.lastCbMessageMeta.length - 1]
+        : null;
+      const looksLikeSticker =
+        Boolean(stickerNode) ||
+        innerKeys.some((k) => k.toLowerCase().includes('sticker')) ||
+        hasUnrecognizedWirePayload ||
+        Boolean(lastCb && lastCb.mediatype === 'sticker' && Date.now() - lastCb.at < 15000);
+
+      if (!looksLikeSticker && !(isArmed && mediaTarget)) {
+        continue;
+      }
+
+      let mediaInspection = null;
+      let decryptedByMediaType = null;
+      if (mediaTarget) {
+        let dlBuf = null;
+        try {
+          const naturalKind = stickerNode
+            ? 'sticker'
+            : innerMessage.videoMessage || innerMessage.ptvMessage
+              ? 'video'
+              : innerMessage.audioMessage
+                ? 'audio'
+                : innerMessage.imageMessage
+                  ? 'image'
+                  : 'document';
+
+          if (typeof downloadContentFromMessage === 'function') {
+            const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document', 'image']));
+            for (const kind of candidates) {
+              try {
+                const stream = await downloadContentFromMessage(mediaTarget, kind);
+                const chunks = [];
+                let size = 0;
+                for await (const chunk of stream) {
+                  if (size < 1024 * 1024) chunks.push(chunk);
+                  size += chunk.length;
+                }
+                const candidateBuf = Buffer.concat(chunks);
+                if (candidateBuf && candidateBuf.length > 0) {
+                  dlBuf = candidateBuf;
+                  decryptedByMediaType = kind;
+                  break;
+                }
+              } catch (_) {}
+            }
+          }
+
+          if ((!dlBuf || dlBuf.length === 0) && typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || innerMessage.ptvMessage || innerMessage.imageMessage)) {
+            try {
+              dlBuf = await downloadMediaMessage(
+                { key: msg.key, message: innerMessage },
+                'buffer',
+                {},
+                { reuploadRequest: curSession.sock?.updateMediaMessage }
+              );
+              if (dlBuf && dlBuf.length > 0) decryptedByMediaType = naturalKind;
+            } catch (_) {}
+          }
+
+          if (dlBuf && dlBuf.length > 0) {
+            mediaInspection = inspectMediaBufferMetadata(dlBuf);
+          }
+        } catch (dlErr) {
+          mediaInspection = { error: dlErr.message };
+        } finally {
+          dlBuf = null;
+        }
+      }
+
+      const primaryMsgType = nonContextKeys[0] || (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : 'stickerMessage');
+      const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || innerMessage[primaryMsgType] || innerMessage);
+      if (!isArmed && !isInterestingSoundBlueprint(innerKeys, wrapperChain, innerMeta, mediaInspection, rawWireTree)) {
+        continue;
+      }
+
+      curSession.calibratingSoundSticker = false;
+      curSession.calibrationArmedUntil = 0;
+      if (curSession._calibrationExpireTimer) {
+        clearTimeout(curSession._calibrationExpireTimer);
+        curSession._calibrationExpireTimer = null;
+      }
+      syncCalibrationProtoObserver();
+
+      const rawBlueprint = {
+        capturedAt: Date.now(),
+        baileysVersion: BAILEYS_VERSION,
+        upsertType: type || 'notify',
+        wrapperChain,
+        topLevelKeys: innerKeys,
+        messageType: primaryMsgType,
+        hkdfMediaType: decryptedByMediaType,
+        decryptedByMediaType,
+        hasMessageContextInfo: Boolean(innerMessage.messageContextInfo || msg.message?.messageContextInfo),
+        innerMeta,
+        stickerMeta: innerMeta,
+        unknownWireFields,
+        unknownWireTags: unknownWireFields,
+        rawWireTree,
+        mediaInspection,
+        messageKeys: innerKeys,
+        stickerFields: innerMeta,
+        binarySummary: mediaInspection
+      };
+
+      const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
+      curSession.soundStickerBlueprint = blueprint;
+      const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
+
+      pushCalibrationLog(io, sessionId, curSession, {
+        upsertType: 'blueprint-captured',
+        remoteJid: remoteRaw || participantRaw,
+        fromMe: Boolean(msg.key.fromMe),
+        wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'unknown'].filter(Boolean),
+        keys: [
+          `HKDF:${decryptedByMediaType || '-'}`,
+          `mime:${innerMeta?.mimetype || '-'}`,
+          `unknownTags:${unknownWireFields.length}`,
+          ...(unknownWireFields.map((t) => `#${t.field}:${t.scope}`))
+        ]
+      });
+
+      emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
+      emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint, globalSpec });
+      emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
+      break;
+    }
+  } catch (err) {
+    console.warn(`[BlueprintInspector ${sessionId}] Error:`, err.message);
+  } finally {
+    syncCalibrationProtoObserver();
+  }
+}
+
+registerCalibrationUpsertProcessor(processCalibrationUpsert);
+
 /**
- * Detektor Deep Wire-Level Pasif & Aktif (notify + append, selfPn + selfLid + alt, unwrap wrapper & unknown tags).
+ * Daftarkan handler upsert kalibrasi pada objek sesi (dipelihara untuk kompatibilitas).
  */
 function attachCalibrationListener(io, sessionId, session) {
   if (!session) return;
-
-  session._onCalibrationUpsert = async ({ messages, type }) => {
-    try {
-      const curSession = sessions.get(sessionId);
-      if (!curSession || !Array.isArray(messages) || messages.length === 0) return;
-
-      const isArmed = Boolean(
-        curSession.calibratingSoundSticker &&
-          curSession.calibrationArmedUntil &&
-          Date.now() <= curSession.calibrationArmedUntil
-      );
-      if (curSession.calibratingSoundSticker && !isArmed) {
-        curSession.calibratingSoundSticker = false;
-      }
-
-      const selfPn = curSession.sock?.user?.id ? jidNormalizedUser(curSession.sock.user.id) : '';
-      const selfLid = curSession.sock?.user?.lid ? jidNormalizedUser(curSession.sock.user.lid) : '';
-
-      for (const msg of messages) {
-        if (!msg?.key) continue;
-
-        const remoteRaw = String(msg.key.remoteJid || '');
-        const remoteAlt = String(msg.key.remoteJidAlt || '');
-        const participantRaw = String(msg.key.participant || '');
-        const remoteNorm = remoteRaw ? jidNormalizedUser(remoteRaw) : '';
-        const altNorm = remoteAlt ? jidNormalizedUser(remoteAlt) : '';
-        const participantNorm = participantRaw ? jidNormalizedUser(participantRaw) : '';
-
-        const isSelfOwner = Boolean(
-          msg.key.fromMe === true ||
-            (selfPn && (remoteNorm === selfPn || altNorm === selfPn || participantNorm === selfPn)) ||
-            (selfLid && (remoteNorm === selfLid || altNorm === selfLid || participantNorm === selfLid))
-        );
-
-        // Jangan kalibrasi ulang dari pesan outgoing yang dikirim oleh web ini sendiri
-        if (msg.key.id && getSentMessage(curSession, msg.key.id)) {
-          continue;
-        }
-
-        const { innerMessage, wrapperChain } = unwrapMessageContent(msg.message);
-        const innerKeys = Object.keys(innerMessage || {});
-
-        // Saat mode deteksi aktif, log SEMUA pesan/stub masuk tanpa memfilter pengirim/tipe pesan
-        if (isArmed) {
-          pushCalibrationLog(io, sessionId, curSession, {
-            upsertType: type || 'notify',
-            remoteJid: remoteRaw || participantRaw,
-            fromMe: Boolean(msg.key.fromMe),
-            wrapperChain,
-            keys: innerKeys,
-            stubType: msg.messageStubType || null
-          });
-        }
-
-        if (!innerMessage || typeof innerMessage !== 'object') continue;
-        if (!isArmed && !isSelfOwner) continue;
-
-        const dynamicMedia = scanDynamicMediaNode(innerMessage);
-        const stickerNode =
-          innerMessage.stickerMessage ||
-          innerMessage.lottieStickerMessage?.message?.stickerMessage ||
-          null;
-        const ptvOrMedia =
-          innerMessage.ptvMessage ||
-          (isArmed
-            ? innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || dynamicMedia?.node
-            : null);
-        const mediaTarget = stickerNode || ptvOrMedia;
-
-        const globalFrames = getRecentRawWireFrames();
-        const latestSessionPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
-          ? curSession.lastRawWirePackets[curSession.lastRawWirePackets.length - 1]
-          : null;
-        const latestGlobalPacket = globalFrames.length > 0 ? globalFrames[globalFrames.length - 1] : null;
-        const latestRawPacket = latestSessionPacket || latestGlobalPacket;
-
-        let encodedProtoWireTree = [];
-        try {
-          if (proto?.Message?.encode) {
-            const bytes = proto.Message.encode(innerMessage).finish();
-            encodedProtoWireTree = inspectProtobufWire(bytes, 4);
-          }
-        } catch (_) {}
-
-        const rawWireTree = latestRawPacket?.wireTree?.length ? latestRawPacket.wireTree : encodedProtoWireTree;
-        const unknownWireFields = diffUnknownWireFields(rawWireTree);
-
-        const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
-        const hasUnrecognizedWirePayload = isArmed && nonContextKeys.length === 0 && rawWireTree.length > 0;
-        const looksLikeSticker =
-          Boolean(stickerNode) ||
-          innerKeys.some((k) => k.toLowerCase().includes('sticker')) ||
-          hasUnrecognizedWirePayload;
-
-        if (!looksLikeSticker && !(isArmed && mediaTarget)) {
-          continue;
-        }
-
-        let mediaInspection = null;
-        let decryptedByMediaType = null;
-        if (mediaTarget) {
-          let dlBuf = null;
-          try {
-            const naturalKind = stickerNode
-              ? 'sticker'
-              : innerMessage.videoMessage || innerMessage.ptvMessage
-                ? 'video'
-                : innerMessage.audioMessage
-                  ? 'audio'
-                  : innerMessage.imageMessage
-                    ? 'image'
-                    : 'document';
-
-            if (typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || innerMessage.ptvMessage || innerMessage.imageMessage)) {
-              try {
-                dlBuf = await downloadMediaMessage(
-                  { key: msg.key, message: innerMessage },
-                  'buffer',
-                  {},
-                  { reuploadRequest: curSession.sock?.updateMediaMessage }
-                );
-                if (dlBuf && dlBuf.length > 0) decryptedByMediaType = naturalKind;
-              } catch (_) {}
-            }
-
-            if ((!dlBuf || dlBuf.length === 0) && typeof downloadContentFromMessage === 'function') {
-              const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document', 'image']));
-              for (const kind of candidates) {
-                try {
-                  const stream = await downloadContentFromMessage(mediaTarget, kind);
-                  const chunks = [];
-                  let size = 0;
-                  for await (const chunk of stream) {
-                    if (size < 1024 * 1024) chunks.push(chunk);
-                    size += chunk.length;
-                  }
-                  const candidateBuf = Buffer.concat(chunks);
-                  if (candidateBuf && candidateBuf.length > 0) {
-                    dlBuf = candidateBuf;
-                    decryptedByMediaType = kind;
-                    break;
-                  }
-                } catch (_) {}
-              }
-            }
-
-            if (dlBuf && dlBuf.length > 0) {
-              mediaInspection = inspectMediaBufferMetadata(dlBuf);
-            }
-          } catch (dlErr) {
-            mediaInspection = { error: dlErr.message };
-          } finally {
-            dlBuf = null;
-          }
-        }
-
-        const primaryMsgType = nonContextKeys[0] || (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : 'stickerMessage');
-        const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || innerMessage[primaryMsgType] || innerMessage);
-        if (!isArmed && !isInterestingSoundBlueprint(innerKeys, wrapperChain, innerMeta, mediaInspection, rawWireTree)) {
-          continue;
-        }
-
-        curSession.calibratingSoundSticker = false;
-        curSession.calibrationArmedUntil = 0;
-        if (curSession._calibrationExpireTimer) {
-          clearTimeout(curSession._calibrationExpireTimer);
-          curSession._calibrationExpireTimer = null;
-        }
-        syncCalibrationProtoObserver();
-
-        const rawBlueprint = {
-          capturedAt: Date.now(),
-          baileysVersion: BAILEYS_VERSION,
-          upsertType: type || 'notify',
-          wrapperChain,
-          topLevelKeys: innerKeys,
-          messageType: primaryMsgType,
-          hkdfMediaType: decryptedByMediaType,
-          decryptedByMediaType,
-          hasMessageContextInfo: Boolean(innerMessage.messageContextInfo || msg.message?.messageContextInfo),
-          innerMeta,
-          stickerMeta: innerMeta,
-          unknownWireFields,
-          unknownWireTags: unknownWireFields,
-          rawWireTree,
-          mediaInspection,
-          messageKeys: innerKeys,
-          stickerFields: innerMeta,
-          binarySummary: mediaInspection
-        };
-
-        const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
-        curSession.soundStickerBlueprint = blueprint;
-        const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
-
-        pushCalibrationLog(io, sessionId, curSession, {
-          upsertType: 'blueprint-captured',
-          remoteJid: remoteRaw || participantRaw,
-          fromMe: Boolean(msg.key.fromMe),
-          wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'unknown'].filter(Boolean),
-          keys: [
-            `HKDF:${decryptedByMediaType || '-'}`,
-            `mime:${innerMeta?.mimetype || '-'}`,
-            `unknownTags:${unknownWireFields.length}`,
-            ...(unknownWireFields.map((t) => `#${t.field}:${t.scope}`))
-          ]
-        });
-
-        emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
-        emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint, globalSpec });
-        emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
-        break;
-      }
-    } catch (err) {
-      console.warn(`[BlueprintInspector ${sessionId}] Error:`, err.message);
-    } finally {
-      syncCalibrationProtoObserver();
-    }
-  };
+  session._onCalibrationUpsert = (payload) => processCalibrationUpsert(io, sessionId, session, payload);
+  if (session.sock) {
+    const { attachSoundStickerSniffer } = require('./whatsappSessionHandler');
+    attachSoundStickerSniffer(io, session, session.sock);
+  }
 }
 
 /**

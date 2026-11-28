@@ -135,6 +135,89 @@ function pushDeliveryTrace(io, sessionId, session, entry) {
   emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', item);
 }
 
+let calibrationUpsertProcessor = null;
+
+function registerCalibrationUpsertProcessor(fn) {
+  calibrationUpsertProcessor = typeof fn === 'function' ? fn : null;
+}
+
+/**
+ * Pasang penyadap kalibrasi stiker audio langsung ke socket baru (CB:message + messages.upsert baris pertama).
+ */
+function attachSoundStickerSniffer(io, session, sock) {
+  if (!session || !sock) return;
+  const sessionId = session.sessionId;
+  if (!sock._kuroUpsertSnifferBound && typeof sock?.ev?.on === 'function') {
+    sock._kuroUpsertSnifferBound = true;
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      const currentSession = sessions.get(sessionId) || session;
+      if (!currentSession) return;
+      if (typeof calibrationUpsertProcessor === 'function') {
+        try {
+          await calibrationUpsertProcessor(io, sessionId, currentSession, { messages, type });
+        } catch (_) {}
+      } else if (typeof currentSession._onCalibrationUpsert === 'function') {
+        try {
+          await currentSession._onCalibrationUpsert({ messages, type });
+        } catch (_) {}
+      }
+    });
+  }
+
+  if (typeof sock?.ws?.on === 'function' && !sock._kuroCbMessageSnifferBound) {
+    sock._kuroCbMessageSnifferBound = true;
+    sock.ws.on('CB:message', (node) => {
+      try {
+        if (!session.calibratingSoundSticker) return;
+        if (session.calibrationArmedUntil && Date.now() > session.calibrationArmedUntil) {
+          session.calibratingSoundSticker = false;
+          syncCalibrationProtoObserver();
+          return;
+        }
+        const attrs = node?.attrs || {};
+        const children = Array.isArray(node?.content) ? node.content : [];
+        const childTags = children.map((c) => c?.tag).filter(Boolean);
+        const encTypes = children
+          .filter((c) => c?.tag === 'enc' && c?.attrs?.type)
+          .map((c) => `enc:${c.attrs.type}`);
+        const fromStr = String(attrs.from || attrs.participant || '');
+        const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
+        const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
+
+        if (!Array.isArray(session.lastCbMessageMeta)) session.lastCbMessageMeta = [];
+        session.lastCbMessageMeta.push({
+          at: Date.now(),
+          id: attrs.id || '',
+          from: fromStr,
+          type: attrs.type || '',
+          mediatype: attrs.mediatype || '',
+          participant: attrs.participant || '',
+          recipient: attrs.recipient || '',
+          t: attrs.t || '',
+          childTags
+        });
+        while (session.lastCbMessageMeta.length > 5) session.lastCbMessageMeta.shift();
+
+        pushCalibrationLog(io, sessionId, session, {
+          upsertType: 'ws:CB:message',
+          remoteJid: fromStr,
+          fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
+          wrapperChain: [attrs.type, attrs.mediatype, ...childTags].filter(Boolean).slice(0, 8),
+          keys: [attrs.id || 'no-id', ...encTypes, ...childTags].slice(0, 8),
+          attrsSummary: {
+            id: attrs.id || null,
+            from: attrs.from || null,
+            type: attrs.type || null,
+            participant: attrs.participant || null,
+            recipient: attrs.recipient || null,
+            t: attrs.t || null
+          }
+        });
+      } catch (_) {}
+    });
+  }
+}
+
 function getEncodedProtoSize(protoMessage) {
   try {
     if (!protoMessage || !proto?.Message?.encode) return 0;
@@ -484,34 +567,11 @@ async function startBaileys(
       }
     });
 
-    // Monitor read-only stanza ws (TANPA memodifikasi sock.signalRepository)
-    if (typeof sock?.ws?.on === 'function') {
-      sock.ws.on('CB:message', (node) => {
-        try {
-          if (!session.calibratingSoundSticker) return;
-          if (session.calibrationArmedUntil && Date.now() > session.calibrationArmedUntil) {
-            session.calibratingSoundSticker = false;
-            return;
-          }
-          const attrs = node?.attrs || {};
-          const children = Array.isArray(node?.content) ? node.content : [];
-          const childTags = children.map((c) => c?.tag).filter(Boolean);
-          const encTypes = children
-            .filter((c) => c?.tag === 'enc' && c?.attrs?.type)
-            .map((c) => `enc:${c.attrs.type}`);
-          const fromStr = String(attrs.from || '');
-          const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
-          const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
-          pushCalibrationLog(io, sessionId, session, {
-            upsertType: 'ws:CB:message',
-            remoteJid: fromStr,
-            fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
-            wrapperChain: [attrs.type, attrs.mediatype, ...childTags].filter(Boolean).slice(0, 6),
-            keys: [attrs.id || 'no-id', ...encTypes, ...childTags].slice(0, 6)
-          });
-        } catch (_) {}
-      });
+    // Pasang sniffer stiker audio pada socket baru (termasuk setelah cold-boot / 515 / reconnect)
+    attachSoundStickerSniffer(io, session, sock);
 
+    // Monitor read-only stanza ACK & receipt (TANPA memodifikasi sock.signalRepository)
+    if (typeof sock?.ws?.on === 'function') {
       sock.ws.on('CB:ack,class:message', (node) => {
         try {
           const attrs = node?.attrs || {};
@@ -943,13 +1003,6 @@ async function startBaileys(
       const currentSession = sessions.get(sessionId);
       if (!currentSession) return;
 
-      // Hook kalibrasi stiker suara HARUS di baris paling atas sebelum filter notify / fromMe / status@broadcast
-      if (typeof currentSession._onCalibrationUpsert === 'function') {
-        try {
-          await currentSession._onCalibrationUpsert({ messages, type });
-        } catch (_) {}
-      }
-
       if (type !== 'notify' && type !== 'append') return;
 
       for (const msg of messages) {
@@ -1255,5 +1308,7 @@ module.exports = {
   pushDeliveryTrace,
   getEncodedProtoSize,
   syncCalibrationProtoObserver,
+  attachSoundStickerSniffer,
+  registerCalibrationUpsertProcessor,
   triggerAuthSnapshotSync
 };

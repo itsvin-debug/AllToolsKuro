@@ -175,6 +175,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [{ sessionId, deviceToken }] = useState(() => getOrCreateDeviceCredentials());
   const backendUrl = useMemo(() => getWaBackendUrl(), []);
   const socketRef = useRef(null);
+  const onShowToastRef = useRef(onShowToast);
+  useEffect(() => {
+    onShowToastRef.current = onShowToast;
+  }, [onShowToast]);
   const e2eeResetTimerRef = useRef(null);
   const e2eeTestTimerRef = useRef(null);
   const plainStickerTestTimerRef = useRef(null);
@@ -380,14 +384,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       }
       const phoneLabel = info?.linkedPhone ? `+${info.linkedPhone}` : 'perangkat tertaut';
       if (!info?.resumed) {
-        onShowToast?.(`Deteksi aktif di ${phoneLabel}: teruskan 1 stiker audio sekarang.`, 'info');
+        onShowToastRef.current?.(`Deteksi aktif di ${phoneLabel}: kirim pesan atau teruskan 1 stiker audio.`, 'info');
       }
     });
 
     sock.on('sound-sticker-calibration-error', (payload) => {
       if (unmounted) return;
       setCalibrationArmed(false);
-      onShowToast?.(payload?.error || 'Deteksi format gagal dimulai.', 'error');
+      onShowToastRef.current?.(payload?.error || 'Deteksi format gagal dimulai.', 'error');
     });
 
     sock.on('sound-sticker-calibration-log', (entry) => {
@@ -421,9 +425,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setIsTestingPlainSticker(false);
       setE2eeDiagStatus({ kind: 'plain_sticker', ...res });
       if (res.ok) {
-        onShowToast?.(res.ackLabel || 'Stiker polos berhasil terkirim ke HP!', 'success');
+        onShowToastRef.current?.(res.ackLabel || 'Stiker polos berhasil terkirim ke HP!', 'success');
       } else {
-        onShowToast?.(res.error || 'Tes Stiker Polos gagal.', 'error');
+        onShowToastRef.current?.(res.error || 'Tes Stiker Polos gagal.', 'error');
       }
     });
 
@@ -433,9 +437,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setIsRefreshingE2ee(false);
       setE2eeDiagStatus({ kind: 'reset', ...res });
       if (res.ok) {
-        onShowToast?.(`Kunci E2EE disegarkan (${res.clearedCount || 0} sesi dihapus).`, 'success');
+        onShowToastRef.current?.(`Kunci E2EE disegarkan (${res.clearedCount || 0} sesi dihapus).`, 'success');
       } else {
-        onShowToast?.(res.error || 'Gagal mereset kunci E2EE.', 'error');
+        onShowToastRef.current?.(res.error || 'Gagal mereset kunci E2EE.', 'error');
       }
     });
 
@@ -445,9 +449,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setIsTestingE2ee(false);
       setE2eeDiagStatus({ kind: 'test', ...res });
       if (res.ok) {
-        onShowToast?.(res.ackLabel || 'Tes E2EE berhasil terkirim (0 error).', 'success');
+        onShowToastRef.current?.(res.ackLabel || 'Tes E2EE berhasil terkirim (0 error).', 'success');
       } else {
-        onShowToast?.(res.error || 'Tes E2EE gagal mencapai perangkat.', 'error');
+        onShowToastRef.current?.(res.error || 'Tes E2EE gagal mencapai perangkat.', 'error');
       }
     });
 
@@ -456,9 +460,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       if (e2eeResetTimerRef.current) clearTimeout(e2eeResetTimerRef.current);
       setIsRefreshingE2ee(false);
       if (res?.ok) {
-        onShowToast?.('Kunci enkripsi E2EE WhatsApp berhasil disegarkan.', 'success');
+        onShowToastRef.current?.('Kunci enkripsi E2EE WhatsApp berhasil disegarkan.', 'success');
       } else {
-        onShowToast?.(res?.error || 'Gagal menyegarkan kunci E2EE.', 'error');
+        onShowToastRef.current?.(res?.error || 'Gagal menyegarkan kunci E2EE.', 'error');
       }
     });
 
@@ -476,7 +480,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, serialized);
         }
       } catch {}
-      onShowToast?.('Format Stiker Audio Terkalibrasi & disimpan permanen!', 'success');
+      onShowToastRef.current?.('Blueprint Stiker Audio Tertangkap & disimpan permanen!', 'success');
     };
 
     sock.on('sound-sticker-blueprint-ready', handleBlueprintCaptured);
@@ -530,7 +534,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       } else if (!res.queueId) {
         const errText = res.error || 'Gagal mengirim stiker ke WhatsApp.';
         setWaError(errText);
-        onShowToast?.(errText, 'error');
+        onShowToastRef.current?.(errText, 'error');
       }
     });
 
@@ -542,7 +546,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       sock.disconnect();
       socketRef.current = null;
     };
-  }, [backendUrl, sessionId, deviceToken, onShowToast]);
+  }, [backendUrl, sessionId, deviceToken]);
 
   // ─── HANDLE UNGGAH VISUAL (MODE A) ───
   const handleSelectVisualFile = async (file) => {
@@ -2261,7 +2265,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2.5">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="px-2 py-0.5 bg-emerald-300 border border-black font-black text-[10px] uppercase text-black">
-                      Format Stiker Audio Terkalibrasi!
+                      Blueprint Stiker Audio Tertangkap!
                     </span>
                     <button
                       type="button"
@@ -2360,6 +2364,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     </span>
                   </button>
 
+                  {calibrationArmed && (
+                    <p className="text-[11px] font-semibold text-emerald-900 bg-emerald-50 border border-black px-2 py-1.5 leading-snug">
+                      Kirim pesan apa saja atau teruskan 1 stiker audio (boleh di Pesan Diri Sendiri atau langsung dari chat bot <code className="font-mono">.stikeraudio</code>) &mdash; log akan langsung bergerak di bawah.
+                    </p>
+                  )}
+
                   {(calibrationArmed || calibrationLogs.length > 0) && (
                     <div className="p-2 bg-white border border-black space-y-1 text-[10px] font-mono">
                       <div className="font-black uppercase text-neutral-600">
@@ -2372,9 +2382,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       ) : (
                         calibrationLogs.map((item, idx) => (
                           <div key={`${item.at}-${idx}`} className="text-neutral-800 truncate">
-                            [{item.upsertType}] {item.remoteJid ? `${String(item.remoteJid).split('@')[0].slice(-8)} ` : ''}
-                            {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} -> ` : ''}
-                            {(item.keys || []).join(', ') || 'raw-wire'}
+                            [{item.upsertType}] fromMe={String(Boolean(item.fromMe))}{' '}
+                            {item.remoteJid ? `${String(item.remoteJid).split('@')[0].slice(-8)} ` : ''}
+                            {item.wrapperChain?.length ? `${item.wrapperChain.join(' -> ')} ` : ''}
+                            keys={(item.keys || []).join(',') || 'raw-wire'}
                           </div>
                         ))
                       )}
