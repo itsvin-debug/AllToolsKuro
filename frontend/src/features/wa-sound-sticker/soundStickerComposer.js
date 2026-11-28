@@ -6,7 +6,7 @@ import {
 } from './audioTrimmerEngine.js';
 
 const TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
-const MAX_SAFE_MP4_BYTES = 1.5 * 1024 * 1024;
+const MAX_SAFE_MP4_BYTES = 2.5 * 1024 * 1024;
 
 function encodeUtf8(str) {
   if (TEXT_ENCODER) return TEXT_ENCODER.encode(str);
@@ -986,17 +986,27 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     }
 
     const stickerWebpBase64 = await blobToBase64Local(webpBlob);
+    let audioBase64;
+    let audioMime;
     let audioM4aBase64;
     let muxedMp4Base64;
     let muxedWebmBase64;
+    let thumbnailJpegBase64;
 
-    const bpContainer = blueprint?.mediaInspection?.detectedContainer || '';
-    const bpMime = String(blueprint?.stickerMeta?.mimetype || '').toLowerCase();
-    const needsMuxed = bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm');
-    const needsCustomAudio = (blueprint?.mediaInspection?.customChunks?.length || 0) > 0;
+    try {
+      const thumbCanvas = document.createElement('canvas');
+      thumbCanvas.width = 256;
+      thumbCanvas.height = 256;
+      const thumbCtx = thumbCanvas.getContext('2d', { alpha: false });
+      renderStickerCanvasFrame(thumbCtx, mediaEl, { ...renderOptions, bgStyle: 'solid' }, 0);
+      const dataUrl = thumbCanvas.toDataURL('image/jpeg', 0.65);
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx !== -1) thumbnailJpegBase64 = dataUrl.slice(commaIdx + 1);
+    } catch {}
 
+    // Selalu rakit potongan audio & video 512x512 bersuara saat audio tersedia (Jalur A/B/C)
     let trimmedAudio = null;
-    if (audioBuf && (needsMuxed || needsCustomAudio)) {
+    if (audioBuf) {
       trimmedAudio = await renderTrimmedAudioBuffer(audioBuf, {
         startSec: safeStart,
         endSec: safeEnd,
@@ -1005,23 +1015,23 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       });
     }
 
-    if (trimmedAudio && needsCustomAudio) {
-      onProgress?.(80);
+    if (trimmedAudio) {
+      onProgress?.(78);
       try {
         const enc = await encodeTrimmedAudio(trimmedAudio);
-        if (enc?.blob && enc.ext === 'm4a' && enc.blob.size > 100) {
-          audioM4aBase64 = await blobToBase64Local(enc.blob);
+        if (enc?.blob && enc.blob.size > 100 && enc.blob.size <= 1024 * 1024) {
+          audioBase64 = await blobToBase64Local(enc.blob);
+          audioMime = enc.mimeType || 'audio/mp4';
+          if (enc.ext === 'm4a') audioM4aBase64 = audioBase64;
         }
       } catch {}
-    }
 
-    if (trimmedAudio && needsMuxed) {
       onProgress?.(86);
       try {
         const muxed = item.stagedMuxedBlob
           ? { blob: item.stagedMuxedBlob, ext: item.stagedMuxedExt || 'mp4' }
           : await composeSoundVideoStage1({ sourceMedia: mediaEl, trimmedAudioBuffer: trimmedAudio, renderOptions });
-        if (muxed?.blob && muxed.blob.size > 100 && muxed.blob.size <= 3.5 * 1024 * 1024) {
+        if (muxed?.blob && muxed.blob.size > 100 && muxed.blob.size <= 2.5 * 1024 * 1024) {
           const b64 = await blobToBase64Local(muxed.blob);
           if (muxed.ext === 'webm') muxedWebmBase64 = b64;
           else muxedMp4Base64 = b64;
@@ -1033,9 +1043,11 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     return {
       queueId: item.id,
       stickerWebpBase64,
+      ...(audioBase64 ? { audioBase64, audioMime } : {}),
       ...(audioM4aBase64 ? { audioM4aBase64 } : {}),
       ...(muxedMp4Base64 ? { muxedMp4Base64 } : {}),
       ...(muxedWebmBase64 ? { muxedWebmBase64 } : {}),
+      ...(thumbnailJpegBase64 ? { thumbnailJpegBase64 } : {}),
       durationSec,
       isAnimated: willAnimate,
       width: 512,

@@ -19,13 +19,16 @@ const MAX_MUXED_CONTAINER_BYTES = 3 * 1024 * 1024;
 const activeSpec = {
   version: 1,
   mode: 'native_webp_clean',
+  deliveryRoute: 'jalur_d_uncalibrated_webp',
   calibrated: false,
+  hasAudioSignature: false,
+  messageType: 'stickerMessage',
   container: 'webp',
   mimetype: 'image/webp',
   hkdfMediaType: 'sticker',
   canEncodeCleanly: false,
   hasUnsupportedUnknownProtoFields: false,
-  reason: 'Menggunakan WebP 512x512 native bersih agar 100% langsung terbaca tanpa "Menunggu pesan ini".',
+  reason: 'Belum dikalibrasi. Kiriman memakai WebP 512x512 bersih via sock.sendMessage (0% "Menunggu pesan ini").',
   baileysVersion: BAILEYS_VERSION,
   maxStaticBytes: MAX_STATIC_WEBP_BYTES,
   maxAnimatedBytes: MAX_ANIMATED_WEBP_BYTES,
@@ -33,6 +36,8 @@ const activeSpec = {
   protoPatchRules: {
     wrapperChain: [],
     topLevelKeys: [],
+    innerMeta: {},
+    unknownWireFields: [],
     unknownTags: [],
     customRiffChunks: [],
     extraExifKeys: [],
@@ -60,11 +65,29 @@ function sanitizeAnonymousExifTemplate(exifJson, extraKeys = []) {
   return Object.keys(tpl).length > 0 ? tpl : null;
 }
 
+function sanitizeUnknownWireFields(rawFields = []) {
+  if (!Array.isArray(rawFields)) return [];
+  return rawFields.slice(0, 16).map((t) => ({
+    scope: typeof t.scope === 'string' ? t.scope.slice(0, 32) : 'Message',
+    ...(t.parentField ? { parentField: Number(t.parentField) } : {}),
+    field: Number(t.field),
+    wireType: Number(t.wireType),
+    ...(t.varintValue !== undefined ? { varintValue: t.varintValue } : {}),
+    ...(t.len !== undefined ? { len: Number(t.len) || 0 } : {}),
+    ...(typeof t.previewUtf8 === 'string' ? { previewUtf8: t.previewUtf8.slice(0, 96) } : {}),
+    ...(typeof t.hexHead === 'string' ? { hexHead: t.hexHead.slice(0, 32) } : {}),
+    ...(Array.isArray(t.subFields) ? { subFields: t.subFields.slice(0, 16) } : {})
+  }));
+}
+
 function getGlobalSoundStickerSpec() {
   return {
     version: activeSpec.version,
     mode: activeSpec.mode,
+    deliveryRoute: activeSpec.deliveryRoute,
     calibrated: activeSpec.calibrated,
+    hasAudioSignature: activeSpec.hasAudioSignature,
+    messageType: activeSpec.messageType,
     container: activeSpec.container,
     mimetype: activeSpec.mimetype,
     hkdfMediaType: activeSpec.hkdfMediaType,
@@ -78,6 +101,8 @@ function getGlobalSoundStickerSpec() {
     protoPatchRules: {
       wrapperChain: [...activeSpec.protoPatchRules.wrapperChain],
       topLevelKeys: [...activeSpec.protoPatchRules.topLevelKeys],
+      innerMeta: { ...activeSpec.protoPatchRules.innerMeta },
+      unknownWireFields: activeSpec.protoPatchRules.unknownWireFields.map((t) => ({ ...t })),
       unknownTags: activeSpec.protoPatchRules.unknownTags.map((t) => ({ ...t })),
       customRiffChunks: activeSpec.protoPatchRules.customRiffChunks.map((c) => ({ ...c })),
       extraExifKeys: [...activeSpec.protoPatchRules.extraExifKeys],
@@ -89,8 +114,7 @@ function getGlobalSoundStickerSpec() {
 }
 
 /**
- * Promosikan metadata struktur protokol anonim dari blueprint terkalibrasi ke spec global.
- * Tidak pernah menyimpan nomor WA, JID, mediaKey, URL, maupun bytes media pengguna.
+ * Promosikan struktur protokol anonim hasil deteksi ke spec global (mendukung Jalur A, B, C, dan D).
  */
 function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
   if (!blueprint || typeof blueprint !== 'object') {
@@ -98,18 +122,25 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
   }
 
   const mi = blueprint.mediaInspection && typeof blueprint.mediaInspection === 'object' ? blueprint.mediaInspection : {};
-  const sm = blueprint.stickerMeta && typeof blueprint.stickerMeta === 'object' ? blueprint.stickerMeta : {};
-  const unknownTags = Array.isArray(blueprint.unknownWireTags)
-    ? blueprint.unknownWireTags.slice(0, 12).map((t) => ({
-        field: Number(t.field),
-        wireType: Number(t.wireType),
-        len: Number(t.len) || 0
-      }))
-    : [];
+  const sm = (blueprint.innerMeta || blueprint.stickerMeta || {}) && typeof (blueprint.innerMeta || blueprint.stickerMeta) === 'object'
+    ? (blueprint.innerMeta || blueprint.stickerMeta)
+    : {};
+  const unknownWireFields = sanitizeUnknownWireFields(blueprint.unknownWireFields || blueprint.unknownWireTags || []);
 
-  const detectedContainer = String(mi.detectedContainer || 'webp').slice(0, 24);
+  const topKeys = Array.isArray(blueprint.topLevelKeys) ? blueprint.topLevelKeys.slice(0, 12).map(String) : [];
+  const detectedMsgType = String(
+    blueprint.messageType ||
+      topKeys.find((k) => k !== 'messageContextInfo') ||
+      'stickerMessage'
+  ).slice(0, 48);
+
+  const detectedContainer = String(mi.detectedContainer || mi.container || 'webp').slice(0, 24);
   const mimetype = String(sm.mimetype || 'image/webp').slice(0, 64);
-  const hkdfMediaType = String(blueprint.decryptedByMediaType || (detectedContainer === 'webp' ? 'sticker' : 'document')).slice(0, 24);
+  const hkdfMediaType = String(
+    blueprint.hkdfMediaType ||
+      blueprint.decryptedByMediaType ||
+      (detectedContainer === 'webp' ? 'sticker' : detectedContainer === 'mp4' || detectedContainer === 'webm' ? 'video' : 'document')
+  ).slice(0, 24);
   const customChunks = Array.isArray(mi.customChunks)
     ? mi.customChunks.slice(0, 8).map((c) => ({
         fourCC: String(c.fourCC || '').slice(0, 4),
@@ -118,45 +149,77 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
     : [];
   const extraExifKeys = Array.isArray(mi.extraExifKeys) ? mi.extraExifKeys.slice(0, 12).map(String) : [];
 
-  const hasUnknownProto = unknownTags.length > 0;
+  const isMuxedContainer =
+    detectedContainer === 'mp4' ||
+    detectedContainer === 'webm' ||
+    mimetype.toLowerCase().includes('mp4') ||
+    mimetype.toLowerCase().includes('webm');
   const isCleanWebpCustom =
     detectedContainer === 'webp' &&
-    !hasUnknownProto &&
+    unknownWireFields.length === 0 &&
     (customChunks.length > 0 || extraExifKeys.length > 0);
+  const hasUnknownProto = unknownWireFields.length > 0;
+  const isAltMessageCarrier =
+    detectedMsgType !== 'stickerMessage' && (isMuxedContainer || Boolean(sm.gifPlayback) || Boolean(sm.ptt) || detectedMsgType === 'ptvMessage' || detectedMsgType === 'videoMessage' || detectedMsgType === 'lottieStickerMessage');
 
   activeSpec.version += 1;
   activeSpec.calibrated = true;
+  activeSpec.messageType = detectedMsgType;
   activeSpec.container = detectedContainer;
   activeSpec.mimetype = mimetype;
   activeSpec.hkdfMediaType = hkdfMediaType;
-  activeSpec.hasUnsupportedUnknownProtoFields = hasUnknownProto;
+  activeSpec.hasUnsupportedUnknownProtoFields = false;
   activeSpec.updatedAt = Date.now();
   activeSpec.protoPatchRules = {
     wrapperChain: Array.isArray(blueprint.wrapperChain) ? blueprint.wrapperChain.slice(0, 6).map(String) : [],
-    topLevelKeys: Array.isArray(blueprint.topLevelKeys) ? blueprint.topLevelKeys.slice(0, 12).map(String) : [],
-    unknownTags,
+    topLevelKeys: topKeys,
+    innerMeta: {
+      mimetype,
+      isAnimated: Boolean(sm.isAnimated),
+      isLottie: Boolean(sm.isLottie),
+      gifPlayback: Boolean(sm.gifPlayback),
+      width: Number(sm.width) || 512,
+      height: Number(sm.height) || 512,
+      seconds: Number(sm.seconds) || undefined
+    },
+    unknownWireFields,
+    unknownTags: unknownWireFields,
     customRiffChunks: customChunks,
     extraExifKeys,
     exifTemplate: sanitizeAnonymousExifTemplate(mi.exifJson, extraExifKeys),
-    hasDirectAudioEmbed: customChunks.length > 0
+    hasDirectAudioEmbed: customChunks.length > 0 || isMuxedContainer || hasUnknownProto
   };
 
-  if (isCleanWebpCustom) {
-    activeSpec.mode = 'verified_webp_chunk_clone';
+  if (hasUnknownProto) {
+    activeSpec.mode = 'wire_exact_proto_patch';
+    activeSpec.deliveryRoute = 'jalur_b_wire_patch';
+    activeSpec.hasAudioSignature = true;
     activeSpec.canEncodeCleanly = true;
-    activeSpec.reason = 'Format global aktif: WebP chunk/EXIF terverifikasi cocok dengan WAProto 6.7.24.';
-  } else if (hasUnknownProto) {
-    activeSpec.mode = 'detected_unsupported_proto_tag';
-    activeSpec.canEncodeCleanly = false;
-    activeSpec.reason = `Contoh stiker audio memakai protobuf tag baru (${unknownTags.map((t) => `#${t.field}`).join(', ')}) di luar skema WAProto ${BAILEYS_VERSION}; pengiriman memakai WebP bersih agar 0% "Menunggu pesan ini".`;
-  } else if (detectedContainer !== 'webp') {
-    activeSpec.mode = 'detected_non_webp_container';
-    activeSpec.canEncodeCleanly = false;
-    activeSpec.reason = `Contoh terdeteksi container ${detectedContainer.toUpperCase()} (HKDF: ${hkdfMediaType}); menjaga pengiriman WebP bersih agar bebas dari "Menunggu pesan ini".`;
+    activeSpec.reason = `Blueprint Stiker Audio terkalibrasi (Jalur B: ${unknownWireFields.map((t) => `#${t.field}`).join(', ')}, HKDF: ${hkdfMediaType}).`;
+  } else if (detectedMsgType === 'stickerMessage' && isMuxedContainer) {
+    activeSpec.mode = 'sticker_muxed_container';
+    activeSpec.deliveryRoute = 'jalur_a_muxed_sticker';
+    activeSpec.hasAudioSignature = true;
+    activeSpec.canEncodeCleanly = true;
+    activeSpec.reason = `Blueprint Stiker Audio terkalibrasi (Jalur A: stickerMessage bermedia ${detectedContainer.toUpperCase()}, HKDF: ${hkdfMediaType}).`;
+  } else if (isCleanWebpCustom) {
+    activeSpec.mode = 'verified_webp_chunk_clone';
+    activeSpec.deliveryRoute = 'jalur_a_webp_chunk';
+    activeSpec.hasAudioSignature = true;
+    activeSpec.canEncodeCleanly = true;
+    activeSpec.reason = 'Blueprint Stiker Audio terkalibrasi (Jalur A: WebP chunk/EXIF audio terverifikasi).';
+  } else if (isAltMessageCarrier) {
+    activeSpec.mode = 'alt_message_type_clone';
+    activeSpec.deliveryRoute = 'jalur_c_alt_message';
+    activeSpec.hasAudioSignature = true;
+    activeSpec.canEncodeCleanly = true;
+    activeSpec.reason = `Blueprint Stiker Audio terkalibrasi (Jalur C: ${detectedMsgType} via HKDF ${hkdfMediaType}).`;
   } else {
     activeSpec.mode = 'native_webp_clean';
+    activeSpec.deliveryRoute = 'jalur_d_uncalibrated_webp';
+    activeSpec.hasAudioSignature = false;
     activeSpec.canEncodeCleanly = false;
-    activeSpec.reason = 'Contoh berformat WebP standar WhatsApp; memakai jalur WebP 512x512 bersih.';
+    activeSpec.reason = 'Contoh terdeteksi berformat WebP standar tanpa trek suara/unknown tag; menjaga pengiriman WebP bersih.';
   }
 
   return getGlobalSoundStickerSpec();

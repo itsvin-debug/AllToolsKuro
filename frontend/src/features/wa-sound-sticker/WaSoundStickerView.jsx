@@ -205,9 +205,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
     try {
       const raw =
-        sessionId &&
-        (localStorage.getItem(`kuro_sound_sticker_blueprint_${sessionId}`) ||
-          localStorage.getItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`));
+        localStorage.getItem('kuro_global_sound_sticker_blueprint_v2') ||
+        (sessionId &&
+          (localStorage.getItem(`kuro_sound_sticker_blueprint_${sessionId}`) ||
+            localStorage.getItem(`kuro_wa_sound_sticker_blueprint_${sessionId}`)));
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
@@ -265,6 +266,21 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         authSnapshot: snapshot || undefined
       });
       sock.emit('get-sound-sticker-spec', { sessionId, deviceToken });
+      try {
+        const storedBp =
+          localStorage.getItem('kuro_global_sound_sticker_blueprint_v2') ||
+          localStorage.getItem(`kuro_sound_sticker_blueprint_${sessionId}`);
+        if (storedBp) {
+          const parsedBp = JSON.parse(storedBp);
+          if (parsedBp && typeof parsedBp === 'object') {
+            sock.emit('sync-sound-sticker-blueprint', {
+              sessionId,
+              deviceToken,
+              blueprint: parsedBp
+            });
+          }
+        }
+      } catch {}
     };
 
     sock.on('connect', () => {
@@ -453,11 +469,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setCalibrationArmed(false);
       setSoundStickerBlueprint(bp);
       try {
+        const serialized = JSON.stringify(bp);
+        localStorage.setItem('kuro_global_sound_sticker_blueprint_v2', serialized);
         if (sessionId) {
-          localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, JSON.stringify(bp));
+          localStorage.setItem(`kuro_sound_sticker_blueprint_${sessionId}`, serialized);
         }
       } catch {}
-      onShowToast?.('Format Stiker Suara WA berhasil dideteksi & disimpan!', 'success');
+      onShowToast?.('Format Stiker Audio Terkalibrasi & disimpan permanen!', 'success');
     };
 
     sock.on('sound-sticker-blueprint-ready', handleBlueprintCaptured);
@@ -1233,6 +1251,74 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
+  const handleJumpAndArmCalibration = () => {
+    setMobileTab('wa');
+    if (connectionStatus === 'connected') {
+      handleArmCalibration();
+    }
+  };
+
+  const renderSendOutcomeCard = () => {
+    if (!lastSendResult?.ok) return null;
+    const isCalibratedAudio = Boolean(lastSendResult.isAudioSticker && !lastSendResult.needsCalibration);
+    return (
+      <div
+        className={`p-3 border-2 border-black text-[11px] font-semibold space-y-2 ${
+          isCalibratedAudio ? 'bg-emerald-100 text-emerald-950' : 'bg-amber-50 text-black'
+        }`}
+      >
+        <div className="font-black flex items-center justify-between gap-1.5 flex-wrap">
+          <span className="flex items-center gap-1.5">
+            {isCalibratedAudio ? (
+              <Volume2 className="w-4 h-4 text-emerald-700 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0" />
+            )}
+            <span>
+              {isCalibratedAudio
+                ? 'Stiker Audio Terkirim ke WA Anda ✓✓'
+                : 'Stiker Terkirim (Belum Kalibrasi Audio)'}
+            </span>
+          </span>
+          {lastSendResult.messageId && (
+            <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white border border-black">
+              #{String(lastSendResult.messageId).slice(-8)}
+            </span>
+          )}
+        </div>
+
+        <div className="text-[10px] font-mono text-neutral-800">
+          Status: {deliveryStatus?.label || 'Terkirim via sock.sendMessage'}
+        </div>
+
+        {lastSendResult.reason && (
+          <p className="text-[10px] text-neutral-700 leading-snug">{lastSendResult.reason}</p>
+        )}
+
+        {!isCalibratedAudio && (
+          <button
+            type="button"
+            onClick={handleJumpAndArmCalibration}
+            className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-[11px] inline-flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px]"
+          >
+            <Wrench className="w-3.5 h-3.5 shrink-0" />
+            <span>Kalibrasi Format Audio Sekarang &rarr;</span>
+          </button>
+        )}
+
+        {deliveryTraces.length > 0 && (
+          <div className="pt-1 border-t border-black/20 font-mono text-[9px] text-neutral-700 space-y-0.5">
+            {deliveryTraces.slice(-3).map((t, idx) => (
+              <div key={`${t.at}-${idx}`} className="truncate">
+                [{t.phase || t.event}] #{String(t.messageId || '').slice(-6)} {t.detail}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="w-full max-w-6xl mx-auto px-3 sm:px-6 py-3 sm:py-6 pb-20 lg:pb-8 space-y-4 overflow-x-hidden min-w-0">
       {/* Header Studio */}
@@ -1789,6 +1875,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         <span>Kirim Langsung 1 Ini</span>
                       </button>
                     </div>
+                    {mobileTab === 'create' && <div className="lg:hidden">{renderSendOutcomeCard()}</div>}
                   </div>
                 );
               })()}
@@ -1922,6 +2009,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               onSendAll={handleSendAllQueue}
               onClearAll={() => setStickerQueue([])}
             />
+            {mobileTab === 'queue' && <div className="lg:hidden mt-3">{renderSendOutcomeCard()}</div>}
           </div>
 
           <section className={`bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0 ${
@@ -2149,36 +2237,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               </div>
             )}
 
-            {lastSendResult?.ok && (
-              <div className="p-2.5 bg-emerald-100 border-2 border-black text-emerald-950 text-[11px] font-semibold space-y-1">
-                <div className="font-black flex items-center justify-between gap-1.5 flex-wrap">
-                  <span className="flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                    <span>{deliveryStatus?.label || 'Terkirim ke chat WA Anda!'}</span>
-                  </span>
-                  {lastSendResult.messageId && (
-                    <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white border border-black">
-                      #{String(lastSendResult.messageId).slice(-8)}
-                    </span>
-                  )}
-                </div>
-                {lastSendResult.reason && (
-                  <p className="text-[10px] text-neutral-700 font-mono leading-snug">{lastSendResult.reason}</p>
-                )}
-                {lastSendResult.note && (
-                  <p className="text-[10px] text-neutral-800 leading-snug">{lastSendResult.note}</p>
-                )}
-                {deliveryTraces.length > 0 && (
-                  <div className="pt-1 border-t border-black/20 font-mono text-[9px] text-neutral-700 space-y-0.5">
-                    {deliveryTraces.slice(-3).map((t, idx) => (
-                      <div key={`${t.at}-${idx}`} className="truncate">
-                        [{t.event}] #{String(t.messageId || '').slice(-6)} {t.detail}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {renderSendOutcomeCard()}
 
             {/* Global Spec & Kalibrasi Blueprint Stiker Suara WA */}
             <div className="pt-2 border-t-2 border-black space-y-2">
@@ -2186,60 +2245,90 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 <div className="px-2.5 py-1.5 border-2 border-black bg-white text-[10px] font-mono flex items-center justify-between gap-2 flex-wrap">
                   <span className="font-black">
                     Spec Server:{' '}
-                    <span className={globalSpec.calibrated ? 'text-emerald-700' : 'text-amber-700'}>
-                      {globalSpec.calibrated ? `Format Global Aktif (${globalSpec.mode})` : 'Belum Terkalibrasi (WebP Bersih)'}
+                    <span className={globalSpec.calibrated && globalSpec.hasAudioSignature ? 'text-emerald-700' : 'text-amber-700'}>
+                      {globalSpec.calibrated && globalSpec.hasAudioSignature
+                        ? `Aktif (${globalSpec.mode})`
+                        : globalSpec.calibrated
+                          ? 'WebP Standar'
+                          : 'Belum Terkalibrasi (WebP Bersih)'}
                     </span>
                   </span>
                   <span className="text-neutral-600">HKDF: {globalSpec.hkdfMediaType || 'sticker'}</span>
                 </div>
               )}
               {soundStickerBlueprint && !calibrationArmed ? (
-                <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2">
+                <div className="p-2.5 bg-emerald-50 border-2 border-black space-y-2.5">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="px-2 py-0.5 bg-emerald-300 border border-black font-black text-[10px] uppercase text-black">
-                      Format Stiker Suara Berhasil Terdeteksi!
+                      Format Stiker Audio Terkalibrasi!
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await copyTextToClipboard(JSON.stringify(soundStickerBlueprint, null, 2));
-                          setCopiedSchema(true);
-                          setTimeout(() => setCopiedSchema(false), 1800);
-                        }}
-                        className="px-2 py-1 bg-white hover:bg-neutral-100 border border-black font-bold text-[10px] flex items-center gap-1 cursor-pointer"
-                      >
-                        {copiedSchema ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedSchema ? 'Tersalin' : 'Salin Blueprint JSON'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleArmCalibration}
-                        disabled={connectionStatus !== 'connected'}
-                        className="px-2 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border border-black font-bold text-[10px] cursor-pointer"
-                      >
-                        Deteksi Ulang
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={handleArmCalibration}
+                      disabled={connectionStatus !== 'connected'}
+                      className="px-2.5 py-1 bg-yellow-200 hover:bg-yellow-300 disabled:opacity-45 border-2 border-black font-black text-[10px] cursor-pointer min-h-[32px]"
+                    >
+                      Deteksi Ulang
+                    </button>
                   </div>
-                  <div className="text-[10px] font-mono text-neutral-800 space-y-0.5">
-                    <div>
-                      Container: <b>{soundStickerBlueprint.mediaInspection?.detectedContainer || 'unknown'}</b> &bull; Mimetype:{' '}
-                      <b>{soundStickerBlueprint.stickerMeta?.mimetype || 'image/webp'}</b>
-                      {soundStickerBlueprint.decryptedByMediaType ? ` • HKDF: ${soundStickerBlueprint.decryptedByMediaType}` : ''}
-                    </div>
-                    {soundStickerBlueprint.mediaInspection?.chunks?.length > 0 && (
-                      <div className="truncate">
-                        Chunks: {soundStickerBlueprint.mediaInspection.chunks.slice(0, 8).join(', ')}
+
+                  {(() => {
+                    const msgType =
+                      soundStickerBlueprint.messageType ||
+                      soundStickerBlueprint.topLevelKeys?.find((k) => k !== 'messageContextInfo') ||
+                      'stickerMessage';
+                    const container =
+                      soundStickerBlueprint.mediaInspection?.detectedContainer ||
+                      soundStickerBlueprint.mediaInspection?.container ||
+                      'unknown';
+                    const mime =
+                      soundStickerBlueprint.innerMeta?.mimetype ||
+                      soundStickerBlueprint.stickerMeta?.mimetype ||
+                      'image/webp';
+                    const hkdf =
+                      soundStickerBlueprint.hkdfMediaType ||
+                      soundStickerBlueprint.decryptedByMediaType ||
+                      '-';
+                    const unknownList =
+                      soundStickerBlueprint.unknownWireFields ||
+                      soundStickerBlueprint.unknownWireTags ||
+                      [];
+                    const riffChunks = soundStickerBlueprint.mediaInspection?.chunks || [];
+
+                    return (
+                      <div className="p-2 bg-white border border-black text-[10px] font-mono text-neutral-800 space-y-1">
+                        <div>
+                          Tipe Pesan: <b>{msgType}</b>
+                        </div>
+                        <div>
+                          Container &amp; Mimetype: <b>{container}</b> &bull; <b>{mime}</b>
+                        </div>
+                        <div>
+                          HKDF Key: <b>{hkdf}</b>
+                        </div>
+                        <div className="truncate">
+                          Unknown Tags: <b>{unknownList.length}</b>
+                          {unknownList.length > 0 ? ` (${unknownList.map((t) => `#${t.field}`).join(', ')})` : ''}
+                          {' '}&bull; Chunks: <b>{riffChunks.length}</b>
+                          {riffChunks.length > 0 ? ` (${riffChunks.slice(0, 5).join(', ')})` : ''}
+                        </div>
                       </div>
-                    )}
-                    <div>
-                      Wire Tags: <b>{soundStickerBlueprint.rawWireTree?.length || 0}</b>
-                      {soundStickerBlueprint.unknownWireTags?.length > 0
-                        ? ` (Tag Baru: ${soundStickerBlueprint.unknownWireTags.map((t) => `#${t.field}`).join(', ')})`
-                        : ''}
-                    </div>
-                  </div>
+                    );
+                  })()}
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await copyTextToClipboard(JSON.stringify(soundStickerBlueprint, null, 2));
+                      setCopiedSchema(true);
+                      onShowToast?.('Blueprint tersalin!', 'success');
+                      setTimeout(() => setCopiedSchema(false), 1800);
+                    }}
+                    className="w-full py-2.5 px-3 bg-white hover:bg-emerald-100 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px]"
+                  >
+                    {copiedSchema ? <Check className="w-4 h-4 text-emerald-700" /> : <Copy className="w-4 h-4" />}
+                    <span>{copiedSchema ? 'Blueprint tersalin!' : 'Salin Blueprint JSON'}</span>
+                  </button>
                 </div>
               ) : (
                 <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-2">
@@ -2258,12 +2347,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     type="button"
                     onClick={handleArmCalibration}
                     disabled={connectionStatus !== 'connected'}
-                    className="w-full py-2 px-3 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px]"
+                    className={`w-full py-2 px-3 disabled:opacity-45 border-2 border-black shadow-[2px_2px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer min-h-[40px] ${
+                      calibrationArmed ? 'bg-emerald-300 text-black' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
+                    }`}
                   >
-                    {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
+                    {calibrationArmed ? <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" /> : <Wrench className="w-3.5 h-3.5 shrink-0" />}
                     <span>
                       {calibrationArmed
-                        ? 'Menunggu 1 Contoh Stiker Suara Masuk...'
+                        ? 'Aktif Mendengarkan — Teruskan 1 Stiker Audio Sekarang!'
                         : 'Mulai Deteksi Format'}
                     </span>
                   </button>

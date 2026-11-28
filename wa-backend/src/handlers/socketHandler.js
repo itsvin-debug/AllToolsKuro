@@ -15,7 +15,7 @@ const {
   resolveDisplayName
 } = require('../services/contactsService');
 const { buildVaultPayload, downloadMediaStreamBuffer } = require('../services/vaultService');
-const { startBaileys } = require('./whatsappSessionHandler');
+const { startBaileys, syncCalibrationProtoObserver } = require('./whatsappSessionHandler');
 const { getGlobalSoundStickerSpec } = require('../config/soundStickerSpec');
 const { registerStickerSenderHandler, attachCalibrationListener, emitSessionDiagnosticsReplay } = require('./stickerSenderHandler');
 
@@ -572,6 +572,7 @@ function registerSocketHandlers(io) {
 
         removeSessionDir(sessionId);
         sessions.delete(sessionId);
+        syncCalibrationProtoObserver();
 
         emitToDevice(io, sessionId, 'session-status', { status: 'disconnected', reason: 'explicit_logout', message: 'Sesi WhatsApp berhasil diputuskan.' });
         emitToDevice(io, sessionId, 'logged_out', { reason: 'explicit_logout', message: 'Sesi WhatsApp berhasil diputuskan.' });

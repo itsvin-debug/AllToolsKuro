@@ -22,12 +22,24 @@ const {
   softRestartBaileysPreserveAuth,
   pushCalibrationLog,
   pushDeliveryTrace,
-  getEncodedProtoSize
+  getEncodedProtoSize,
+  syncCalibrationProtoObserver
 } = require('./whatsappSessionHandler');
-const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
+const {
+  inspectProtobufWire,
+  verifyWireBytesStrict,
+  diffUnknownWireFields,
+  getRecentRawWireFrames,
+  appendWireFieldsToEncodedMessage,
+  withScopedPatchedMessageEncode,
+  unwrapMessageContent
+} = require('../utils/protoWireInspector');
 
 const {
   proto,
+  generateWAMessage,
+  generateWAMessageFromContent,
+  prepareWAMessageMedia,
   downloadMediaMessage,
   downloadContentFromMessage,
   jidNormalizedUser: baileysJidNorm
@@ -133,6 +145,15 @@ function validateContainerMagic(buf, expectedKind, label) {
     if (buf.length < 4 || buf.toString('ascii', 0, 4) !== 'OggS') {
       throw new Error(`Header OGG/Opus ${label} tidak valid.`);
     }
+  } else if (expectedKind === 'audio') {
+    const isMp4 = buf.length >= 12 && buf.toString('ascii', 4, 8) === 'ftyp';
+    const isOgg = buf.length >= 4 && buf.toString('ascii', 0, 4) === 'OggS';
+    const isWebm = buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3;
+    const isWav = buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE';
+    const isMp3 = buf.length >= 3 && (buf.toString('ascii', 0, 3) === 'ID3' || (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0));
+    if (!isMp4 && !isOgg && !isWebm && !isWav && !isMp3) {
+      throw new Error(`Format audio ${label} tidak dikenali.`);
+    }
   }
   return buf;
 }
@@ -184,6 +205,8 @@ function inspectMp4Boxes(buf) {
   const codecs = new Set();
   const containerBoxes = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
   let visited = 0;
+  let durationSec = null;
+  let resolution = null;
 
   function walk(start, end, depth) {
     let off = start;
@@ -200,7 +223,32 @@ function inspectMp4Boxes(buf) {
         topLevelAtoms.push(`${box}:${sz}`);
       }
 
-      if (box === 'stsd' && off + 16 < off + sz) {
+      if (box === 'mvhd' && off + 28 <= off + sz) {
+        const version = buf[off + 8];
+        if (version === 0 && off + 28 <= buf.length) {
+          const timescale = buf.readUInt32BE(off + 20);
+          const duration = buf.readUInt32BE(off + 24);
+          if (timescale > 0 && duration > 0) {
+            durationSec = Number((duration / timescale).toFixed(2));
+          }
+        } else if (version === 1 && off + 36 <= buf.length) {
+          const timescale = buf.readUInt32BE(off + 28);
+          const duration = Number(buf.readBigUInt64BE(off + 32));
+          if (timescale > 0 && duration > 0) {
+            durationSec = Number((duration / timescale).toFixed(2));
+          }
+        }
+      } else if (box === 'tkhd' && off + 92 <= off + sz) {
+        const version = buf[off + 8];
+        const dimOff = version === 1 ? off + 96 : off + 84;
+        if (dimOff + 8 <= buf.length) {
+          const w = Math.round(buf.readUInt32BE(dimOff) / 65536);
+          const h = Math.round(buf.readUInt32BE(dimOff + 4) / 65536);
+          if (w > 0 && h > 0) {
+            resolution = `${w}x${h}`;
+          }
+        }
+      } else if (box === 'stsd' && off + 16 < off + sz) {
         const entryCount = buf.readUInt32BE(off + 12);
         let eOff = off + 16;
         for (let i = 0; i < Math.min(entryCount, 8) && eOff + 8 <= off + sz; i++) {
@@ -219,15 +267,15 @@ function inspectMp4Boxes(buf) {
   }
 
   walk(0, buf.length, 0);
-  return { topLevelAtoms, trackCodecs: Array.from(codecs) };
+  return { topLevelAtoms, trackCodecs: Array.from(codecs), durationSec, resolution };
 }
 
 function inspectMediaBufferMetadata(buf) {
   if (!buf || buf.length === 0) {
-    return { magicHex: '', magicAscii: '', totalBytes: 0, detectedContainer: 'unknown', chunks: [] };
+    return { magicHex: '', magicAscii: '', totalBytes: 0, detectedContainer: 'unknown', container: 'unknown', chunks: [] };
   }
 
-  const head = buf.subarray(0, Math.min(32, buf.length));
+  const head = buf.subarray(0, Math.min(48, buf.length));
   const magicHex = head.toString('hex');
   const magicAscii = Array.from(head, (b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
 
@@ -236,6 +284,7 @@ function inspectMediaBufferMetadata(buf) {
     const customChunks = [];
     let exifJson = null;
     let extraExifKeys = [];
+    let vp8xFlags = null;
     let off = 12;
 
     while (off + 8 <= buf.length && chunks.length < 48) {
@@ -245,6 +294,9 @@ function inspectMediaBufferMetadata(buf) {
       const dataEnd = Math.min(buf.length, dataStart + sz);
       chunks.push(`${fcc}:${sz}`);
 
+      if (fcc === 'VP8X' && dataEnd - dataStart >= 1) {
+        vp8xFlags = buf[dataStart];
+      }
       if (!STANDARD_WEBP_CHUNKS.has(fcc)) {
         const sub = buf.subarray(dataStart, Math.min(dataEnd, dataStart + 16));
         customChunks.push({ fourCC: fcc, size: sz, headHex: sub.toString('hex') });
@@ -263,7 +315,9 @@ function inspectMediaBufferMetadata(buf) {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
+      container: 'webp',
       detectedContainer: 'webp',
+      vp8xFlags,
       chunks,
       customChunks,
       exifJson,
@@ -272,14 +326,17 @@ function inspectMediaBufferMetadata(buf) {
   }
 
   if (buf.length >= 12 && buf.toString('ascii', 4, 8) === 'ftyp') {
-    const { topLevelAtoms, trackCodecs } = inspectMp4Boxes(buf);
+    const { topLevelAtoms, trackCodecs, durationSec, resolution } = inspectMp4Boxes(buf);
     return {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
+      container: 'mp4',
       detectedContainer: 'mp4',
       chunks: topLevelAtoms,
-      trackCodecs
+      trackCodecs,
+      durationSec,
+      resolution
     };
   }
 
@@ -293,6 +350,7 @@ function inspectMediaBufferMetadata(buf) {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
+      container: 'webm',
       detectedContainer: 'webm',
       chunks: codecs,
       trackCodecs: codecs
@@ -305,6 +363,7 @@ function inspectMediaBufferMetadata(buf) {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
+      container: 'ogg',
       detectedContainer: 'ogg',
       chunks: [sampleAscii.includes('OpusHead') ? 'OpusHead' : 'OggStream']
     };
@@ -315,12 +374,13 @@ function inspectMediaBufferMetadata(buf) {
       magicHex,
       magicAscii,
       totalBytes: buf.length,
-      detectedContainer: 'zip/lottie',
+      container: 'zip',
+      detectedContainer: 'zip',
       chunks: ['PKZIP']
     };
   }
 
-  return { magicHex, magicAscii, totalBytes: buf.length, detectedContainer: 'unknown', chunks: [] };
+  return { magicHex, magicAscii, totalBytes: buf.length, container: 'unknown', detectedContainer: 'unknown', chunks: [] };
 }
 
 function summarizeNonBufferFields(obj) {
@@ -346,56 +406,79 @@ function summarizeNonBufferFields(obj) {
 }
 
 function collectUnknownStickerTags(rawWireTree = []) {
-  const knownMessageTags = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 22, 26, 35, 37, 44, 50, 56]);
-  const tags = [];
-  for (const node of rawWireTree) {
-    if (!knownMessageTags.has(node.field)) {
-      tags.push({ field: node.field, wireType: node.wireType, len: node.len, previewUtf8: node.previewUtf8 });
-    }
-  }
-  return tags;
+  return diffUnknownWireFields(rawWireTree);
 }
 
-function isInterestingSoundBlueprint(topLevelKeys, wrapperChain, stickerMeta, mediaInspection, rawWireTree) {
-  const mime = String(stickerMeta?.mimetype || '').toLowerCase();
+function isInterestingSoundBlueprint(topLevelKeys, wrapperChain, innerMeta, mediaInspection, rawWireTree) {
+  const mime = String(innerMeta?.mimetype || '').toLowerCase();
   if (mime && mime !== 'image/webp') return true;
   if (topLevelKeys.some((k) => k !== 'stickerMessage' && k !== 'messageContextInfo')) return true;
   if (wrapperChain.some((w) => w !== 'deviceSentMessage')) return true;
   if (Array.isArray(mediaInspection?.customChunks) && mediaInspection.customChunks.length > 0) return true;
   if (Array.isArray(mediaInspection?.extraExifKeys) && mediaInspection.extraExifKeys.length > 0) return true;
-  if (mediaInspection?.detectedContainer && mediaInspection.detectedContainer !== 'webp') return true;
+  const cont = mediaInspection?.detectedContainer || mediaInspection?.container;
+  if (cont && cont !== 'webp') return true;
   if (collectUnknownStickerTags(rawWireTree).length > 0) return true;
   return false;
 }
 
 function sanitizeBlueprint(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const sm = raw.stickerMeta && typeof raw.stickerMeta === 'object' ? raw.stickerMeta : {};
+  const sm = (raw.innerMeta || raw.stickerMeta || {}) && typeof (raw.innerMeta || raw.stickerMeta) === 'object'
+    ? (raw.innerMeta || raw.stickerMeta)
+    : {};
   const mi = raw.mediaInspection && typeof raw.mediaInspection === 'object' ? raw.mediaInspection : {};
+  const topKeys = Array.isArray(raw.topLevelKeys) ? raw.topLevelKeys.slice(0, 16).map(String) : [];
+  const messageType = typeof raw.messageType === 'string'
+    ? raw.messageType.slice(0, 48)
+    : (topKeys.find((k) => k !== 'messageContextInfo') || 'stickerMessage');
+  const unknownList = Array.isArray(raw.unknownWireFields)
+    ? raw.unknownWireFields.slice(0, 16)
+    : (Array.isArray(raw.unknownWireTags) ? raw.unknownWireTags.slice(0, 16) : []);
+  const hkdfKey = typeof raw.hkdfMediaType === 'string'
+    ? raw.hkdfMediaType.slice(0, 24)
+    : (typeof raw.decryptedByMediaType === 'string' ? raw.decryptedByMediaType.slice(0, 24) : null);
+
+  const normalizedMeta = {
+    mimetype: typeof sm.mimetype === 'string' ? sm.mimetype.slice(0, 64) : 'image/webp',
+    isAnimated: Boolean(sm.isAnimated),
+    isLottie: Boolean(sm.isLottie),
+    isAvatar: Boolean(sm.isAvatar),
+    isAiSticker: Boolean(sm.isAiSticker),
+    gifPlayback: Boolean(sm.gifPlayback),
+    seconds: Number.isFinite(Number(sm.seconds)) ? Number(sm.seconds) : undefined,
+    width: Number(sm.width) || 512,
+    height: Number(sm.height) || 512,
+    accessibilityLabel: typeof sm.accessibilityLabel === 'string' ? sm.accessibilityLabel.slice(0, 120) : undefined
+  };
+
   return {
     capturedAt: Number(raw.capturedAt) || Date.now(),
-    topLevelKeys: Array.isArray(raw.topLevelKeys) ? raw.topLevelKeys.slice(0, 16).map(String) : [],
+    baileysVersion: typeof raw.baileysVersion === 'string' ? raw.baileysVersion.slice(0, 24) : BAILEYS_VERSION,
+    topLevelKeys: topKeys,
     wrapperChain: Array.isArray(raw.wrapperChain) ? raw.wrapperChain.slice(0, 8).map(String) : [],
-    decryptedByMediaType: typeof raw.decryptedByMediaType === 'string' ? raw.decryptedByMediaType.slice(0, 24) : null,
-    unknownWireTags: Array.isArray(raw.unknownWireTags) ? raw.unknownWireTags.slice(0, 16) : [],
+    messageType,
+    hkdfMediaType: hkdfKey,
+    decryptedByMediaType: hkdfKey,
+    unknownWireFields: unknownList,
+    unknownWireTags: unknownList,
     rawWireTree: Array.isArray(raw.rawWireTree) ? raw.rawWireTree.slice(0, 32) : [],
-    stickerMeta: {
-      mimetype: typeof sm.mimetype === 'string' ? sm.mimetype.slice(0, 64) : 'image/webp',
-      isAnimated: Boolean(sm.isAnimated),
-      isLottie: Boolean(sm.isLottie),
-      isAvatar: Boolean(sm.isAvatar),
-      isAiSticker: Boolean(sm.isAiSticker),
-      width: Number(sm.width) || 512,
-      height: Number(sm.height) || 512,
-      accessibilityLabel: typeof sm.accessibilityLabel === 'string' ? sm.accessibilityLabel.slice(0, 120) : undefined
-    },
+    innerMeta: normalizedMeta,
+    stickerMeta: normalizedMeta,
     mediaInspection: {
-      detectedContainer: typeof mi.detectedContainer === 'string' ? mi.detectedContainer.slice(0, 24) : 'webp',
+      container: typeof (mi.container || mi.detectedContainer) === 'string' ? String(mi.container || mi.detectedContainer).slice(0, 24) : 'webp',
+      detectedContainer: typeof (mi.detectedContainer || mi.container) === 'string' ? String(mi.detectedContainer || mi.container).slice(0, 24) : 'webp',
+      magicHex: typeof mi.magicHex === 'string' ? mi.magicHex.slice(0, 96) : undefined,
+      magicAscii: typeof mi.magicAscii === 'string' ? mi.magicAscii.slice(0, 48) : undefined,
+      totalBytes: Number(mi.totalBytes) || 0,
+      vp8xFlags: Number.isFinite(Number(mi.vp8xFlags)) ? Number(mi.vp8xFlags) : undefined,
       chunks: Array.isArray(mi.chunks) ? mi.chunks.slice(0, 48).map(String) : [],
       customChunks: Array.isArray(mi.customChunks) ? mi.customChunks.slice(0, 12) : [],
       extraExifKeys: Array.isArray(mi.extraExifKeys) ? mi.extraExifKeys.slice(0, 24).map(String) : [],
       exifJson: mi.exifJson && typeof mi.exifJson === 'object' ? mi.exifJson : null,
-      trackCodecs: Array.isArray(mi.trackCodecs) ? mi.trackCodecs.slice(0, 12).map(String) : []
+      trackCodecs: Array.isArray(mi.trackCodecs) ? mi.trackCodecs.slice(0, 12).map(String) : [],
+      durationSec: Number.isFinite(Number(mi.durationSec)) ? Number(mi.durationSec) : undefined,
+      resolution: typeof mi.resolution === 'string' ? mi.resolution.slice(0, 24) : undefined
     }
   };
 }
@@ -636,20 +719,23 @@ function attachCalibrationListener(io, sessionId, session) {
             : null);
         const mediaTarget = stickerNode || ptvOrMedia;
 
-        const latestRawPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
+        const globalFrames = getRecentRawWireFrames();
+        const latestSessionPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
           ? curSession.lastRawWirePackets[curSession.lastRawWirePackets.length - 1]
           : null;
+        const latestGlobalPacket = globalFrames.length > 0 ? globalFrames[globalFrames.length - 1] : null;
+        const latestRawPacket = latestSessionPacket || latestGlobalPacket;
 
         let encodedProtoWireTree = [];
         try {
           if (proto?.Message?.encode) {
             const bytes = proto.Message.encode(innerMessage).finish();
-            encodedProtoWireTree = inspectProtobufWire(bytes, 3);
+            encodedProtoWireTree = inspectProtobufWire(bytes, 4);
           }
         } catch (_) {}
 
         const rawWireTree = latestRawPacket?.wireTree?.length ? latestRawPacket.wireTree : encodedProtoWireTree;
-        const unknownWireTags = collectUnknownStickerTags(rawWireTree);
+        const unknownWireFields = diffUnknownWireFields(rawWireTree);
 
         const nonContextKeys = innerKeys.filter((k) => k !== 'messageContextInfo');
         const hasUnrecognizedWirePayload = isArmed && nonContextKeys.length === 0 && rawWireTree.length > 0;
@@ -673,9 +759,11 @@ function attachCalibrationListener(io, sessionId, session) {
                 ? 'video'
                 : innerMessage.audioMessage
                   ? 'audio'
-                  : 'document';
+                  : innerMessage.imageMessage
+                    ? 'image'
+                    : 'document';
 
-            if (typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || innerMessage.ptvMessage)) {
+            if (typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || innerMessage.ptvMessage || innerMessage.imageMessage)) {
               try {
                 dlBuf = await downloadMediaMessage(
                   { key: msg.key, message: innerMessage },
@@ -688,14 +776,14 @@ function attachCalibrationListener(io, sessionId, session) {
             }
 
             if ((!dlBuf || dlBuf.length === 0) && typeof downloadContentFromMessage === 'function') {
-              const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document']));
+              const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document', 'image']));
               for (const kind of candidates) {
                 try {
                   const stream = await downloadContentFromMessage(mediaTarget, kind);
                   const chunks = [];
                   let size = 0;
                   for await (const chunk of stream) {
-                    if (size < 768 * 1024) chunks.push(chunk);
+                    if (size < 1024 * 1024) chunks.push(chunk);
                     size += chunk.length;
                   }
                   const candidateBuf = Buffer.concat(chunks);
@@ -718,33 +806,54 @@ function attachCalibrationListener(io, sessionId, session) {
           }
         }
 
-        const stickerMeta = summarizeNonBufferFields(stickerNode || innerMessage);
-        if (!isArmed && !isInterestingSoundBlueprint(innerKeys, wrapperChain, stickerMeta, mediaInspection, rawWireTree)) {
+        const primaryMsgType = nonContextKeys[0] || (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : 'stickerMessage');
+        const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || innerMessage[primaryMsgType] || innerMessage);
+        if (!isArmed && !isInterestingSoundBlueprint(innerKeys, wrapperChain, innerMeta, mediaInspection, rawWireTree)) {
           continue;
         }
 
         curSession.calibratingSoundSticker = false;
         curSession.calibrationArmedUntil = 0;
+        syncCalibrationProtoObserver();
 
-        const blueprint = {
+        const rawBlueprint = {
           capturedAt: Date.now(),
           baileysVersion: BAILEYS_VERSION,
           upsertType: type || 'notify',
           wrapperChain,
           topLevelKeys: innerKeys,
+          messageType: primaryMsgType,
+          hkdfMediaType: decryptedByMediaType,
           decryptedByMediaType,
           hasMessageContextInfo: Boolean(innerMessage.messageContextInfo || msg.message?.messageContextInfo),
-          stickerMeta,
-          unknownWireTags,
+          innerMeta,
+          stickerMeta: innerMeta,
+          unknownWireFields,
+          unknownWireTags: unknownWireFields,
           rawWireTree,
           mediaInspection,
           messageKeys: innerKeys,
-          stickerFields: stickerMeta,
+          stickerFields: innerMeta,
           binarySummary: mediaInspection
         };
 
-        curSession.soundStickerBlueprint = sanitizeBlueprint(blueprint);
+        const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
+        curSession.soundStickerBlueprint = blueprint;
         const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
+
+        pushCalibrationLog(io, sessionId, curSession, {
+          upsertType: 'blueprint-captured',
+          remoteJid: remoteRaw || participantRaw,
+          fromMe: Boolean(msg.key.fromMe),
+          wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'unknown'].filter(Boolean),
+          keys: [
+            `HKDF:${decryptedByMediaType || '-'}`,
+            `mime:${innerMeta?.mimetype || '-'}`,
+            `unknownTags:${unknownWireFields.length}`,
+            ...(unknownWireFields.map((t) => `#${t.field}:${t.scope}`))
+          ]
+        });
+
         emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
         emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint, globalSpec });
         emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
@@ -752,6 +861,8 @@ function attachCalibrationListener(io, sessionId, session) {
       }
     } catch (err) {
       console.warn(`[BlueprintInspector ${sessionId}] Error:`, err.message);
+    } finally {
+      syncCalibrationProtoObserver();
     }
   };
 }
@@ -896,8 +1007,226 @@ async function runSelfE2eeDiagnosticSend({
   }
 }
 
+async function relayVerifiedMessageObject(io, sessionId, session, selfJid, messageObject, traceLabel, { patchedBytes = null } = {}) {
+  const verifyErr = proto?.Message?.verify?.(messageObject);
+  if (verifyErr) {
+    throw new Error(`Payload WAProto gagal verifikasi: ${verifyErr}`);
+  }
+
+  const encodedLen = patchedBytes ? patchedBytes.length : getEncodedProtoSize(messageObject);
+  if (!encodedLen || encodedLen <= 16) {
+    throw new Error('Payload protobuf pesan terlalu pendek (<= 16 B), dibatalkan agar tidak memicu "Menunggu pesan ini".');
+  }
+  if (patchedBytes) {
+    const wireOk = verifyWireBytesStrict(patchedBytes);
+    if (!wireOk.ok) {
+      throw new Error(`Verifikasi wire pasca-patch gagal: ${wireOk.error}`);
+    }
+  }
+
+  const waMsg = generateWAMessageFromContent(selfJid, messageObject, {
+    userJid: session.sock.user.id
+  });
+  const finalId = waMsg.key.id;
+
+  // Simpan message ke cache E2EE sebelum relay agar Signal retry selalu terlayani
+  rememberSentMessage(session, finalId, waMsg.message);
+  watchE2eeMessageId(session, finalId);
+
+  if (patchedBytes) {
+    await withScopedPatchedMessageEncode(proto.Message, waMsg.message, patchedBytes, async () => {
+      await session.sock.relayMessage(selfJid, waMsg.message, { messageId: finalId });
+    });
+  } else {
+    await session.sock.relayMessage(selfJid, waMsg.message, { messageId: finalId });
+  }
+
+  pushDeliveryTrace(io, sessionId, session, {
+    messageId: finalId,
+    phase: 'sent',
+    event: patchedBytes ? 'wire-cloner' : 'relayMessage',
+    isError: false,
+    detail: `${traceLabel} (${encodedLen} B proto) -> menunggu ACK HP`
+  });
+  emitAuthSnapshotNow(io, sessionId, session);
+
+  return { messageId: finalId, encodedBytes: encodedLen };
+}
+
+async function uploadMediaNodeForCloner(session, hkdfType, mediaBuf, extraFields = {}) {
+  const safeKind = ['sticker', 'video', 'audio', 'document', 'image'].includes(hkdfType) ? hkdfType : 'sticker';
+  const payload = { [safeKind]: mediaBuf, ...extraFields };
+  if (safeKind === 'video' && !payload.jpegThumbnail) {
+    payload.jpegThumbnail = Buffer.alloc(0);
+  }
+  if (safeKind === 'audio' && payload.seconds === undefined) {
+    payload.seconds = 3;
+  }
+
+  const uploaded = await prepareWAMessageMedia(payload, {
+    upload: session.sock.waUploadToServer
+  });
+  const node = uploaded?.[`${safeKind}Message`] || Object.values(uploaded || {})[0];
+  if (!node || !node.mediaKey || !node.url) {
+    throw new Error(`Upload media HKDF (${safeKind}) gagal menghasilkan kredensial media.`);
+  }
+  return node;
+}
+
 /**
- * Pengirim Resmi Berbasis `sock.sendMessage(selfJid, ...)` + Blueprint Patcher + Zero "Menunggu Pesan Ini".
+ * Jalur A2: stickerMessage bermedia MP4/WebM menggunakan HKDF media type eksak dari blueprint.
+ */
+async function sendJalurAMuxedSticker({ io, sessionId, session, selfJid, muxedBuf, containerExt, activeSpec, pngThumbnail, queueId }) {
+  const hkdfKey = activeSpec.hkdfMediaType || 'sticker';
+  const targetMime =
+    activeSpec.mimetype && (activeSpec.mimetype.includes('mp4') || activeSpec.mimetype.includes('webm'))
+      ? activeSpec.mimetype
+      : containerExt === 'webm'
+        ? 'video/webm'
+        : 'video/mp4';
+
+  const mediaNode = await uploadMediaNodeForCloner(session, hkdfKey, muxedBuf);
+  const stickerMsg = {
+    url: mediaNode.url,
+    directPath: mediaNode.directPath,
+    mediaKey: mediaNode.mediaKey,
+    fileSha256: mediaNode.fileSha256,
+    fileEncSha256: mediaNode.fileEncSha256,
+    fileLength: mediaNode.fileLength,
+    mediaKeyTimestamp: mediaNode.mediaKeyTimestamp,
+    mimetype: targetMime,
+    isAnimated: true,
+    width: 512,
+    height: 512,
+    stickerSentTs: Date.now(),
+    ...(pngThumbnail ? { pngThumbnail } : {})
+  };
+
+  const protoObj = proto.Message.fromObject({ stickerMessage: stickerMsg });
+  return relayVerifiedMessageObject(
+    io,
+    sessionId,
+    session,
+    selfJid,
+    protoObj,
+    queueId ? `Jalur A2 (${targetMime}) #${String(queueId).slice(-5)}` : `Jalur A2 (${targetMime})`
+  );
+}
+
+/**
+ * Jalur B: Suntikkan unknown wire tags (scalar atau sub-message audio) dengan verifikasi wire round-trip ketat.
+ */
+async function sendJalurBWirePatchedSticker({ io, sessionId, session, selfJid, stickerWebpBuf, audioBuf, audioMime, durationSec, unknownFields, queueId }) {
+  const needsMediaUpload = unknownFields.some(
+    (u) => u.wireType === 2 && Array.isArray(u.subFields) && u.subFields.some((s) => Number(s.len) === 32 || String(s.previewUtf8 || '').includes('/'))
+  );
+
+  let audioUploadMeta = {
+    mimetype: audioMime || 'audio/mp4',
+    seconds: Math.max(1, Math.round(Number(durationSec) || 3))
+  };
+
+  if (needsMediaUpload) {
+    if (!audioBuf) {
+      throw new Error('Blueprint Jalur B memerlukan track audio yang diunggah, namun audio potongan tidak tersedia.');
+    }
+    const audioNode = await uploadMediaNodeForCloner(session, 'audio', audioBuf, {
+      ptt: false,
+      mimetype: audioMime || 'audio/mp4',
+      seconds: Math.max(1, Math.round(Number(durationSec) || 3))
+    });
+    audioUploadMeta = {
+      url: audioNode.url,
+      directPath: audioNode.directPath,
+      mediaKey: audioNode.mediaKey,
+      fileSha256: audioNode.fileSha256,
+      fileEncSha256: audioNode.fileEncSha256,
+      fileLength: Number(audioNode.fileLength) || audioBuf.length,
+      mimetype: audioMime || audioNode.mimetype || 'audio/mp4',
+      seconds: Math.max(1, Math.round(Number(durationSec) || 3))
+    };
+  }
+
+  const baseMsg = await generateWAMessage(
+    selfJid,
+    { sticker: stickerWebpBuf },
+    {
+      userJid: session.sock.user.id,
+      upload: session.sock.waUploadToServer
+    }
+  );
+  if (!baseMsg?.message) {
+    throw new Error('Gagal membangun pesan dasar WebP sebelum patch protobuf.');
+  }
+
+  const patched = appendWireFieldsToEncodedMessage(baseMsg.message, audioUploadMeta, unknownFields, {
+    protoMessageCls: proto.Message
+  });
+
+  return relayVerifiedMessageObject(
+    io,
+    sessionId,
+    session,
+    selfJid,
+    baseMsg.message,
+    queueId ? `Jalur B Wire-Patch #${String(queueId).slice(-5)}` : 'Jalur B Wire-Patch',
+    { patchedBytes: patched.bytes }
+  );
+}
+
+/**
+ * Jalur C: Tipe pesan alternatif (lottieStickerMessage / ptvMessage / videoMessage) sesuai blueprint.
+ */
+async function sendJalurCAltMessage({ io, sessionId, session, selfJid, messageType, innerMeta, stickerWebpBuf, muxedBuf, jpegThumbBuf, queueId }) {
+  if (messageType === 'lottieStickerMessage') {
+    const mediaNode = await uploadMediaNodeForCloner(session, 'sticker', stickerWebpBuf);
+    const protoObj = proto.Message.fromObject({
+      lottieStickerMessage: {
+        message: {
+          stickerMessage: {
+            ...mediaNode,
+            mimetype: innerMeta?.mimetype || 'application/was',
+            isAnimated: true,
+            isLottie: true,
+            width: 512,
+            height: 512,
+            stickerSentTs: Date.now()
+          }
+        }
+      }
+    });
+    return relayVerifiedMessageObject(io, sessionId, session, selfJid, protoObj, 'Jalur C lottieStickerMessage');
+  }
+
+  if ((messageType === 'ptvMessage' || messageType === 'videoMessage') && muxedBuf) {
+    return sendOfficialSelfMessage(
+      io,
+      sessionId,
+      session,
+      selfJid,
+      {
+        video: muxedBuf,
+        ptv: messageType === 'ptvMessage',
+        gifPlayback: Boolean(innerMeta?.gifPlayback),
+        mimetype: innerMeta?.mimetype || 'video/mp4',
+        ...(jpegThumbBuf ? { jpegThumbnail: jpegThumbBuf } : {})
+      },
+      queueId ? `Jalur C (${messageType}) #${String(queueId).slice(-5)}` : `Jalur C (${messageType})`
+    );
+  }
+
+  return sendOfficialSelfMessage(
+    io,
+    sessionId,
+    session,
+    selfJid,
+    { sticker: stickerWebpBuf },
+    queueId ? `Jalur C Fallback #${String(queueId).slice(-5)}` : 'Jalur C Fallback'
+  );
+}
+
+/**
+ * Mesin Perakitan & Wire-Exact Cloner Stiker Audio WA (Jalur A, B, C, dan D) — Zero "Menunggu pesan ini".
  */
 async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, payload }) {
   let stickerWebpBuf = null;
@@ -905,7 +1234,8 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
   let muxedWebmBuf = null;
   let audioOpusBuf = null;
   let audioM4aBuf = null;
-  let containerBuf = null;
+  let audioUnifiedBuf = null;
+  let jpegThumbBuf = null;
 
   try {
     const {
@@ -913,8 +1243,11 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       stickerWebpBase64,
       muxedWebmBase64,
       muxedMp4Base64,
+      audioBase64,
+      audioMime = '',
       audioOpusBase64,
       audioM4aBase64,
+      thumbnailJpegBase64,
       durationSec = 3,
       blueprint: clientBlueprint
     } = payload || {};
@@ -925,70 +1258,155 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
 
     muxedMp4Buf = decodeOptionalBase64(muxedMp4Base64, 'mp4', 'muxed MP4');
     muxedWebmBuf = decodeOptionalBase64(muxedWebmBase64, 'webm', 'muxed WebM');
+    audioUnifiedBuf = decodeOptionalBase64(audioBase64, 'audio', 'audio potongan');
     audioOpusBuf = decodeOptionalBase64(audioOpusBase64, 'ogg', 'audio Opus');
     audioM4aBuf = decodeOptionalBase64(audioM4aBase64, 'mp4', 'audio M4A');
+    if (thumbnailJpegBase64 && typeof thumbnailJpegBase64 === 'string') {
+      try {
+        jpegThumbBuf = decodeBoundedBase64(thumbnailJpegBase64, 256 * 1024, 'thumbnail');
+      } catch (_) {}
+    }
+
+    const sanitizedClientBp = sanitizeBlueprint(clientBlueprint);
+    if (sanitizedClientBp && (!getGlobalSoundStickerSpec().calibrated || !session.soundStickerBlueprint)) {
+      session.soundStickerBlueprint = sanitizedClientBp;
+      const promoted = promoteVerifiedBlueprintToGlobalSpec(sanitizedClientBp);
+      emitToDevice(io, sessionId, 'sound-sticker-spec-sync', promoted);
+    }
 
     const activeSpec = getGlobalSoundStickerSpec();
-    const activeBlueprint = sanitizeBlueprint(clientBlueprint) || session.soundStickerBlueprint || null;
+    const activeBlueprint = session.soundStickerBlueprint || sanitizedClientBp || null;
+    const bestAudioBuf = audioUnifiedBuf || audioOpusBuf || audioM4aBuf;
+    const bestAudioMime = audioMime || (audioOpusBuf ? 'audio/ogg;codecs=opus' : 'audio/mp4');
+    const route = activeSpec.deliveryRoute || 'jalur_d_uncalibrated_webp';
 
     let modeUsed = 'native_webp_clean';
     let audioEmbedded = false;
+    let isAudioSticker = false;
+    let needsCalibration = !activeSpec.calibrated || !activeSpec.hasAudioSignature;
     let reason = activeSpec.reason;
-    let note = 'Dikirim lewat jalur resmi sock.sendMessage (WebP 512x512 + EXIF tervalidasi).';
-    let finalWebpToSend = stickerWebpBuf;
+    let note = 'Stiker WebP 512x512 terkirim via sock.sendMessage (0 error E2EE).';
+    let sendRes = null;
 
-    // Hanya kloning chunk/EXIF terverifikasi yang tetap lolos WebP validator dan WAProto 6.7.24
-    const allowWebpChunkClone =
-      (activeSpec.calibrated && activeSpec.protoPatchRules?.canEncodeCleanly) ||
-      Boolean(
-        activeBlueprint &&
-          activeBlueprint.mediaInspection?.detectedContainer === 'webp' &&
-          (!activeBlueprint.unknownWireTags || activeBlueprint.unknownWireTags.length === 0)
-      );
-
-    if (allowWebpChunkClone && activeBlueprint) {
-      const bestAudioBuf = audioOpusBuf || audioM4aBuf;
+    if (route === 'jalur_b_wire_patch' && activeSpec.protoPatchRules?.unknownWireFields?.length > 0) {
+      sendRes = await sendJalurBWirePatchedSticker({
+        io,
+        sessionId,
+        session,
+        selfJid,
+        stickerWebpBuf,
+        audioBuf: bestAudioBuf,
+        audioMime: bestAudioMime,
+        durationSec,
+        unknownFields: activeSpec.protoPatchRules.unknownWireFields,
+        queueId
+      });
+      modeUsed = 'wire_exact_proto_patch';
+      audioEmbedded = Boolean(bestAudioBuf);
+      isAudioSticker = true;
+      needsCalibration = false;
+      reason = activeSpec.reason;
+      note = 'Dikirim lewat Jalur B (Wire-Exact Unknown Tag Patch + verifikasi round-trip).';
+    } else if (route === 'jalur_a_muxed_sticker' && (muxedMp4Buf || muxedWebmBuf)) {
+      const useWebm = activeSpec.container === 'webm' && Boolean(muxedWebmBuf);
+      const chosenMuxed = useWebm ? muxedWebmBuf : (muxedMp4Buf || muxedWebmBuf);
+      sendRes = await sendJalurAMuxedSticker({
+        io,
+        sessionId,
+        session,
+        selfJid,
+        muxedBuf: chosenMuxed,
+        containerExt: useWebm ? 'webm' : 'mp4',
+        activeSpec,
+        pngThumbnail: jpegThumbBuf,
+        queueId
+      });
+      modeUsed = 'sticker_muxed_container';
+      audioEmbedded = true;
+      isAudioSticker = true;
+      needsCalibration = false;
+      reason = activeSpec.reason;
+      note = `Dikirim lewat Jalur A2 (stickerMessage bermedia ${useWebm ? 'WebM' : 'MP4'} via HKDF ${activeSpec.hkdfMediaType}).`;
+    } else if (route === 'jalur_a_webp_chunk' && activeBlueprint) {
       const { finalWebpBuf, customized } = applyBlueprintToWebp(stickerWebpBuf, activeBlueprint, {
         audioBuf: bestAudioBuf,
         durationSec
       });
-      if (customized) {
-        validateStickerMediaPayload(finalWebpBuf);
-        finalWebpToSend = finalWebpBuf;
-        modeUsed = 'verified_webp_chunk_clone';
-        audioEmbedded = Boolean(bestAudioBuf && activeSpec.protoPatchRules?.hasDirectAudioEmbed);
-        reason = 'Stiker dirakit mengikuti chunk WebP terverifikasi spec global.';
-        note = 'Dikirim via jalur resmi sock.sendMessage mengikuti chunk WebP terkalibrasi.';
-      }
+      const targetWebp = customized ? finalWebpBuf : stickerWebpBuf;
+      validateStickerMediaPayload(targetWebp);
+      sendRes = await sendOfficialSelfMessage(
+        io,
+        sessionId,
+        session,
+        selfJid,
+        { sticker: targetWebp },
+        queueId ? `Jalur A1 WebP-Chunk #${String(queueId).slice(-5)}` : 'Jalur A1 WebP-Chunk'
+      );
+      modeUsed = customized ? 'verified_webp_chunk_clone' : 'native_webp_clean';
+      audioEmbedded = Boolean(customized && bestAudioBuf);
+      isAudioSticker = Boolean(customized);
+      needsCalibration = !customized;
+      reason = activeSpec.reason;
+      note = 'Dikirim lewat Jalur A1 (sock.sendMessage dengan chunk WebP/EXIF terkalibrasi).';
+    } else if (route === 'jalur_c_alt_message') {
+      const chosenMuxed = (activeSpec.container === 'webm' && muxedWebmBuf) ? muxedWebmBuf : (muxedMp4Buf || muxedWebmBuf);
+      sendRes = await sendJalurCAltMessage({
+        io,
+        sessionId,
+        session,
+        selfJid,
+        messageType: activeSpec.messageType,
+        innerMeta: activeSpec.protoPatchRules?.innerMeta || {},
+        stickerWebpBuf,
+        muxedBuf: chosenMuxed,
+        jpegThumbBuf,
+        queueId
+      });
+      modeUsed = 'alt_message_type_clone';
+      audioEmbedded = Boolean(chosenMuxed);
+      isAudioSticker = true;
+      needsCalibration = false;
+      reason = activeSpec.reason;
+      note = `Dikirim lewat Jalur C (${activeSpec.messageType}) mengikuti blueprint terkalibrasi.`;
+    } else {
+      // Jalur D: Belum terkalibrasi (atau blueprint bukan stiker audio) -> WebP bersih bebas "Menunggu pesan ini"
+      sendRes = await sendOfficialSelfMessage(
+        io,
+        sessionId,
+        session,
+        selfJid,
+        { sticker: stickerWebpBuf },
+        queueId ? `Stiker WebP #${String(queueId).slice(-5)} -> sock.sendMessage` : 'Stiker WebP -> sock.sendMessage'
+      );
+      modeUsed = 'native_webp_clean';
+      audioEmbedded = false;
+      isAudioSticker = false;
+      needsCalibration = true;
+      reason =
+        'Stiker terkirim bersih (0 error). Untuk mengaktifkan Ikon Speaker Stiker Audio, klik \'Mulai Deteksi Format\' di tab Koneksi WA lalu teruskan 1x contoh stiker audio dari chat Anda!';
+      note = 'Dikirim lewat Jalur D (WebP 512x512 bersih via sock.sendMessage).';
     }
 
-    // Catatan keamanan: DILARANG mengirim MP4/WebM ke { sticker } tanpa dukungan wire-tag resmi WAProto 6.7.24
-    const sent = await sendOfficialSelfMessage(
-      io,
-      sessionId,
-      session,
-      selfJid,
-      { sticker: finalWebpToSend },
-      queueId ? `Stiker #${String(queueId).slice(-5)} -> sock.sendMessage` : 'Stiker -> sock.sendMessage'
-    );
-    if (sent.messageId) {
-      attachStickerDeliveryWatcher(io, sessionId, session, sent.messageId, queueId);
+    if (sendRes?.messageId) {
+      attachStickerDeliveryWatcher(io, sessionId, session, sendRes.messageId, queueId);
     }
 
     return {
       ok: true,
       ...(queueId ? { queueId } : {}),
-      messageId: sent.messageId,
-      deliveryTraceId: sent.messageId,
-      protocol: 'sock.sendMessage-sticker',
+      messageId: sendRes.messageId,
+      deliveryTraceId: sendRes.messageId,
+      protocol: isAudioSticker ? `wire-cloner-${modeUsed}` : 'sock.sendMessage-sticker',
       modeUsed,
+      deliveryRoute: route,
+      isAudioSticker,
       audioEmbedded,
       reason,
       globalSpecMode: activeSpec.mode,
       hasBlueprint: Boolean(activeBlueprint),
-      needsCalibration: !activeSpec.calibrated,
+      needsCalibration,
       isAnimated: Boolean(isAnimatedBitstream),
-      encodedBytes: sent.encodedBytes,
+      encodedBytes: sendRes.encodedBytes,
       note,
       selfJid,
       sentAt: Date.now()
@@ -999,7 +1417,8 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     muxedWebmBuf = null;
     audioOpusBuf = null;
     audioM4aBuf = null;
-    containerBuf = null;
+    audioUnifiedBuf = null;
+    jpegThumbBuf = null;
   }
 }
 
@@ -1202,6 +1621,7 @@ function registerStickerSenderHandler(io, socket) {
       session.calibratingSoundSticker = true;
       session.calibrationArmedUntil = Date.now() + CALIBRATION_WINDOW_MS;
       attachCalibrationListener(io, sessionId, session);
+      syncCalibrationProtoObserver();
 
       emitToDevice(io, sessionId, 'sound-sticker-calibration-armed', {
         sessionId,
@@ -1213,6 +1633,25 @@ function registerStickerSenderHandler(io, socket) {
     } catch (err) {
       console.error('Error start-sound-sticker-calibration:', err.message);
     }
+  });
+
+  socket.on('sync-sound-sticker-blueprint', (payload) => {
+    try {
+      const { sessionId, deviceToken, blueprint } = payload || {};
+      const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
+      if (!tokenHash) return;
+      joinExclusiveDeviceRoom(socket, sessionId);
+
+      const cleanBp = sanitizeBlueprint(blueprint);
+      if (!cleanBp) return;
+
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.soundStickerBlueprint = cleanBp;
+      }
+      const globalSpec = promoteVerifiedBlueprintToGlobalSpec(cleanBp);
+      emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
+    } catch (_) {}
   });
 
   socket.on('refresh-wa-e2ee-sessions', async (payload) => {

@@ -16,6 +16,7 @@ const {
 const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/constants');
 const { isValidSessionId, normalizePhone } = require('../utils/common');
 const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir } = require('../utils/authFiles');
+const { armSafeProtoDecodeObserver } = require('../utils/protoWireInspector');
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
 const {
@@ -132,6 +133,52 @@ function getEncodedProtoSize(protoMessage) {
     return proto.Message.encode(protoMessage).finish().length;
   } catch {
     return 0;
+  }
+}
+
+let calibrationObserverDisarm = null;
+
+function hasActiveCalibrationSession() {
+  const now = Date.now();
+  for (const s of sessions.values()) {
+    if (s?.calibratingSoundSticker) {
+      if (!s.calibrationArmedUntil || now <= s.calibrationArmedUntil) {
+        return true;
+      }
+      s.calibratingSoundSticker = false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Mengaktifkan observer read-only `proto.Message.decode` hanya saat ada sesi kalibrasi aktif.
+ */
+function syncCalibrationProtoObserver() {
+  if (hasActiveCalibrationSession()) {
+    if (!calibrationObserverDisarm && proto?.Message) {
+      calibrationObserverDisarm = armSafeProtoDecodeObserver(
+        (frame) => {
+          for (const s of sessions.values()) {
+            if (!s?.calibratingSoundSticker) continue;
+            if (!Array.isArray(s.lastRawWirePackets)) s.lastRawWirePackets = [];
+            s.lastRawWirePackets.push({
+              at: frame.capturedAt,
+              byteLength: frame.byteLength,
+              wireTree: frame.wireTree,
+              decodedKeys: frame.decodedKeys
+            });
+            while (s.lastRawWirePackets.length > 8) {
+              s.lastRawWirePackets.shift();
+            }
+          }
+        },
+        { protoMessage: proto.Message, isActive: hasActiveCalibrationSession }
+      );
+    }
+  } else if (calibrationObserverDisarm) {
+    calibrationObserverDisarm();
+    calibrationObserverDisarm = null;
   }
 }
 
@@ -354,6 +401,7 @@ async function startBaileys(
       session.deliveryTraces = [];
       session.lastSentMessageId = '';
       session.lastSentAt = 0;
+      syncCalibrationProtoObserver();
       session.statusPointers?.clear();
       session.pendingMedia = [];
       removeSessionDir(sessionId);
@@ -787,6 +835,7 @@ async function startBaileys(
           session.sentMessageStore?.clear();
           removeSessionDir(sessionId);
           sessions.delete(sessionId);
+          syncCalibrationProtoObserver();
           emitToDevice(io, sessionId, 'session-status', {
             status: 'disconnected',
             reason: 'unlinked_from_phone',
@@ -1150,5 +1199,6 @@ module.exports = {
   pushCalibrationLog,
   pushDeliveryTrace,
   getEncodedProtoSize,
+  syncCalibrationProtoObserver,
   triggerAuthSnapshotSync
 };
