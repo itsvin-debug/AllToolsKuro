@@ -36,7 +36,8 @@ import {
   extractWaveformPeaks,
   renderTrimmedAudioBuffer,
   probeVideoMetadata,
-  createSnippetPlayer
+  createSnippetPlayer,
+  parseDecimalSafe
 } from './audioTrimmerEngine';
 import {
   validateSourceMediaDimensions,
@@ -68,10 +69,50 @@ const MAX_CLIP_DURATION_SEC = 30;
 const BATCH_DELAY_MS = 1500;
 
 function formatTimeSec(sec = 0) {
-  const safe = Math.max(0, Number(sec) || 0);
+  const safe = Math.max(0, parseDecimalSafe(sec, 0));
   const mins = Math.floor(safe / 60);
   const rem = (safe % 60).toFixed(1).padStart(4, '0');
   return `${mins}:${rem}`;
+}
+
+function DecimalSecInput({ value, onCommit, ariaLabel }) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState(() => String(value ?? 0));
+
+  useEffect(() => {
+    if (!focused) {
+      setDraft(String(value ?? 0));
+    }
+  }, [value, focused]);
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label={ariaLabel}
+      value={focused ? draft : String(value ?? 0)}
+      onFocus={() => {
+        setFocused(true);
+        setDraft(String(value ?? 0));
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        const normalized = raw.trim().replace(',', '.');
+        if (normalized && !normalized.endsWith('.') && /^-?\d+(\.\d+)?$/.test(normalized)) {
+          const parsed = parseFloat(normalized);
+          if (Number.isFinite(parsed)) onCommit?.(parsed);
+        }
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const parsed = parseDecimalSafe(draft, value);
+        onCommit?.(parsed);
+        setDraft(String(parsed));
+      }}
+      className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
+    />
+  );
 }
 
 export default function WaSoundStickerView({ onBack, onShowToast }) {
@@ -317,9 +358,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       if (unmounted) return;
       setCalibrationArmed(true);
       setCalibrationMeta(info && typeof info === 'object' ? info : null);
-      setCalibrationLogs([]);
+      if (!info?.resumed) {
+        setCalibrationLogs([]);
+      }
       const phoneLabel = info?.linkedPhone ? `+${info.linkedPhone}` : 'perangkat tertaut';
-      onShowToast?.(`Deteksi aktif di ${phoneLabel}: teruskan 1 stiker audio sekarang.`, 'info');
+      if (!info?.resumed) {
+        onShowToast?.(`Deteksi aktif di ${phoneLabel}: teruskan 1 stiker audio sekarang.`, 'info');
+      }
     });
 
     sock.on('sound-sticker-calibration-error', (payload) => {
@@ -330,12 +375,22 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     sock.on('sound-sticker-calibration-log', (entry) => {
       if (unmounted || !entry) return;
-      setCalibrationLogs((prev) => [...prev.slice(-11), entry]);
+      setCalibrationLogs((prev) => [...prev.slice(-19), entry]);
+    });
+
+    sock.on('sound-sticker-calibration-history', (items) => {
+      if (unmounted || !Array.isArray(items) || items.length === 0) return;
+      setCalibrationLogs(items.slice(-20));
     });
 
     sock.on('sound-sticker-delivery-trace', (trace) => {
       if (unmounted || !trace) return;
-      setDeliveryTraces((prev) => [...prev.slice(-7), trace]);
+      setDeliveryTraces((prev) => [...prev.slice(-19), trace]);
+    });
+
+    sock.on('sound-sticker-delivery-trace-history', (items) => {
+      if (unmounted || !Array.isArray(items) || items.length === 0) return;
+      setDeliveryTraces(items.slice(-20));
     });
 
     sock.on('sound-sticker-spec-sync', (spec) => {
@@ -480,7 +535,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     const mime = String(file.type || '').toLowerCase();
     const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/i.test(file.name);
-    const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif)$/i.test(file.name);
+    const isImage = mime.startsWith('image/') || /\.(jpg|jpeg|png|webp|gif|heic|heif|bmp|avif)$/i.test(file.name);
 
     if (!isVideo && !isImage) {
       onShowToast?.('Format visual tidak didukung. Pilih foto (JPG/PNG/WebP) atau video (MP4/WebM/MOV).', 'error');
@@ -505,6 +560,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       });
       onShowToast?.(`${loadedVideo ? 'Video' : 'Foto'} dimuat ke pratinjau 512×512.`, 'success');
     } catch (err) {
+      setVisualPreviewUrl('');
+      setSourceMedia(null);
+      setVisualFileObj(null);
+      setVisualFileMeta(null);
       onShowToast?.(err.message || 'Gagal membaca berkas visual.', 'error');
     }
   };
@@ -570,9 +629,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const applyFullModeBounds = useCallback((buf, use15sCap) => {
     if (!buf) return;
     const cap = use15sCap ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
-    const clampedEnd = Number(Math.min(buf.duration, cap).toFixed(1));
+    const clampedEnd = Number(Math.max(0.2, Math.min(buf.duration, cap)).toFixed(1));
     setStartSec(0);
-    setEndSec(Math.max(0.2, clampedEnd));
+    setEndSec(clampedEnd);
   }, []);
 
   const handleChangeTrimMode = (mode) => {
@@ -585,9 +644,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const updateSafeStart = (nextStart) => {
     if (!audioBuffer) return;
     const total = audioBuffer.duration;
-    let s = Math.max(0, Math.min(total - 0.2, Number(nextStart) || 0));
+    const parsedStart = parseDecimalSafe(nextStart, 0);
+    let s = Math.max(0, Math.min(Math.max(0, total - 0.2), parsedStart));
     s = Number(s.toFixed(1));
-    let e = endSec;
+    const currentEnd = parseDecimalSafe(endSec, Math.min(total, s + 0.5));
+    let e = currentEnd;
     if (e - s < 0.2) e = Number(Math.min(total, s + 0.5).toFixed(1));
     if (e - s > MAX_CLIP_DURATION_SEC) e = Number((s + MAX_CLIP_DURATION_SEC).toFixed(1));
     setTrimMode('cut');
@@ -598,9 +659,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const updateSafeEnd = (nextEnd) => {
     if (!audioBuffer) return;
     const total = audioBuffer.duration;
-    let e = Math.max(0.2, Math.min(total, Number(nextEnd) || total));
+    const parsedEnd = parseDecimalSafe(nextEnd, total);
+    let e = Math.max(0.2, Math.min(total, parsedEnd));
     e = Number(e.toFixed(1));
-    let s = startSec;
+    const currentStart = parseDecimalSafe(startSec, 0);
+    let s = currentStart;
     if (e - s < 0.2) s = Number(Math.max(0, e - 0.5).toFixed(1));
     if (e - s > MAX_CLIP_DURATION_SEC) s = Number(Math.max(0, e - MAX_CLIP_DURATION_SEC).toFixed(1));
     setTrimMode('cut');
@@ -608,10 +671,30 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     setEndSec(e);
   };
 
-  const selectedDuration = useMemo(
-    () => Math.max(0.2, Number((endSec - startSec).toFixed(1))),
-    [startSec, endSec]
-  );
+  const effectiveBounds = useMemo(() => {
+    if (!audioBuffer || !Number.isFinite(audioBuffer.duration) || audioBuffer.duration <= 0) {
+      return { start: 0, end: 0, duration: 0, isValid: false };
+    }
+    const total = audioBuffer.duration;
+    const cap = limitFull15s ? RECOMMENDED_FULL_SEC : MAX_CLIP_DURATION_SEC;
+    if (trimMode === 'full') {
+      const endFull = Number(Math.max(0.2, Math.min(total, cap)).toFixed(1));
+      return { start: 0, end: endFull, duration: endFull, isValid: endFull >= 0.2 };
+    }
+    const safeS = Math.max(0, Math.min(Math.max(0, total - 0.2), parseDecimalSafe(startSec, 0)));
+    const safeE = Math.max(safeS + 0.2, Math.min(total, parseDecimalSafe(endSec, total)));
+    const startVal = Number(safeS.toFixed(1));
+    const endVal = Number(safeE.toFixed(1));
+    const durVal = Number(Math.max(0.2, endVal - startVal).toFixed(1));
+    return {
+      start: startVal,
+      end: endVal,
+      duration: durVal,
+      isValid: Number.isFinite(durVal) && durVal >= 0.2
+    };
+  }, [audioBuffer, trimMode, limitFull15s, startSec, endSec]);
+
+  const selectedDuration = effectiveBounds.duration;
 
   // Gambar Waveform Audio Interaktif
   useEffect(() => {
@@ -633,8 +716,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
 
     const totalDur = Math.max(0.1, audioBuffer.duration);
-    const startRatio = startSec / totalDur;
-    const endRatio = endSec / totalDur;
+    const startRatio = effectiveBounds.start / totalDur;
+    const endRatio = effectiveBounds.end / totalDur;
 
     const selX = startRatio * w;
     const selW = Math.max(2, (endRatio - startRatio) * w);
@@ -658,20 +741,20 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     ctx.fillRect(Math.min(w - 2, selX + selW - 1), 0, 2, h);
 
     if (isTestingSound) {
-      const playAbs = Math.min(totalDur, startSec + testPlayheadSec);
+      const playAbs = Math.min(totalDur, effectiveBounds.start + testPlayheadSec);
       const px = (playAbs / totalDur) * w;
       ctx.fillStyle = '#ef4444';
       ctx.fillRect(px - 1, 0, 2, h);
     }
-  }, [audioBuffer, waveformPeaks, startSec, endSec, isTestingSound, testPlayheadSec]);
+  }, [audioBuffer, waveformPeaks, effectiveBounds, isTestingSound, testPlayheadSec]);
 
   const handleWaveformClick = (e) => {
     if (!audioBuffer || !waveformCanvasRef.current) return;
     const rect = waveformCanvasRef.current.getBoundingClientRect();
     const clickRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
     const clickedSec = Number((clickRatio * audioBuffer.duration).toFixed(1));
-    const distToStart = Math.abs(clickedSec - startSec);
-    const distToEnd = Math.abs(clickedSec - endSec);
+    const distToStart = Math.abs(clickedSec - effectiveBounds.start);
+    const distToEnd = Math.abs(clickedSec - effectiveBounds.end);
     if (distToStart <= distToEnd) updateSafeStart(clickedSec);
     else updateSafeEnd(clickedSec);
   };
@@ -687,7 +770,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     setIsTestingSound(true);
     setTestPlayheadSec(0);
-    await trimPlayerRef.current?.play(audioBuffer, startSec, endSec, volume, {
+    await trimPlayerRef.current?.play(audioBuffer, effectiveBounds.start, effectiveBounds.end, volume, {
       fadeSmooth,
       onTick: (sec) => setTestPlayheadSec(sec),
       onEnded: () => {
@@ -720,7 +803,12 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       const bpMime = String(soundStickerBlueprint?.stickerMeta?.mimetype || '').toLowerCase();
       if (bpContainer === 'mp4' || bpContainer === 'webm' || bpMime.includes('mp4') || bpMime.includes('webm')) {
         try {
-          const trimmed = await renderTrimmedAudioBuffer(audioBuffer, { startSec, endSec, volume, fadeSmooth });
+          const trimmed = await renderTrimmedAudioBuffer(audioBuffer, {
+            startSec: effectiveBounds.start,
+            endSec: effectiveBounds.end,
+            volume,
+            fadeSmooth
+          });
           const stage1 = await composeSoundVideoStage1({ sourceMedia, trimmedAudioBuffer: trimmed, renderOptions });
           stagedMuxedBlob = stage1.blob;
           stagedMuxedExt = stage1.ext;
@@ -737,8 +825,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
         audioBuffer,
         thumbnailUrl,
         totalDuration: audioBuffer.duration,
-        startSec,
-        endSec,
+        startSec: effectiveBounds.start,
+        endSec: effectiveBounds.end,
         volume,
         fadeSmooth,
         cropMode,
@@ -954,8 +1042,8 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       audioBuffer,
       thumbnailUrl: createSquareThumbnailDataUrl(sourceMedia, renderOptions),
       totalDuration: audioBuffer.duration,
-      startSec,
-      endSec,
+      startSec: effectiveBounds.start,
+      endSec: effectiveBounds.end,
       volume,
       fadeSmooth,
       cropMode,
@@ -1241,7 +1329,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               }`}
             >
               <Layers className="w-4 h-4 shrink-0" />
-              <span className="truncate">Video Bersuara Banyak</span>
+              <span className="truncate">Multi Video</span>
             </button>
           </div>
 
@@ -1250,11 +1338,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               {/* MODE A — INPUT VISUAL + OPSI 1:1 */}
               <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
                 <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 bg-yellow-300 border border-black font-black text-[10px] uppercase">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-2 py-0.5 bg-yellow-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
                       Mode A • 1
                     </span>
-                    <h2 className="font-black text-xs sm:text-sm uppercase text-black">
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black truncate">
                       Pilih Foto atau Video (1:1)
                     </h2>
                   </div>
@@ -1428,13 +1516,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               {/* MODE A — INPUT SOUND & WAVEFORM TRIMMER */}
               <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
                 <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
                       Mode A • 2
                     </span>
-                    <h2 className="font-black text-xs sm:text-sm uppercase text-black flex items-center gap-1.5">
-                      <Scissors className="w-4 h-4" />
-                      Sound &amp; Atur Detik Potongan
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black flex items-center gap-1.5 min-w-0">
+                      <Scissors className="w-4 h-4 shrink-0" />
+                      <span className="truncate">Sound &amp; Atur Detik Potongan</span>
                     </h2>
                   </div>
                   {audioFileMeta && (
@@ -1544,28 +1632,24 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       <div className="p-2 bg-neutral-50 border border-black space-y-1">
                         <div className="flex items-center justify-between font-black text-[11px]">
                           <span>Mulai:</span>
-                          <span className="font-mono text-emerald-700">{formatTimeSec(startSec)}</span>
+                          <span className="font-mono text-emerald-700">{formatTimeSec(effectiveBounds.start)}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => updateSafeStart(startSec - 0.5)}
+                            onClick={() => updateSafeStart(effectiveBounds.start - 0.5)}
                             className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
                           >
                             -0.5s
                           </button>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max={Math.max(0, audioBuffer.duration - 0.2).toFixed(1)}
-                            value={startSec}
-                            onChange={(e) => updateSafeStart(e.target.value)}
-                            className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
+                          <DecimalSecInput
+                            ariaLabel="Detik mulai sound"
+                            value={effectiveBounds.start}
+                            onCommit={updateSafeStart}
                           />
                           <button
                             type="button"
-                            onClick={() => updateSafeStart(startSec + 0.5)}
+                            onClick={() => updateSafeStart(effectiveBounds.start + 0.5)}
                             className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
                           >
                             +0.5s
@@ -1576,28 +1660,24 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                       <div className="p-2 bg-neutral-50 border border-black space-y-1">
                         <div className="flex items-center justify-between font-black text-[11px]">
                           <span>Selesai:</span>
-                          <span className="font-mono text-emerald-700">{formatTimeSec(endSec)}</span>
+                          <span className="font-mono text-emerald-700">{formatTimeSec(effectiveBounds.end)}</span>
                         </div>
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
-                            onClick={() => updateSafeEnd(endSec - 0.5)}
+                            onClick={() => updateSafeEnd(effectiveBounds.end - 0.5)}
                             className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
                           >
                             -0.5s
                           </button>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0.2"
-                            max={audioBuffer.duration.toFixed(1)}
-                            value={endSec}
-                            onChange={(e) => updateSafeEnd(e.target.value)}
-                            className="flex-1 min-w-0 bg-white border border-black px-2 py-1.5 font-mono font-bold text-center"
+                          <DecimalSecInput
+                            ariaLabel="Detik selesai sound"
+                            value={effectiveBounds.end}
+                            onCommit={updateSafeEnd}
                           />
                           <button
                             type="button"
-                            onClick={() => updateSafeEnd(endSec + 0.5)}
+                            onClick={() => updateSafeEnd(effectiveBounds.end + 0.5)}
                             className="px-2.5 py-1.5 bg-white hover:bg-neutral-200 border border-black font-mono font-black text-[11px] cursor-pointer"
                           >
                             +0.5s
@@ -1660,41 +1740,65 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 isVideoSource={isVideoSource}
                 audioBuffer={audioBuffer}
                 waveformPeaks={waveformPeaks}
-                startSec={startSec}
-                endSec={endSec}
+                startSec={effectiveBounds.start}
+                endSec={effectiveBounds.end}
                 volume={volume}
                 fadeSmooth={fadeSmooth}
                 renderOptions={renderOptions}
               />
 
-              <div className="flex flex-col sm:flex-row gap-2.5">
-                <button
-                  type="button"
-                  onClick={handleAddModeAToQueue}
-                  disabled={isComposingStage1 || !sourceMedia || !audioBuffer}
-                  className="flex-1 py-3 px-4 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
-                >
-                  {isComposingStage1 ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4 stroke-[2.5]" />}
-                  <span>+ Tambah ke Antrean Stiker Audio</span>
-                </button>
+              {(() => {
+                const missingMsg = !sourceMedia || !visualFileObj
+                  ? 'Pilih Foto atau Video di Langkah 1 untuk mengaktifkan tombol aksi.'
+                  : !audioBuffer || !effectiveBounds.isValid
+                    ? 'Pilih file Audio / Sound di Langkah 2 untuk mengaktifkan tombol aksi.'
+                    : isComposingStage1
+                      ? 'Sedang menyiapkan item ke antrean...'
+                      : isBatchSending
+                        ? 'Sedang mengirim stiker ke WhatsApp...'
+                        : null;
+                const canQueue = Boolean(sourceMedia && visualFileObj && audioBuffer && effectiveBounds.isValid && !isComposingStage1);
+                const canSend = Boolean(canQueue && !isBatchSending);
 
-                <button
-                  type="button"
-                  onClick={handleSendCurrentSingle}
-                  disabled={isBatchSending || isComposingStage1 || !sourceMedia || !audioBuffer}
-                  className="py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px] shrink-0"
-                >
-                  <Send className="w-4 h-4" />
-                  <span>Kirim Langsung 1 Ini</span>
-                </button>
-              </div>
+                return (
+                  <div className="space-y-2">
+                    {missingMsg && (
+                      <div className="px-3 py-2 bg-amber-50 border-2 border-black text-[11px] font-bold text-neutral-800 flex items-center gap-1.5">
+                        <Info className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                        <span>{missingMsg}</span>
+                      </div>
+                    )}
+                    <div className="flex flex-col sm:flex-row gap-2.5">
+                      <button
+                        type="button"
+                        onClick={handleAddModeAToQueue}
+                        disabled={!canQueue}
+                        className="flex-1 py-3 px-4 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
+                      >
+                        {isComposingStage1 ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Plus className="w-4 h-4 stroke-[2.5] shrink-0" />}
+                        <span>Tambah ke Antrean Stiker Audio</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleSendCurrentSingle}
+                        disabled={!canSend}
+                        className="py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px] shrink-0"
+                      >
+                        <Send className="w-4 h-4 shrink-0" />
+                        <span>Kirim Langsung 1 Ini</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </>
           ) : (
             /* MODE B — MULTI-UPLOAD VIDEO BERSUARA SEKALIGUS */
             <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
               <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
                 <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase">
+                  <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
                     Mode B • Batch
                   </span>
                   <h2 className="font-black text-xs sm:text-sm uppercase text-black">
@@ -1894,37 +1998,39 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </div>
                 </div>
                 <p className="text-[11px] font-semibold text-neutral-700">
-                  Target terkunci ke nomor Anda sendiri via <code className="font-mono">sendTrackedMessage</code> (pre-send cache + retry recovery).
+                  Target terkunci ke nomor Anda sendiri via jalur resmi <code className="font-mono">sock.sendMessage</code>.
                 </p>
-                {e2eeDiagStatus && (
+                {(e2eeDiagStatus || deliveryTraces.length > 0) && (
                   <div
                     className={`p-2 border-2 border-black text-[10px] font-mono space-y-0.5 ${
-                      e2eeDiagStatus.ok ? 'bg-white text-black' : 'bg-rose-100 text-rose-950'
+                      e2eeDiagStatus?.ok === false ? 'bg-rose-100 text-rose-950' : 'bg-white text-black'
                     }`}
                   >
-                    <div className="font-black flex items-center justify-between gap-2 flex-wrap">
-                      <span>
-                        {e2eeDiagStatus.kind === 'test' || e2eeDiagStatus.kind === 'plain_sticker'
-                          ? e2eeDiagStatus.ackLabel || e2eeDiagStatus.error
-                          : e2eeDiagStatus.ok
-                            ? `Reset Kunci E2EE Selesai (${e2eeDiagStatus.clearedCount || 0} file sesi lama + soft-restart)`
-                            : e2eeDiagStatus.error}
-                      </span>
-                      {e2eeDiagStatus.baileysVersion && (
-                        <span className="px-1.5 py-0.5 bg-neutral-100 border border-black text-[9px]">
-                          Baileys v{e2eeDiagStatus.baileysVersion}
+                    {e2eeDiagStatus && (
+                      <div className="font-black flex items-center justify-between gap-2 flex-wrap">
+                        <span>
+                          {e2eeDiagStatus.kind === 'test' || e2eeDiagStatus.kind === 'plain_sticker'
+                            ? e2eeDiagStatus.ackLabel || e2eeDiagStatus.error
+                            : e2eeDiagStatus.ok
+                              ? `Reset Kunci E2EE Selesai (${e2eeDiagStatus.clearedCount || 0} file sesi lama + soft-restart)`
+                              : e2eeDiagStatus.error}
                         </span>
-                      )}
-                    </div>
-                    {e2eeDiagStatus.messageId && (
+                        {e2eeDiagStatus.baileysVersion && (
+                          <span className="px-1.5 py-0.5 bg-neutral-100 border border-black text-[9px]">
+                            Baileys v{e2eeDiagStatus.baileysVersion}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {e2eeDiagStatus?.messageId && (
                       <div className="text-neutral-600">
                         ID: #{String(e2eeDiagStatus.messageId).slice(-10)}
                         {e2eeDiagStatus.encodedBytes ? ` • ${e2eeDiagStatus.encodedBytes} B proto` : ''}
                       </div>
                     )}
                     {deliveryTraces.length > 0 && (
-                      <div className="pt-1 border-t border-black/15 space-y-0.5 text-[9px] text-neutral-700">
-                        {deliveryTraces.slice(-4).map((t, idx) => (
+                      <div className={`${e2eeDiagStatus ? 'pt-1 border-t border-black/15' : ''} space-y-0.5 text-[9px] text-neutral-700`}>
+                        {deliveryTraces.slice(-5).map((t, idx) => (
                           <div key={`${t.at}-${idx}`} className="truncate">
                             [{t.phase || t.event}] #{String(t.messageId || '').slice(-6)} {t.detail}
                           </div>
@@ -2162,7 +2268,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     </span>
                   </button>
 
-                  {calibrationArmed && (
+                  {(calibrationArmed || calibrationLogs.length > 0) && (
                     <div className="p-2 bg-white border border-black space-y-1 text-[10px] font-mono">
                       <div className="font-black uppercase text-neutral-600">
                         Log Aktivitas Masuk (Real-Time):

@@ -19,16 +19,15 @@ const {
   rememberSentMessage,
   getSentMessage,
   watchE2eeMessageId,
-  sendTrackedMessage,
   softRestartBaileysPreserveAuth,
-  triggerAuthSnapshotSync
+  pushCalibrationLog,
+  pushDeliveryTrace,
+  getEncodedProtoSize
 } = require('./whatsappSessionHandler');
 const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
 
 const {
   proto,
-  generateMessageIDV2,
-  generateMessageID,
   downloadMediaMessage,
   downloadContentFromMessage,
   jidNormalizedUser: baileysJidNorm
@@ -612,8 +611,7 @@ function attachCalibrationListener(io, sessionId, session) {
 
         // Saat mode deteksi aktif, log SEMUA pesan/stub masuk tanpa memfilter pengirim/tipe pesan
         if (isArmed) {
-          emitToDevice(io, sessionId, 'sound-sticker-calibration-log', {
-            at: Date.now(),
+          pushCalibrationLog(io, sessionId, curSession, {
             upsertType: type || 'notify',
             remoteJid: remoteRaw || participantRaw,
             fromMe: Boolean(msg.key.fromMe),
@@ -759,6 +757,146 @@ function attachCalibrationListener(io, sessionId, session) {
 }
 
 /**
+ * Jalur kirim resmi berbasis `sock.sendMessage(selfJid, content)` + cache sentMessageStore untuk Signal retry.
+ */
+async function sendOfficialSelfMessage(io, sessionId, session, selfJid, content, traceLabel = 'sock.sendMessage') {
+  if (!session?.sock?.user?.id) {
+    throw new Error('Sesi WhatsApp belum terhubung aktif.');
+  }
+
+  const sentMsg = await session.sock.sendMessage(selfJid, content);
+  const messageId = sentMsg?.key?.id || '';
+  const encodedBytes = getEncodedProtoSize(sentMsg?.message);
+
+  if (messageId && sentMsg?.message) {
+    rememberSentMessage(session, messageId, sentMsg.message);
+  }
+  if (messageId) {
+    watchE2eeMessageId(session, messageId);
+    pushDeliveryTrace(io, sessionId, session, {
+      messageId,
+      phase: 'sent',
+      event: 'sock.sendMessage',
+      isError: false,
+      detail: `${traceLabel} (${encodedBytes || '?'} B proto) -> menunggu ACK HP`
+    });
+  }
+  emitAuthSnapshotNow(io, sessionId, session);
+
+  return { sentMsg, messageId, encodedBytes };
+}
+
+/**
+ * Uji kirim diagnostik (Tes E2EE Teks / Tes Stiker Polos) dengan pemantauan ACK non-blocking yang bersih.
+ */
+async function runSelfE2eeDiagnosticSend({
+  io,
+  sessionId,
+  session,
+  selfJid,
+  content,
+  traceLabel,
+  defaultWaitLabel,
+  errorPrefix,
+  serverAckLabel,
+  deliveredAckLabel
+}) {
+  let ackStatus = 1;
+  let ackLabel = defaultWaitLabel;
+  let ackError = false;
+  let trackedId = '';
+  const earlyUpdates = [];
+
+  const handleAckUpdate = (upd) => {
+    const st = Number(upd?.update?.status);
+    if (!Number.isFinite(st)) return false;
+    ackStatus = st;
+    if (st === 0 || st < 0) {
+      ackError = true;
+      ackLabel = errorPrefix;
+      return true;
+    }
+    if (st >= 3) {
+      ackLabel = deliveredAckLabel;
+      return true;
+    }
+    if (st === 2) {
+      ackLabel = serverAckLabel;
+    }
+    return false;
+  };
+
+  let onAckUpdate = null;
+  let onReceiptUpdate = null;
+  const ackPromise = new Promise((resolve) => {
+    const timer = setTimeout(
+      () => resolve({ status: ackStatus, label: ackLabel, isError: ackError }),
+      SELF_E2EE_TEST_WATCH_MS
+    );
+    onAckUpdate = (updates) => {
+      if (!Array.isArray(updates)) return;
+      for (const upd of updates) {
+        if (!trackedId) {
+          if (upd?.key?.fromMe) earlyUpdates.push(upd);
+          continue;
+        }
+        if (upd?.key?.id !== trackedId) continue;
+        if (handleAckUpdate(upd)) {
+          clearTimeout(timer);
+          resolve({ status: ackStatus, label: ackLabel, isError: ackError });
+          return;
+        }
+      }
+    };
+    onReceiptUpdate = (updates) => {
+      if (!Array.isArray(updates) || !trackedId) return;
+      for (const upd of updates) {
+        if (upd?.key?.id !== trackedId) continue;
+        ackStatus = 3;
+        ackLabel = deliveredAckLabel;
+        clearTimeout(timer);
+        resolve({ status: 3, label: ackLabel, isError: false });
+        return;
+      }
+    };
+    session.sock.ev.on('messages.update', onAckUpdate);
+    session.sock.ev.on('message-receipt.update', onReceiptUpdate);
+  });
+
+  try {
+    const sent = await sendOfficialSelfMessage(io, sessionId, session, selfJid, content, traceLabel);
+    trackedId = sent.messageId;
+
+    for (const upd of earlyUpdates) {
+      if (upd?.key?.id === trackedId && handleAckUpdate(upd)) {
+        break;
+      }
+    }
+
+    const settledAck =
+      ackError || ackStatus >= 3
+        ? { status: ackStatus, label: ackLabel, isError: ackError }
+        : await ackPromise;
+
+    return {
+      ok: !settledAck.isError,
+      messageId: sent.messageId,
+      encodedBytes: sent.encodedBytes,
+      ackStatus: settledAck.status,
+      ackLabel: settledAck.label,
+      error: settledAck.isError ? settledAck.label : null
+    };
+  } finally {
+    if (onAckUpdate) {
+      try { session.sock?.ev?.off?.('messages.update', onAckUpdate); } catch (_) {}
+    }
+    if (onReceiptUpdate) {
+      try { session.sock?.ev?.off?.('message-receipt.update', onReceiptUpdate); } catch (_) {}
+    }
+  }
+}
+
+/**
  * Pengirim Resmi Berbasis `sock.sendMessage(selfJid, ...)` + Blueprint Patcher + Zero "Menunggu Pesan Ini".
  */
 async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, payload }) {
@@ -778,8 +916,6 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       audioOpusBase64,
       audioM4aBase64,
       durationSec = 3,
-      width = 512,
-      height = 512,
       blueprint: clientBlueprint
     } = payload || {};
 
@@ -794,15 +930,12 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
 
     const activeSpec = getGlobalSoundStickerSpec();
     const activeBlueprint = sanitizeBlueprint(clientBlueprint) || session.soundStickerBlueprint || null;
-    const safeWidth = Math.max(16, Math.min(1024, Number(width) || 512));
-    const safeHeight = Math.max(16, Math.min(1024, Number(height) || 512));
 
     let modeUsed = 'native_webp_clean';
     let audioEmbedded = false;
     let reason = activeSpec.reason;
-    let note = 'Dikirim lewat sendTrackedMessage (WebP 512x512 + EXIF tervalidasi) agar 0% "Menunggu pesan ini".';
+    let note = 'Dikirim lewat jalur resmi sock.sendMessage (WebP 512x512 + EXIF tervalidasi).';
     let finalWebpToSend = stickerWebpBuf;
-    let patchMime = null;
 
     // Hanya kloning chunk/EXIF terverifikasi yang tetap lolos WebP validator dan WAProto 6.7.24
     const allowWebpChunkClone =
@@ -825,38 +958,29 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
         modeUsed = 'verified_webp_chunk_clone';
         audioEmbedded = Boolean(bestAudioBuf && activeSpec.protoPatchRules?.hasDirectAudioEmbed);
         reason = 'Stiker dirakit mengikuti chunk WebP terverifikasi spec global.';
-        note = 'Dikirim via jalur resmi sendTrackedMessage mengikuti chunk WebP terkalibrasi.';
+        note = 'Dikirim via jalur resmi sock.sendMessage mengikuti chunk WebP terkalibrasi.';
       }
     }
 
     // Catatan keamanan: DILARANG mengirim MP4/WebM ke { sticker } tanpa dukungan wire-tag resmi WAProto 6.7.24
-    const tracked = await sendTrackedMessage(
+    const sent = await sendOfficialSelfMessage(
       io,
       sessionId,
       session,
       selfJid,
       { sticker: finalWebpToSend },
-      {
-        patchProto: (inner) => {
-          if (inner?.stickerMessage && patchMime) {
-            inner.stickerMessage.mimetype = patchMime;
-            inner.stickerMessage.isAnimated = Boolean(isAnimatedBitstream);
-            inner.stickerMessage.width = safeWidth;
-            inner.stickerMessage.height = safeHeight;
-          }
-        },
-        onBeforeRelay: (_waMsg, msgId) => {
-          attachStickerDeliveryWatcher(io, sessionId, session, msgId, queueId);
-        }
-      }
+      queueId ? `Stiker #${String(queueId).slice(-5)} -> sock.sendMessage` : 'Stiker -> sock.sendMessage'
     );
+    if (sent.messageId) {
+      attachStickerDeliveryWatcher(io, sessionId, session, sent.messageId, queueId);
+    }
 
     return {
       ok: true,
       ...(queueId ? { queueId } : {}),
-      messageId: tracked.messageId,
-      deliveryTraceId: tracked.messageId,
-      protocol: 'sendTrackedMessage-sticker',
+      messageId: sent.messageId,
+      deliveryTraceId: sent.messageId,
+      protocol: 'sock.sendMessage-sticker',
       modeUsed,
       audioEmbedded,
       reason,
@@ -864,7 +988,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       hasBlueprint: Boolean(activeBlueprint),
       needsCalibration: !activeSpec.calibrated,
       isAnimated: Boolean(isAnimatedBitstream),
-      encodedBytes: tracked.encodedBytes,
+      encodedBytes: sent.encodedBytes,
       note,
       selfJid,
       sentAt: Date.now()
@@ -1030,6 +1154,33 @@ async function performResetSelfE2eeKeys(io, sessionId, session) {
   };
 }
 
+function emitSessionDiagnosticsReplay(socket, session) {
+  if (!socket || !session) return;
+  socket.emit('sound-sticker-spec-sync', getGlobalSoundStickerSpec());
+  if (session.soundStickerBlueprint) {
+    socket.emit('sound-sticker-blueprint-ready', {
+      blueprint: session.soundStickerBlueprint,
+      globalSpec: getGlobalSoundStickerSpec()
+    });
+  }
+  if (session.calibratingSoundSticker && session.calibrationArmedUntil > Date.now()) {
+    socket.emit('sound-sticker-calibration-armed', {
+      sessionId: session.sessionId,
+      linkedPhone: session.phone || (session.sock?.user?.id ? String(session.sock.user.id).split('@')[0].split(':')[0] : ''),
+      linkedLid: session.sock?.user?.lid || null,
+      baileysVersion: BAILEYS_VERSION,
+      armedUntil: session.calibrationArmedUntil,
+      resumed: true
+    });
+  }
+  if (Array.isArray(session.calibrationLogs) && session.calibrationLogs.length > 0) {
+    socket.emit('sound-sticker-calibration-history', session.calibrationLogs.slice(-20));
+  }
+  if (Array.isArray(session.deliveryTraces) && session.deliveryTraces.length > 0) {
+    socket.emit('sound-sticker-delivery-trace-history', session.deliveryTraces.slice(-20));
+  }
+}
+
 function registerStickerSenderHandler(io, socket) {
   socket.on('start-sound-sticker-calibration', (payload) => {
     try {
@@ -1142,89 +1293,24 @@ function registerStickerSenderHandler(io, socket) {
 
       const selfJid = jidNormalizedUser(session.sock.user.id);
       const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
-
-      let ackStatus = 1;
-      let ackLabel = 'Terkirim via server E2EE (menunggu ACK perangkat)';
-      let ackError = false;
-      let onAckUpdate = null;
-      let onReceiptUpdate = null;
-      let trackedId = '';
-
-      const ackPromise = new Promise((resolve) => {
-        const timer = setTimeout(() => resolve({ status: ackStatus, label: ackLabel, isError: ackError }), SELF_E2EE_TEST_WATCH_MS);
-        onAckUpdate = (updates) => {
-          if (!Array.isArray(updates) || !trackedId) return;
-          for (const upd of updates) {
-            if (upd?.key?.id !== trackedId) continue;
-            const st = Number(upd?.update?.status);
-            if (!Number.isFinite(st)) continue;
-            ackStatus = st;
-            if (st === 0 || st < 0) {
-              ackError = true;
-              ackLabel = 'Gagal dekripsi E2EE di perangkat (ERROR ACK 0)';
-              clearTimeout(timer);
-              resolve({ status: ackStatus, label: ackLabel, isError: true });
-              return;
-            }
-            if (st >= 3) {
-              ackLabel = 'Diterima HP Anda ✓✓ (0 error E2EE)';
-              clearTimeout(timer);
-              resolve({ status: ackStatus, label: ackLabel, isError: false });
-              return;
-            }
-            if (st === 2) {
-              ackLabel = 'Diterima Server WA ✓ (0 error E2EE)';
-            }
-          }
-        };
-        onReceiptUpdate = (updates) => {
-          if (!Array.isArray(updates) || !trackedId) return;
-          for (const upd of updates) {
-            if (upd?.key?.id !== trackedId) continue;
-            ackStatus = 3;
-            ackLabel = 'Diterima HP Anda ✓✓ (0 error E2EE)';
-            clearTimeout(timer);
-            resolve({ status: 3, label: ackLabel, isError: false });
-            return;
-          }
-        };
-        session.sock.ev.on('messages.update', onAckUpdate);
-        session.sock.ev.on('message-receipt.update', onReceiptUpdate);
-      });
-
-      const tracked = await sendTrackedMessage(
+      const diag = await runSelfE2eeDiagnosticSend({
         io,
         sessionId,
         session,
         selfJid,
-        { text: '✅ Tes E2EE Kuro Studio berhasil masuk (0 error).' },
-        {
-          onBeforeRelay: (_waMsg, msgId) => {
-            trackedId = msgId;
-          }
-        }
-      );
-
-      const finalMsgId = tracked.messageId || '';
-      const settledAck = await ackPromise.finally(() => {
-        if (onAckUpdate) {
-          try { session.sock?.ev?.off?.('messages.update', onAckUpdate); } catch (_) {}
-        }
-        if (onReceiptUpdate) {
-          try { session.sock?.ev?.off?.('message-receipt.update', onReceiptUpdate); } catch (_) {}
-        }
+        content: { text: '✅ Tes E2EE Kuro Studio berhasil masuk (0 error).' },
+        traceLabel: 'Tes E2EE (Teks)',
+        defaultWaitLabel: 'Terkirim via sock.sendMessage (menunggu ACK perangkat)',
+        errorPrefix: 'Gagal dekripsi E2EE di perangkat (ERROR ACK 0)',
+        serverAckLabel: 'Diterima Server WA ✓ (0 error E2EE)',
+        deliveredAckLabel: 'Diterima HP Anda ✓✓ (0 error E2EE)'
       });
 
       emitToDevice(io, sessionId, 'self-e2ee-test-result', {
-        ok: !settledAck.isError,
-        messageId: finalMsgId,
+        ...diag,
         selfJid,
         selfLid,
         baileysVersion: BAILEYS_VERSION,
-        encodedBytes: tracked.encodedBytes,
-        ackStatus: settledAck.status,
-        ackLabel: settledAck.label,
-        error: settledAck.isError ? settledAck.label : null,
         sentAt: Date.now()
       });
     } catch (err) {
@@ -1261,71 +1347,24 @@ function registerStickerSenderHandler(io, socket) {
 
       const selfJid = jidNormalizedUser(session.sock.user.id);
       const selfLid = session.sock?.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
-      let ackStatus = 1;
-      let ackLabel = 'Stiker polos terkirim (menunggu ACK perangkat)';
-      let ackError = false;
-      let onAckUpdate = null;
-      let trackedId = '';
-
-      const ackPromise = new Promise((resolve) => {
-        const timer = setTimeout(() => resolve({ status: ackStatus, label: ackLabel, isError: ackError }), SELF_E2EE_TEST_WATCH_MS);
-        onAckUpdate = (updates) => {
-          if (!Array.isArray(updates) || !trackedId) return;
-          for (const upd of updates) {
-            if (upd?.key?.id !== trackedId) continue;
-            const st = Number(upd?.update?.status);
-            if (!Number.isFinite(st)) continue;
-            ackStatus = st;
-            if (st === 0 || st < 0) {
-              ackError = true;
-              ackLabel = 'Stiker polos gagal dekripsi (ERROR ACK 0)';
-              clearTimeout(timer);
-              resolve({ status: st, label: ackLabel, isError: true });
-              return;
-            }
-            if (st >= 3) {
-              ackLabel = 'Stiker Polos Diterima HP ✓✓';
-              clearTimeout(timer);
-              resolve({ status: st, label: ackLabel, isError: false });
-              return;
-            }
-            if (st === 2) {
-              ackLabel = 'Stiker Polos Diterima Server WA ✓';
-            }
-          }
-        };
-        session.sock.ev.on('messages.update', onAckUpdate);
-      });
-
-      const tracked = await sendTrackedMessage(
+      const diag = await runSelfE2eeDiagnosticSend({
         io,
         sessionId,
         session,
         selfJid,
-        { sticker: stickerBuf },
-        {
-          onBeforeRelay: (_waMsg, msgId) => {
-            trackedId = msgId;
-          }
-        }
-      );
-
-      const settledAck = await ackPromise.finally(() => {
-        if (onAckUpdate) {
-          try { session.sock?.ev?.off?.('messages.update', onAckUpdate); } catch (_) {}
-        }
+        content: { sticker: stickerBuf },
+        traceLabel: 'Tes Stiker Polos',
+        defaultWaitLabel: 'Stiker polos terkirim via sock.sendMessage (menunggu ACK perangkat)',
+        errorPrefix: 'Stiker polos gagal dekripsi (ERROR ACK 0)',
+        serverAckLabel: 'Stiker Polos Diterima Server WA ✓',
+        deliveredAckLabel: 'Stiker Polos Diterima HP ✓✓'
       });
 
       emitToDevice(io, sessionId, 'plain-sticker-test-result', {
-        ok: !settledAck.isError,
-        messageId: tracked.messageId,
+        ...diag,
         selfJid,
         selfLid,
         baileysVersion: BAILEYS_VERSION,
-        encodedBytes: tracked.encodedBytes,
-        ackStatus: settledAck.status,
-        ackLabel: settledAck.label,
-        error: settledAck.isError ? settledAck.label : null,
         sentAt: Date.now()
       });
     } catch (err) {
@@ -1348,7 +1387,12 @@ function registerStickerSenderHandler(io, socket) {
       const tokenHash = verifyDeviceOwner(socket, sessionId, deviceToken);
       if (!tokenHash) return;
       joinExclusiveDeviceRoom(socket, sessionId);
-      emitToDevice(io, sessionId, 'sound-sticker-spec-sync', getGlobalSoundStickerSpec());
+      const session = sessions.get(sessionId);
+      if (session) {
+        emitSessionDiagnosticsReplay(socket, session);
+      } else {
+        emitToDevice(io, sessionId, 'sound-sticker-spec-sync', getGlobalSoundStickerSpec());
+      }
     } catch (_) {}
   });
 
@@ -1417,6 +1461,7 @@ function registerStickerSenderHandler(io, socket) {
 module.exports = {
   registerStickerSenderHandler,
   attachCalibrationListener,
+  emitSessionDiagnosticsReplay,
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,

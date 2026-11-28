@@ -681,7 +681,29 @@ export async function composeMuxedStickerContainer({
   }
 }
 
-function blobToBase64Local(blob) {
+export function arrayBufferToBase64(bufferOrView) {
+  if (!bufferOrView) return '';
+  const bytes =
+    bufferOrView instanceof Uint8Array
+      ? bufferOrView
+      : ArrayBuffer.isView(bufferOrView)
+        ? new Uint8Array(bufferOrView.buffer, bufferOrView.byteOffset, bufferOrView.byteLength)
+        : new Uint8Array(bufferOrView);
+  if (bytes.byteLength === 0) return '';
+
+  const chunkSize = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function blobToBase64Local(blob) {
+  if (blob && typeof blob.arrayBuffer === 'function') {
+    return arrayBufferToBase64(await blob.arrayBuffer());
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
@@ -911,7 +933,7 @@ export async function createPlainTestStickerWebpBase64(packName = 'Kuro E2EE Tes
   const rawBytes = await canvasToWebpBytes(canvas, 0.8);
   const withExif = injectExifIntoStaticWebp(rawBytes, { packName, publisher });
   validateWaWebpBinary(withExif, { expectAnimated: false, enforceStaticCap: true });
-  return arrayBufferToBase64(withExif.buffer);
+  return arrayBufferToBase64(withExif);
 }
 
 /**

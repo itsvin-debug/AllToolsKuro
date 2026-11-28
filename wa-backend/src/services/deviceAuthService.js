@@ -24,6 +24,9 @@ function joinExclusiveDeviceRoom(socket, sessionId) {
     }
   }
   socket.join(targetRoom);
+  if (socket.data) {
+    socket.data.boundSessionId = sessionId;
+  }
 }
 
 function verifyDeviceOwner(socket, sessionId, deviceToken) {

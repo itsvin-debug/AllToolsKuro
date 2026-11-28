@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Volume2, VolumeX, RotateCcw, CheckCheck } from 'lucide-react';
 import { renderStickerCanvasFrame } from './soundStickerComposer';
-import { createSnippetPlayer } from './audioTrimmerEngine';
+import { createSnippetPlayer, parseDecimalSafe } from './audioTrimmerEngine';
 
 function formatShortSec(sec = 0) {
-  const safe = Math.max(0, Number(sec) || 0);
+  const safe = Math.max(0, parseDecimalSafe(sec, 0));
   const mins = Math.floor(safe / 60);
   const rem = (safe % 60).toFixed(1).padStart(4, '0');
   return `${mins}:${rem}`;
@@ -20,7 +20,7 @@ export default function WaSoundStickerPreview({
   audioBuffer,
   waveformPeaks = [],
   startSec = 0,
-  endSec = 5,
+  endSec = 0,
   volume = 1.0,
   fadeSmooth = true,
   renderOptions = {}
@@ -34,7 +34,11 @@ export default function WaSoundStickerPreview({
   const [isPlaying, setIsPlaying] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
 
-  const clipDuration = Math.max(0.2, (Number(endSec) || 0) - (Number(startSec) || 0));
+  const safeStartSec = parseDecimalSafe(startSec, 0);
+  const fallbackEnd = audioBuffer?.duration ? Number(audioBuffer.duration.toFixed(1)) : 0;
+  const safeEndSec = parseDecimalSafe(endSec, fallbackEnd);
+  const rawClip = Math.max(0, Number((safeEndSec - safeStartSec).toFixed(1)));
+  const clipDuration = audioBuffer ? Math.max(0.2, rawClip || Math.min(15, fallbackEnd || 0.2)) : rawClip;
 
   useEffect(() => {
     playerRef.current = createSnippetPlayer();
@@ -133,7 +137,7 @@ export default function WaSoundStickerPreview({
       rafRef.current = requestAnimationFrame(tick);
 
       if (audioBuffer) {
-        playerRef.current?.play(audioBuffer, startSec, endSec, volume, {
+        playerRef.current?.play(audioBuffer, safeStartSec, safeEndSec, volume, {
           offsetInside: resumeOffset,
           fadeSmooth,
           onTick: (sec) => {
@@ -147,7 +151,7 @@ export default function WaSoundStickerPreview({
         });
       }
     },
-    [sourceMedia, audioBuffer, clipDuration, isVideoSource, drawFrame, startSec, endSec, volume, fadeSmooth]
+    [sourceMedia, audioBuffer, clipDuration, isVideoSource, drawFrame, safeStartSec, safeEndSec, volume, fadeSmooth]
   );
 
   const handleToggleSound = () => {
@@ -305,9 +309,10 @@ export default function WaSoundStickerPreview({
           <input
             type="range"
             min={0}
-            max={clipDuration}
+            max={Math.max(0.2, clipDuration)}
             step={0.05}
-            value={Math.min(clipDuration, elapsedSec)}
+            value={Math.min(Math.max(0.2, clipDuration), elapsedSec)}
+            disabled={!audioBuffer && !sourceMedia}
             onChange={(e) => handleScrub(e.target.value)}
             className="flex-1 accent-black cursor-pointer h-2"
             aria-label="Cek detik preview stiker suara"

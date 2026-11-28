@@ -17,7 +17,7 @@ const {
 const { buildVaultPayload, downloadMediaStreamBuffer } = require('../services/vaultService');
 const { startBaileys } = require('./whatsappSessionHandler');
 const { getGlobalSoundStickerSpec } = require('../config/soundStickerSpec');
-const { registerStickerSenderHandler, attachCalibrationListener } = require('./stickerSenderHandler');
+const { registerStickerSenderHandler, attachCalibrationListener, emitSessionDiagnosticsReplay } = require('./stickerSenderHandler');
 
 function registerSocketHandlers(io) {
   io.on('connection', (socket) => {
@@ -80,7 +80,7 @@ function registerSocketHandlers(io) {
               swMode: session.swMode,
               targetNumber: session.targetNumber || ''
             });
-            socket.emit('sound-sticker-spec-sync', getGlobalSoundStickerSpec());
+            emitSessionDiagnosticsReplay(socket, session);
 
             if (session.targetNumber) {
               socket.emit('target-synced', { targetNumber: session.targetNumber });
@@ -452,7 +452,7 @@ function registerSocketHandlers(io) {
               swMode: session.swMode,
               targetNumber: session.targetNumber || ''
             });
-            socket.emit('sound-sticker-spec-sync', getGlobalSoundStickerSpec());
+            emitSessionDiagnosticsReplay(socket, session);
 
             if (session.targetNumber) {
               socket.emit('target-synced', { targetNumber: session.targetNumber });

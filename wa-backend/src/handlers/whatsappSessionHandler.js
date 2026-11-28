@@ -10,16 +10,12 @@ const {
   makeCacheableSignalKeyStore,
   Browsers,
   proto,
-  jidNormalizedUser,
-  generateWAMessage,
-  generateMessageIDV2,
-  generateMessageID
+  jidNormalizedUser
 } = baileysModule;
 
 const { MAX_ACTIVE_SESSIONS, pinoSilent, getWaVersion } = require('../config/constants');
 const { isValidSessionId, normalizePhone } = require('../utils/common');
 const { getSessionDir, writeOwnerHash, isDirRegistered, removeSessionDir } = require('../utils/authFiles');
-const { inspectProtobufWire, unpadPkcs7Copy } = require('../utils/protoWireInspector');
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
 const {
@@ -90,7 +86,10 @@ function getSentMessage(session, messageId) {
 function watchE2eeMessageId(session, messageId) {
   if (!session || !messageId) return;
   if (!session.watchedE2eeIds) session.watchedE2eeIds = new Map();
-  session.watchedE2eeIds.set(String(messageId), Date.now());
+  const idStr = String(messageId);
+  session.watchedE2eeIds.set(idStr, Date.now());
+  session.lastSentMessageId = idStr;
+  session.lastSentAt = Date.now();
   while (session.watchedE2eeIds.size > 60) {
     const oldest = session.watchedE2eeIds.keys().next().value;
     if (oldest === undefined) break;
@@ -98,78 +97,42 @@ function watchE2eeMessageId(session, messageId) {
   }
 }
 
-/**
- * Jalur kirim pesan terpantau: generateWAMessage -> proto verify -> pre-send cache SEBELUM relayMessage -> sync ratchet 0ms.
- */
-async function sendTrackedMessage(io, sessionId, session, jid, content, options = {}) {
-  if (!session?.sock?.user?.id) {
-    throw new Error('Sesi WhatsApp belum terhubung aktif.');
-  }
+const RING_BUFFER_MAX = 20;
 
-  const targetJid = jidNormalizedUser(jid);
-  const selfLid = session.sock.user?.lid ? jidNormalizedUser(session.sock.user.lid) : '';
-  const assertTargets = [targetJid, ...(selfLid && selfLid !== targetJid ? [selfLid] : [])].filter(Boolean);
+function pushRingItem(arr, item) {
+  arr.push(item);
+  while (arr.length > RING_BUFFER_MAX) {
+    arr.shift();
+  }
+}
+
+function pushCalibrationLog(io, sessionId, session, entry) {
+  if (!entry || typeof entry !== 'object') return;
+  const item = { at: Date.now(), ...entry };
+  if (session) {
+    if (!Array.isArray(session.calibrationLogs)) session.calibrationLogs = [];
+    pushRingItem(session.calibrationLogs, item);
+  }
+  emitToDevice(io, sessionId, 'sound-sticker-calibration-log', item);
+}
+
+function pushDeliveryTrace(io, sessionId, session, entry) {
+  if (!entry || typeof entry !== 'object') return;
+  const item = { at: Date.now(), ...entry };
+  if (session) {
+    if (!Array.isArray(session.deliveryTraces)) session.deliveryTraces = [];
+    pushRingItem(session.deliveryTraces, item);
+  }
+  emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', item);
+}
+
+function getEncodedProtoSize(protoMessage) {
   try {
-    await session.sock.assertSessions(assertTargets, false);
-  } catch (_) {}
-
-  const messageId =
-    options.messageId ||
-    (typeof generateMessageIDV2 === 'function'
-      ? generateMessageIDV2(session.sock.user.id)
-      : typeof generateMessageID === 'function'
-        ? generateMessageID()
-        : undefined);
-
-  if (!session.mediaCache) {
-    session.mediaCache = new NodeCache({ stdTTL: 600, useClones: false });
+    if (!protoMessage || !proto?.Message?.encode) return 0;
+    return proto.Message.encode(protoMessage).finish().length;
+  } catch {
+    return 0;
   }
-
-  const waMsg = await generateWAMessage(targetJid, content, {
-    logger: pinoSilent,
-    userJid: session.sock.user.id,
-    upload: session.sock.waUploadToServer,
-    mediaCache: session.mediaCache,
-    messageId,
-    ...(options.generateOptions || {})
-  });
-
-  if (!waMsg?.message || typeof waMsg.message !== 'object') {
-    throw new Error('generateWAMessage gagal menyusun payload proto.Message.');
-  }
-  if (typeof options.patchProto === 'function') {
-    options.patchProto(waMsg.message);
-  }
-
-  const verifyErr = proto?.Message?.verify?.(waMsg.message);
-  if (verifyErr) {
-    throw new Error(`Struktur WAProto pesan tidak valid: ${verifyErr}`);
-  }
-  const encodedWire = proto?.Message?.encode ? proto.Message.encode(waMsg.message).finish() : null;
-  if (!encodedWire || encodedWire.length <= 16) {
-    throw new Error('Payload protobuf pesan kosong/terpotong (<= 16 byte), dibatalkan.');
-  }
-
-  // Wajib simpan proto.Message murni ke sentMessageStore SEBELUM stanza dikirim agar Signal retry receipt selalu terlayani
-  const finalMsgId = waMsg.key?.id || messageId;
-  rememberSentMessage(session, finalMsgId, waMsg.message);
-  watchE2eeMessageId(session, finalMsgId);
-
-  if (typeof options.onBeforeRelay === 'function') {
-    options.onBeforeRelay(waMsg, finalMsgId);
-  }
-
-  await session.sock.relayMessage(targetJid, waMsg.message, {
-    messageId: finalMsgId,
-    useUserDevicesCache: false
-  });
-
-  emitAuthSnapshotNow(io, sessionId, session);
-  return {
-    waMsg,
-    messageId: finalMsgId,
-    encodedBytes: encodedWire.length
-  };
 }
 
 /**
@@ -298,9 +261,14 @@ async function startBaileys(
       calibratingSoundSticker: false,
       calibrationArmedUntil: 0,
       lastRawWirePackets: [],
+      calibrationLogs: [],
+      deliveryTraces: [],
+      lastSentMessageId: '',
+      lastSentAt: 0,
       statusPointers: new Map(),
       pendingMedia: [],
       accountJid: '',
+      accountLid: '',
       phone: '',
       authKeys: null,
       authSyncTimer: null,
@@ -342,6 +310,8 @@ async function startBaileys(
     if (!session.pendingUnavailableIds) session.pendingUnavailableIds = new Set();
     if (!session.msgCache) session.msgCache = new Map();
     if (!session.sentMessageStore) session.sentMessageStore = new Map();
+    if (!Array.isArray(session.calibrationLogs)) session.calibrationLogs = [];
+    if (!Array.isArray(session.deliveryTraces)) session.deliveryTraces = [];
     if (!session.statusPointers) session.statusPointers = new Map();
     if (!session.msgRetryCounterCache) {
       session.msgRetryCounterCache = new NodeCache({ stdTTL: 600, useClones: false });
@@ -367,6 +337,7 @@ async function startBaileys(
 
     if (cleanAuth) {
       session.accountJid = '';
+      session.accountLid = '';
       session.phone = '';
       session.savedContacts?.clear();
       session.contactNames?.clear();
@@ -379,6 +350,10 @@ async function startBaileys(
       session.calibratingSoundSticker = false;
       session.calibrationArmedUntil = 0;
       session.lastRawWirePackets = [];
+      session.calibrationLogs = [];
+      session.deliveryTraces = [];
+      session.lastSentMessageId = '';
+      session.lastSentAt = 0;
       session.statusPointers?.clear();
       session.pendingMedia = [];
       removeSessionDir(sessionId);
@@ -434,14 +409,6 @@ async function startBaileys(
       maxMsgRetryCount: 5,
       logger: pinoSilent,
       printQRInTerminal: false,
-      patchMessageBeforeSending: (message) => {
-        if (typeof session._patchOutgoingWire === 'function') {
-          try {
-            return session._patchOutgoingWire(message) || message;
-          } catch (_) {}
-        }
-        return message;
-      },
       getMessage: async (key) => {
         const id = key?.id;
         if (!id) return undefined;
@@ -453,40 +420,15 @@ async function startBaileys(
       }
     });
 
-    // Tap pasif read-only pada decryptMessage & decryptGroupMessage saat kalibrasi menyala
-    const wrapDecryptTap = (fnName, kindLabel) => {
-      if (typeof sock?.signalRepository?.[fnName] !== 'function') return;
-      const origFn = sock.signalRepository[fnName].bind(sock.signalRepository);
-      sock.signalRepository[fnName] = async (opts) => {
-        const plain = await origFn(opts);
-        try {
-          if (session.calibratingSoundSticker && plain && plain.length > 0) {
-            const unpadded = unpadPkcs7Copy(plain);
-            const wireTree = inspectProtobufWire(unpadded, 3);
-            if (!Array.isArray(session.lastRawWirePackets)) session.lastRawWirePackets = [];
-            session.lastRawWirePackets.push({
-              at: Date.now(),
-              jid: String(opts?.jid || opts?.group || ''),
-              type: String(opts?.type || kindLabel),
-              byteLength: unpadded.length,
-              wireTree
-            });
-            if (session.lastRawWirePackets.length > 8) {
-              session.lastRawWirePackets.shift();
-            }
-          }
-        } catch (_) {}
-        return plain;
-      };
-    };
-    wrapDecryptTap('decryptMessage', 'signal');
-    wrapDecryptTap('decryptGroupMessage', 'skmsg');
-
-    // Tap pasif Lapisan A pada raw stanza CB:message & monitor E2EE CB:receipt
+    // Monitor read-only stanza ws (TANPA memodifikasi sock.signalRepository)
     if (typeof sock?.ws?.on === 'function') {
       sock.ws.on('CB:message', (node) => {
         try {
           if (!session.calibratingSoundSticker) return;
+          if (session.calibrationArmedUntil && Date.now() > session.calibrationArmedUntil) {
+            session.calibratingSoundSticker = false;
+            return;
+          }
           const attrs = node?.attrs || {};
           const children = Array.isArray(node?.content) ? node.content : [];
           const childTags = children.map((c) => c?.tag).filter(Boolean);
@@ -496,8 +438,7 @@ async function startBaileys(
           const fromStr = String(attrs.from || '');
           const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
           const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
-          emitToDevice(io, sessionId, 'sound-sticker-calibration-log', {
-            at: Date.now(),
+          pushCalibrationLog(io, sessionId, session, {
             upsertType: 'ws:CB:message',
             remoteJid: fromStr,
             fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
@@ -507,13 +448,34 @@ async function startBaileys(
         } catch (_) {}
       });
 
-      sock.ws.on('CB:receipt', async (node) => {
+      sock.ws.on('CB:ack,class:message', (node) => {
+        try {
+          const attrs = node?.attrs || {};
+          const msgId = String(attrs.id || '');
+          if (!msgId) return;
+          const isRecentOwn = Boolean(msgId === session.lastSentMessageId && Date.now() - (session.lastSentAt || 0) < 30000);
+          const isWatched = Boolean(session.watchedE2eeIds?.has(msgId) || getSentMessage(session, msgId) || isRecentOwn);
+          if (!isWatched) return;
+
+          const errCode = attrs.error ? String(attrs.error) : '';
+          pushDeliveryTrace(io, sessionId, session, {
+            messageId: msgId,
+            phase: errCode ? 'decrypt_error' : 'server_ack',
+            event: 'CB:ack',
+            isError: Boolean(errCode),
+            detail: errCode ? `Server WA ACK error=${errCode}` : `Server WA ACK diterima (${attrs.class || 'message'})`
+          });
+        } catch (_) {}
+      });
+
+      sock.ws.on('CB:receipt', (node) => {
         try {
           const attrs = node?.attrs || {};
           const msgId = String(attrs.id || '');
           if (!msgId) return;
 
-          const isWatched = Boolean(session.watchedE2eeIds?.has(msgId) || getSentMessage(session, msgId));
+          const isRecentOwn = Boolean(msgId === session.lastSentMessageId && Date.now() - (session.lastSentAt || 0) < 30000);
+          const isWatched = Boolean(session.watchedE2eeIds?.has(msgId) || getSentMessage(session, msgId) || isRecentOwn);
           const rType = String(attrs.type || 'delivery');
           const children = Array.isArray(node?.content) ? node.content : [];
           const retryNode = children.find((c) => c?.tag === 'retry');
@@ -526,8 +488,7 @@ async function startBaileys(
             const fromStr = String(attrs.participant || attrs.from || '');
             const detail = `HP minta retry #${retryCount} (from=${fromStr.split('@')[0] || '-'}, cache=${cachedProto ? 'ADA' : 'KOSONG'})`;
             console.warn(`[E2EE-RETRY ${sessionId}] id=${msgId} ${detail} recipient=${attrs.recipient || '-'}`);
-            emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
-              at: Date.now(),
+            pushDeliveryTrace(io, sessionId, session, {
               messageId: msgId,
               phase: 'retry_received',
               event: 'retry_receipt',
@@ -536,38 +497,6 @@ async function startBaileys(
               isError: !cachedProto,
               detail
             });
-
-            // Tangani celah Baileys messages-recv.js:504 bila retry self-chat datang tanpa attrs.recipient
-            const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
-            const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
-            const selfJidClean = selfBase ? `${selfBase}@s.whatsapp.net` : '';
-            if (!attrs.recipient && cachedProto && selfJidClean && fromBase === selfBase && retryCount <= 3) {
-              try {
-                await sock.assertSessions([fromStr, selfJidClean], true);
-                await sock.relayMessage(selfJidClean, cachedProto, {
-                  messageId: msgId,
-                  participant: { jid: fromStr, count: retryCount },
-                  useUserDevicesCache: false
-                });
-                emitAuthSnapshotNow(io, sessionId, session);
-                emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
-                  at: Date.now(),
-                  messageId: msgId,
-                  phase: 'retry_resent',
-                  event: 'self_retry_recovered',
-                  detail: `Kunci E2EE self-chat dinegosiasi ulang & pesan dikirim ulang (try #${retryCount})`
-                });
-              } catch (retryErr) {
-                emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
-                  at: Date.now(),
-                  messageId: msgId,
-                  phase: 'decrypt_error',
-                  event: 'retry_failed',
-                  isError: true,
-                  detail: `Gagal kirim ulang retry E2EE: ${retryErr.message}`
-                });
-              }
-            }
           } else if (isWatched) {
             const phase =
               rType === 'read' || rType === 'played'
@@ -576,8 +505,7 @@ async function startBaileys(
                   ? 'decrypt_error'
                   : 'delivery_ack';
             const eventLabel = rType === 'read' ? 'READ' : rType === 'played' ? 'PLAYED' : rType.toUpperCase();
-            emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
-              at: Date.now(),
+            pushDeliveryTrace(io, sessionId, session, {
               messageId: msgId,
               phase,
               event: rType,
@@ -639,12 +567,16 @@ async function startBaileys(
 
       for (const upd of updates) {
         const updId = String(upd.key?.id || '');
-        if (updId && currentSession.watchedE2eeIds?.has(updId) && upd.update?.status !== undefined) {
+        const isWatchedUpdate = Boolean(
+          updId &&
+            (currentSession.watchedE2eeIds?.has(updId) ||
+              (upd.key?.fromMe && updId === currentSession.lastSentMessageId))
+        );
+        if (isWatchedUpdate && upd.update?.status !== undefined) {
           const st = Number(upd.update.status);
           const statusNames = { 0: 'ERROR_DECRYPT', 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERY_ACK', 4: 'READ', 5: 'PLAYED' };
           const phaseNames = { 0: 'decrypt_error', 1: 'pending', 2: 'server_ack', 3: 'delivery_ack', 4: 'read', 5: 'read' };
-          emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
-            at: Date.now(),
+          pushDeliveryTrace(io, sessionId, currentSession, {
             messageId: updId,
             phase: phaseNames[st] || 'update',
             event: 'messages.update',
@@ -781,6 +713,8 @@ async function startBaileys(
 
         const phone = sock.user?.id ? sock.user.id.split('@')[0].split(':')[0] : '';
         const accountJid = phone ? `${phone}@s.whatsapp.net` : (sock.user?.id || '');
+        const accountLid = sock.user?.lid ? jidNormalizedUser(sock.user.lid) : '';
+        console.log(`[Session ${sessionId}] WA Connected:`, { id: sock.user?.id || null, lid: sock.user?.lid || null, selfJid: accountJid });
         if (session.accountJid && accountJid && session.accountJid !== accountJid) {
           session.savedContacts?.clear();
           session.contactNames?.clear();
@@ -789,8 +723,11 @@ async function startBaileys(
           session.pendingMedia = [];
           session.msgCache?.clear();
           session.sentMessageStore?.clear();
+          session.calibrationLogs = [];
+          session.deliveryTraces = [];
         }
         session.accountJid = accountJid;
+        session.accountLid = accountLid;
         session.phone = phone;
 
         emitToDevice(io, sessionId, 'session-status', {
@@ -1205,11 +1142,13 @@ function triggerAuthSnapshotSync(io, sessionId, session) {
 
 module.exports = {
   startBaileys,
-  sendTrackedMessage,
   softRestartBaileysPreserveAuth,
   rememberSentMessage,
   getSentMessage,
   watchE2eeMessageId,
   pruneSentMessageStore,
+  pushCalibrationLog,
+  pushDeliveryTrace,
+  getEncodedProtoSize,
   triggerAuthSnapshotSync
 };

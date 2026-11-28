@@ -1,5 +1,14 @@
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 
+export function parseDecimalSafe(val, fallback = 0) {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : fallback;
+  if (val === null || val === undefined) return fallback;
+  const cleaned = String(val).trim().replace(',', '.');
+  if (!cleaned) return fallback;
+  const parsed = parseFloat(cleaned);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function getAudioContextCtor() {
   if (typeof window === 'undefined') return null;
   return window.AudioContext || window.webkitAudioContext || null;
@@ -136,8 +145,8 @@ export async function renderTrimmedAudioBuffer(
 ) {
   if (!audioBuffer) throw new Error('Audio belum tersedia.');
   const totalDur = audioBuffer.duration;
-  const safeStart = Math.max(0, Math.min(totalDur - 0.1, Number(startSec) || 0));
-  const safeEnd = Math.max(safeStart + 0.1, Math.min(totalDur, Number(endSec) || totalDur));
+  const safeStart = Math.max(0, Math.min(totalDur - 0.1, parseDecimalSafe(startSec, 0)));
+  const safeEnd = Math.max(safeStart + 0.1, Math.min(totalDur, parseDecimalSafe(endSec, totalDur)));
   const clipDur = safeEnd - safeStart;
 
   const targetRate = 44100;
@@ -358,8 +367,8 @@ export function createSnippetPlayer() {
     }
 
     const total = audioBuffer.duration;
-    const s = Math.max(0, Math.min(total - 0.05, Number(startSec) || 0));
-    const e = Math.max(s + 0.05, Math.min(total, Number(endSec) || total));
+    const s = Math.max(0, Math.min(total - 0.05, parseDecimalSafe(startSec, 0)));
+    const e = Math.max(s + 0.05, Math.min(total, parseDecimalSafe(endSec, total)));
     const clipLen = e - s;
     const clampedOffset = Math.max(0, Math.min(clipLen - 0.02, Number(offsetInside) || 0));
     const playDur = clipLen - clampedOffset;
