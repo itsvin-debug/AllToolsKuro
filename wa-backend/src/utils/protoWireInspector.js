@@ -9,7 +9,15 @@ const MESSAGE_WRAPPERS = [
   'documentWithCaptionMessage',
   'editedMessage',
   'associatedChildMessage',
-  'lottieStickerMessage'
+  'lottieStickerMessage',
+  'botInvokeMessage',
+  'groupStatusMessage',
+  'groupStatusMessageV2',
+  'questionMessage',
+  'commentMessage',
+  'encCommentMessage',
+  'eventMessage',
+  'messageHistoryBundle'
 ];
 
 function isPrintableAsciiUtf8(bytes) {
@@ -203,7 +211,7 @@ function inspectProtobufWireStrict(bytes, maxDepth, depth) {
 function unwrapMessageContent(msgObj) {
   let cur = msgObj;
   const wrapperChain = [];
-  for (let i = 0; i < 8 && cur && typeof cur === 'object'; i++) {
+  for (let i = 0; i < 10 && cur && typeof cur === 'object'; i++) {
     let matched = false;
     for (const key of MESSAGE_WRAPPERS) {
       if (cur[key]?.message && typeof cur[key].message === 'object') {

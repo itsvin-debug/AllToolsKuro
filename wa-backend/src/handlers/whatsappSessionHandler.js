@@ -84,6 +84,17 @@ function getSentMessage(session, messageId) {
   return entry.message;
 }
 
+function watchE2eeMessageId(session, messageId) {
+  if (!session || !messageId) return;
+  if (!session.watchedE2eeIds) session.watchedE2eeIds = new Map();
+  session.watchedE2eeIds.set(String(messageId), Date.now());
+  while (session.watchedE2eeIds.size > 60) {
+    const oldest = session.watchedE2eeIds.keys().next().value;
+    if (oldest === undefined) break;
+    session.watchedE2eeIds.delete(oldest);
+  }
+}
+
 async function startBaileys(
   io,
   sessionId,
@@ -266,7 +277,7 @@ async function startBaileys(
     state.keys.set = async (data) => {
       const res = await origKeysSet(data);
       if (state.creds?.registered && data && (data['app-state-sync-key'] || data.session)) {
-        scheduleAuthSnapshotSync(io, sessionId, session, 2000);
+        scheduleAuthSnapshotSync(io, sessionId, session, data.session ? 350 : 1200);
       }
       return res;
     };
@@ -315,11 +326,12 @@ async function startBaileys(
       }
     });
 
-    // Tap pasif read-only pada decryptMessage (hanya aktif saat kalibrasi format stiker suara menyala)
-    if (typeof sock?.signalRepository?.decryptMessage === 'function') {
-      const origDecryptMessage = sock.signalRepository.decryptMessage.bind(sock.signalRepository);
-      sock.signalRepository.decryptMessage = async (opts) => {
-        const plain = await origDecryptMessage(opts);
+    // Tap pasif read-only pada decryptMessage & decryptGroupMessage saat kalibrasi menyala
+    const wrapDecryptTap = (fnName, kindLabel) => {
+      if (typeof sock?.signalRepository?.[fnName] !== 'function') return;
+      const origFn = sock.signalRepository[fnName].bind(sock.signalRepository);
+      sock.signalRepository[fnName] = async (opts) => {
+        const plain = await origFn(opts);
         try {
           if (session.calibratingSoundSticker && plain && plain.length > 0) {
             const unpadded = unpadPkcs7Copy(plain);
@@ -327,29 +339,33 @@ async function startBaileys(
             if (!Array.isArray(session.lastRawWirePackets)) session.lastRawWirePackets = [];
             session.lastRawWirePackets.push({
               at: Date.now(),
-              jid: String(opts?.jid || ''),
-              type: String(opts?.type || ''),
+              jid: String(opts?.jid || opts?.group || ''),
+              type: String(opts?.type || kindLabel),
               byteLength: unpadded.length,
               wireTree
             });
-            if (session.lastRawWirePackets.length > 5) {
+            if (session.lastRawWirePackets.length > 8) {
               session.lastRawWirePackets.shift();
             }
           }
         } catch (_) {}
         return plain;
       };
-    }
+    };
+    wrapDecryptTap('decryptMessage', 'signal');
+    wrapDecryptTap('decryptGroupMessage', 'skmsg');
 
-    // Tap pasif read-only Lapisan A pada raw stanza CB:message saat kalibrasi format menyala
+    // Tap pasif Lapisan A pada raw stanza CB:message & monitor E2EE CB:receipt
     if (typeof sock?.ws?.on === 'function') {
       sock.ws.on('CB:message', (node) => {
         try {
           if (!session.calibratingSoundSticker) return;
           const attrs = node?.attrs || {};
-          const childTags = Array.isArray(node?.content)
-            ? node.content.map((c) => c?.tag).filter(Boolean)
-            : [];
+          const children = Array.isArray(node?.content) ? node.content : [];
+          const childTags = children.map((c) => c?.tag).filter(Boolean);
+          const encTypes = children
+            .filter((c) => c?.tag === 'enc' && c?.attrs?.type)
+            .map((c) => `enc:${c.attrs.type}`);
           const fromStr = String(attrs.from || '');
           const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
           const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
@@ -358,9 +374,78 @@ async function startBaileys(
             upsertType: 'ws:CB:message',
             remoteJid: fromStr,
             fromMe: Boolean(selfBase && fromBase && selfBase === fromBase),
-            wrapperChain: childTags.slice(0, 6),
-            keys: [attrs.type || 'msg', attrs.id || 'no-id', ...childTags].slice(0, 6)
+            wrapperChain: [attrs.type, attrs.mediatype, ...childTags].filter(Boolean).slice(0, 6),
+            keys: [attrs.id || 'no-id', ...encTypes, ...childTags].slice(0, 6)
           });
+        } catch (_) {}
+      });
+
+      sock.ws.on('CB:receipt', async (node) => {
+        try {
+          const attrs = node?.attrs || {};
+          const msgId = String(attrs.id || '');
+          if (!msgId) return;
+
+          const isWatched = Boolean(session.watchedE2eeIds?.has(msgId) || getSentMessage(session, msgId));
+          const rType = String(attrs.type || 'delivery');
+          const children = Array.isArray(node?.content) ? node.content : [];
+          const retryNode = children.find((c) => c?.tag === 'retry');
+          const retryCount = Number(retryNode?.attrs?.count || 1);
+
+          if (!isWatched && rType !== 'retry') return;
+
+          const cachedProto = getSentMessage(session, msgId);
+          if (rType === 'retry') {
+            const fromStr = String(attrs.participant || attrs.from || '');
+            const detail = `HP minta retry #${retryCount} (from=${fromStr.split('@')[0] || '-'}, cache=${cachedProto ? 'ADA' : 'KOSONG'})`;
+            console.warn(`[E2EE-RETRY ${sessionId}] id=${msgId} ${detail} recipient=${attrs.recipient || '-'}`);
+            emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
+              at: Date.now(),
+              messageId: msgId,
+              event: 'retry_receipt',
+              retryCount,
+              hasCachedProto: Boolean(cachedProto),
+              isError: !cachedProto,
+              detail
+            });
+
+            // Tangani celah Baileys messages-recv.js:504 bila retry self-chat datang tanpa attrs.recipient
+            const selfBase = sock.user?.id ? String(sock.user.id).split('@')[0].split(':')[0] : '';
+            const fromBase = fromStr ? fromStr.split('@')[0].split(':')[0] : '';
+            const selfJidClean = selfBase ? `${selfBase}@s.whatsapp.net` : '';
+            if (!attrs.recipient && cachedProto && selfJidClean && fromBase === selfBase && retryCount <= 3) {
+              try {
+                await sock.assertSessions([fromStr], true);
+                await sock.relayMessage(selfJidClean, cachedProto, {
+                  messageId: msgId,
+                  participant: { jid: fromStr, count: retryCount }
+                });
+                emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
+                  at: Date.now(),
+                  messageId: msgId,
+                  event: 'self_retry_recovered',
+                  detail: `Kunci E2EE self-chat dinegosiasi ulang & pesan dikirim ulang (try #${retryCount})`
+                });
+              } catch (retryErr) {
+                emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
+                  at: Date.now(),
+                  messageId: msgId,
+                  event: 'retry_failed',
+                  isError: true,
+                  detail: `Gagal kirim ulang retry E2EE: ${retryErr.message}`
+                });
+              }
+            }
+          } else if (isWatched) {
+            const eventLabel = rType === 'read' ? 'READ' : rType === 'played' ? 'PLAYED' : rType.toUpperCase();
+            emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
+              at: Date.now(),
+              messageId: msgId,
+              event: rType,
+              isError: rType === 'error',
+              detail: `CB:receipt ${eventLabel} dari ${String(attrs.from || '').split('@')[0]}`
+            });
+          }
         } catch (_) {}
       });
     }
@@ -414,6 +499,18 @@ async function startBaileys(
       if (!currentSession) return;
 
       for (const upd of updates) {
+        const updId = String(upd.key?.id || '');
+        if (updId && currentSession.watchedE2eeIds?.has(updId) && upd.update?.status !== undefined) {
+          const st = Number(upd.update.status);
+          const statusNames = { 0: 'ERROR_DECRYPT', 1: 'PENDING', 2: 'SERVER_ACK', 3: 'DELIVERY_ACK', 4: 'READ', 5: 'PLAYED' };
+          emitToDevice(io, sessionId, 'sound-sticker-delivery-trace', {
+            at: Date.now(),
+            messageId: updId,
+            event: 'messages.update',
+            isError: st === 0,
+            detail: `Status WA: ${statusNames[st] || st}`
+          });
+        }
         if (upd.key?.remoteJid === 'status@broadcast') {
           if (upd.update?.messageStubType === 1 || upd.update?.messageStubType === 0) {
             const targetKeyId = String(upd.key.id || '');
@@ -541,7 +638,7 @@ async function startBaileys(
           await resolveTargetIdentifiers(session);
         }
 
-        const phone = sock.user?.id ? sock.user.id.split(':')[0] : '';
+        const phone = sock.user?.id ? sock.user.id.split('@')[0].split(':')[0] : '';
         const accountJid = phone ? `${phone}@s.whatsapp.net` : (sock.user?.id || '');
         if (session.accountJid && accountJid && session.accountJid !== accountJid) {
           session.savedContacts?.clear();
@@ -962,6 +1059,7 @@ module.exports = {
   startBaileys,
   rememberSentMessage,
   getSentMessage,
+  watchE2eeMessageId,
   pruneSentMessageStore,
   triggerAuthSnapshotSync
 };

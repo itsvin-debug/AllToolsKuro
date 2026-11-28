@@ -78,7 +78,10 @@ export async function decodeMediaToAudioBuffer(file) {
     }
     return audioBuffer;
   } catch (err) {
-    throw new Error('Gagal membaca trek audio dari file ini. Pastikan berkas memiliki suara yang valid.');
+    const detail = err?.name ? ` (${err.name})` : '';
+    throw new Error(
+      `Format audio "${file.name}" tidak didukung oleh decoder browser ini${detail} atau tidak memiliki trek suara. Coba file MP3, WAV, M4A (AAC), OGG, atau video MP4.`
+    );
   } finally {
     try {
       await ctx.close();

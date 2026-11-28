@@ -154,7 +154,9 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [lastSendResult, setLastSendResult] = useState(null);
   const [deliveryStatus, setDeliveryStatus] = useState(null);
   const [calibrationArmed, setCalibrationArmed] = useState(false);
+  const [calibrationMeta, setCalibrationMeta] = useState(null);
   const [calibrationLogs, setCalibrationLogs] = useState([]);
+  const [deliveryTraces, setDeliveryTraces] = useState([]);
   const [soundStickerBlueprint, setSoundStickerBlueprint] = useState(() => {
     try {
       const raw =
@@ -306,16 +308,29 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       setWaError(data?.message || 'Terjadi gangguan pada koneksi WhatsApp.');
     });
 
-    sock.on('sound-sticker-calibration-armed', () => {
+    sock.on('sound-sticker-calibration-armed', (info) => {
       if (unmounted) return;
       setCalibrationArmed(true);
+      setCalibrationMeta(info && typeof info === 'object' ? info : null);
       setCalibrationLogs([]);
-      onShowToast?.('Deteksi aktif 5 menit: teruskan 1 stiker suara ke Pesan Diri Sendiri atau chat lain.', 'info');
+      const phoneLabel = info?.linkedPhone ? `+${info.linkedPhone}` : 'perangkat tertaut';
+      onShowToast?.(`Deteksi aktif di ${phoneLabel}: teruskan 1 stiker audio sekarang.`, 'info');
+    });
+
+    sock.on('sound-sticker-calibration-error', (payload) => {
+      if (unmounted) return;
+      setCalibrationArmed(false);
+      onShowToast?.(payload?.error || 'Deteksi format gagal dimulai.', 'error');
     });
 
     sock.on('sound-sticker-calibration-log', (entry) => {
       if (unmounted || !entry) return;
-      setCalibrationLogs((prev) => [...prev.slice(-7), entry]);
+      setCalibrationLogs((prev) => [...prev.slice(-11), entry]);
+    });
+
+    sock.on('sound-sticker-delivery-trace', (trace) => {
+      if (unmounted || !trace) return;
+      setDeliveryTraces((prev) => [...prev.slice(-5), trace]);
     });
 
     sock.on('self-e2ee-reset-result', (res) => {
@@ -475,6 +490,30 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     if (!file) return;
     if (file.size > MAX_AUDIO_FILE_BYTES && labelPrefix === '') {
       onShowToast?.('Ukuran file audio melebihi batas maksimal 15 MB.', 'error');
+      return;
+    }
+
+    const fileNameLower = String(file.name || '').toLowerCase();
+    const mimeLower = String(file.type || '').toLowerCase();
+    const isAllowedExt = /\.(mp3|m4a|wav|ogg|aac|opus|flac|amr|3gp|m4r|wma|mp4|webm|mov|m4v|mkv|avi)$/i.test(fileNameLower);
+    const isObviouslyRejected =
+      /\.(jpg|jpeg|png|webp|gif|bmp|svg|heic|pdf|apk|zip|rar|7z|doc|docx|xls|xlsx|ppt|pptx|txt|json|html|exe)$/i.test(fileNameLower) ||
+      mimeLower.startsWith('image/') ||
+      mimeLower === 'application/pdf' ||
+      mimeLower.includes('android.package-archive') ||
+      mimeLower.includes('zip');
+    const isMediaMime =
+      mimeLower.startsWith('audio/') ||
+      mimeLower.startsWith('video/') ||
+      mimeLower === '' ||
+      mimeLower === 'application/octet-stream' ||
+      mimeLower === 'application/ogg';
+
+    if (isObviouslyRejected || (!isAllowedExt && !isMediaMime)) {
+      onShowToast?.(
+        'File yang dipilih bukan file suara/audio. Silakan pilih file MP3, M4A, WAV, OGG, AAC, atau video MP4 dari File Manager.',
+        'error'
+      );
       return;
     }
 
@@ -1205,7 +1244,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   ref={visualInputRef}
                   type="file"
                   accept="image/*,video/*"
-                  onChange={(e) => handleSelectVisualFile(e.target.files?.[0])}
+                  onChange={(e) => {
+                    const picked = e.target.files?.[0];
+                    e.target.value = '';
+                    handleSelectVisualFile(picked);
+                  }}
                   className="hidden"
                 />
 
@@ -1375,8 +1418,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <input
                     ref={audioInputRef}
                     type="file"
-                    accept="audio/*,video/*"
-                    onChange={(e) => loadAudioSource(e.target.files?.[0])}
+                    onChange={(e) => {
+                      const picked = e.target.files?.[0];
+                      e.target.value = '';
+                      loadAudioSource(picked);
+                    }}
                     className="hidden"
                   />
 
@@ -1392,6 +1438,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                     </button>
                   )}
                 </div>
+
+                <p className="text-[11px] font-semibold text-neutral-600 leading-snug">
+                  Pilih file sound dari File Manager / Unduhan (MP3, M4A, WAV, OGG, AAC, OPUS, atau ekstrak suara dari Video MP4/WebM).
+                </p>
 
                 <div className="grid grid-cols-2 border-2 border-black bg-white">
                   <button
@@ -1945,6 +1995,15 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                 {lastSendResult.note && (
                   <p className="text-[10px] text-neutral-800 leading-snug">{lastSendResult.note}</p>
                 )}
+                {deliveryTraces.length > 0 && (
+                  <div className="pt-1 border-t border-black/20 font-mono text-[9px] text-neutral-700 space-y-0.5">
+                    {deliveryTraces.slice(-3).map((t, idx) => (
+                      <div key={`${t.at}-${idx}`} className="truncate">
+                        [{t.event}] #{String(t.messageId || '').slice(-6)} {t.detail}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
@@ -2007,7 +2066,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   </div>
                   <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
                     {calibrationArmed
-                      ? 'Deteksi aktif! Teruskan atau kirim 1 contoh stiker suara dari HP ke Pesan Diri Sendiri atau chat lain.'
+                      ? `Aktif Mendengarkan di +${calibrationMeta?.linkedPhone || connectedPhone} — Teruskan 1 Stiker Audio Sekarang!`
                       : "Teruskan 1 contoh stiker suara dari bot/chat ke 'Pesan Diri Sendiri' Anda — web menyalin format aslinya otomatis!"}
                   </p>
                   <button

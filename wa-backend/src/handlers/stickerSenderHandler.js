@@ -2,9 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const baileysModule = require('@whiskeysockets/baileys');
 const { sessions } = require('../state/sessionStore');
-const { verifyDeviceOwner, emitToDevice, joinExclusiveDeviceRoom } = require('../services/deviceAuthService');
+const {
+  verifyDeviceOwner,
+  emitToDevice,
+  joinExclusiveDeviceRoom,
+  emitAuthSnapshotNow
+} = require('../services/deviceAuthService');
 const { getSessionDir } = require('../utils/authFiles');
-const { rememberSentMessage, getSentMessage, triggerAuthSnapshotSync } = require('./whatsappSessionHandler');
+const { rememberSentMessage, getSentMessage, watchE2eeMessageId, triggerAuthSnapshotSync } = require('./whatsappSessionHandler');
 const { inspectProtobufWire, unwrapMessageContent } = require('../utils/protoWireInspector');
 
 function readInstalledBaileysVersion() {
@@ -42,7 +47,7 @@ const MIN_MEDIA_BYTES = 100;
 const RATE_LIMIT_MS = 1300;
 const CALIBRATION_WINDOW_MS = 5 * 60 * 1000;
 const DELIVERY_WATCH_MS = 20 * 1000;
-const SELF_E2EE_TEST_WATCH_MS = 4500;
+const SELF_E2EE_TEST_WATCH_MS = 5000;
 
 const STANDARD_WEBP_CHUNKS = new Set([
   'VP8X',
@@ -544,6 +549,20 @@ function attachStickerDeliveryWatcher(io, sessionId, session, messageId, queueId
 /**
  * Detektor Deep Wire-Level Pasif & Aktif (notify + append, selfPn + selfLid, unwrap deviceSentMessage).
  */
+function scanDynamicMediaNode(innerMessage) {
+  if (!innerMessage || typeof innerMessage !== 'object') return null;
+  for (const [k, val] of Object.entries(innerMessage)) {
+    if (k === 'messageContextInfo' || !val || typeof val !== 'object') continue;
+    if (val.mediaKey || val.directPath || val.url || val.fileSha256) {
+      return { fieldName: k, node: val };
+    }
+  }
+  return null;
+}
+
+/**
+ * Detektor Deep Wire-Level Pasif & Aktif (notify + append, selfPn + selfLid + alt, unwrap wrapper & unknown tags).
+ */
 function attachCalibrationListener(io, sessionId, session) {
   if (!session) return;
 
@@ -568,11 +587,16 @@ function attachCalibrationListener(io, sessionId, session) {
         if (!msg?.key) continue;
 
         const remoteRaw = String(msg.key.remoteJid || '');
+        const remoteAlt = String(msg.key.remoteJidAlt || '');
+        const participantRaw = String(msg.key.participant || '');
         const remoteNorm = remoteRaw ? jidNormalizedUser(remoteRaw) : '';
+        const altNorm = remoteAlt ? jidNormalizedUser(remoteAlt) : '';
+        const participantNorm = participantRaw ? jidNormalizedUser(participantRaw) : '';
+
         const isSelfOwner = Boolean(
           msg.key.fromMe === true ||
-            (selfPn && remoteNorm === selfPn) ||
-            (selfLid && remoteNorm === selfLid)
+            (selfPn && (remoteNorm === selfPn || altNorm === selfPn || participantNorm === selfPn)) ||
+            (selfLid && (remoteNorm === selfLid || altNorm === selfLid || participantNorm === selfLid))
         );
 
         // Jangan kalibrasi ulang dari pesan outgoing yang dikirim oleh web ini sendiri
@@ -583,17 +607,12 @@ function attachCalibrationListener(io, sessionId, session) {
         const { innerMessage, wrapperChain } = unwrapMessageContent(msg.message);
         const innerKeys = Object.keys(innerMessage || {});
 
-        // Selama mode deteksi format menyala, izinkan chat self (PN/LID), pesan fromMe, maupun stiker masuk di chat lain
-        if (!isArmed && !isSelfOwner) continue;
-        if (isArmed && !isSelfOwner && !innerMessage?.stickerMessage && !innerMessage?.lottieStickerMessage) {
-          continue;
-        }
-
+        // Saat mode deteksi aktif, log SEMUA pesan/stub masuk tanpa memfilter pengirim/tipe pesan
         if (isArmed) {
           emitToDevice(io, sessionId, 'sound-sticker-calibration-log', {
             at: Date.now(),
             upsertType: type || 'notify',
-            remoteJid: remoteRaw,
+            remoteJid: remoteRaw || participantRaw,
             fromMe: Boolean(msg.key.fromMe),
             wrapperChain,
             keys: innerKeys,
@@ -602,9 +621,18 @@ function attachCalibrationListener(io, sessionId, session) {
         }
 
         if (!innerMessage || typeof innerMessage !== 'object') continue;
+        if (!isArmed && !isSelfOwner) continue;
 
-        const stickerNode = innerMessage.stickerMessage || innerMessage.lottieStickerMessage?.message?.stickerMessage || null;
-        const ptvOrMedia = innerMessage.ptvMessage || (isArmed ? innerMessage.videoMessage || innerMessage.documentMessage : null);
+        const dynamicMedia = scanDynamicMediaNode(innerMessage);
+        const stickerNode =
+          innerMessage.stickerMessage ||
+          innerMessage.lottieStickerMessage?.message?.stickerMessage ||
+          null;
+        const ptvOrMedia =
+          innerMessage.ptvMessage ||
+          (isArmed
+            ? innerMessage.videoMessage || innerMessage.audioMessage || innerMessage.documentMessage || dynamicMedia?.node
+            : null);
         const mediaTarget = stickerNode || ptvOrMedia;
 
         const latestRawPacket = Array.isArray(curSession.lastRawWirePackets) && curSession.lastRawWirePackets.length > 0
@@ -645,7 +673,13 @@ function attachCalibrationListener(io, sessionId, session) {
                 { reuploadRequest: curSession.sock?.updateMediaMessage }
               );
             } else if (typeof downloadContentFromMessage === 'function') {
-              const kind = stickerNode ? 'sticker' : innerMessage.videoMessage ? 'video' : 'document';
+              const kind = stickerNode
+                ? 'sticker'
+                : innerMessage.videoMessage || innerMessage.ptvMessage
+                  ? 'video'
+                  : innerMessage.audioMessage
+                    ? 'audio'
+                    : 'document';
               const stream = await downloadContentFromMessage(mediaTarget, kind);
               const chunks = [];
               let size = 0;
@@ -813,10 +847,15 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
           throw new Error('Payload protobuf stiker kosong (<= 16 byte), dibatalkan.');
         }
         encodedLen = wire.length;
-        if (customMsgId) rememberSentMessage(session, customMsgId, inner);
+        if (customMsgId) {
+          rememberSentMessage(session, customMsgId, inner);
+          watchE2eeMessageId(session, customMsgId);
+        }
       }
       return outgoingMsg;
     };
+
+    if (customMsgId) watchE2eeMessageId(session, customMsgId);
 
     try {
       attachStickerDeliveryWatcher(io, sessionId, session, customMsgId, queueId);
@@ -830,6 +869,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     }
 
     const finalMsgId = sentMsg?.key?.id || customMsgId;
+    if (finalMsgId) watchE2eeMessageId(session, finalMsgId);
     if (sentMsg?.key?.id && sentMsg?.message) {
       rememberSentMessage(session, sentMsg.key.id, sentMsg.message);
       if (!encodedLen && proto?.Message?.encode) {
@@ -873,15 +913,25 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
 function isOwnSignalSessionFile(fname, ownPhone, ownLidUser) {
   if (!fname || typeof fname !== 'string') return false;
   if (fname === 'creds.json' || fname === '.owner.hash') return false;
-  if (!fname.startsWith('session-') || !fname.endsWith('.json')) return false;
-  const body = fname.slice('session-'.length, -'.json'.length);
-  const matchesPrefix = (prefix) => {
+  if (!fname.endsWith('.json')) return false;
+  const matchesBoundary = (text, prefix) => {
     if (!prefix) return false;
-    if (body === prefix) return true;
-    const boundary = body[prefix.length];
-    return body.startsWith(prefix) && (boundary === '.' || boundary === '-' || boundary === '_' || boundary === '@');
+    if (text === prefix) return true;
+    const boundary = text[prefix.length];
+    return text.startsWith(prefix) && (boundary === '.' || boundary === '-' || boundary === '_' || boundary === '@');
   };
-  return matchesPrefix(ownPhone) || matchesPrefix(ownLidUser);
+  if (fname.startsWith('session-')) {
+    const body = fname.slice('session-'.length, -'.json'.length);
+    return matchesBoundary(body, ownPhone) || matchesBoundary(body, ownLidUser);
+  }
+  if (fname.startsWith('sender-key-')) {
+    const sepIdx = fname.indexOf('--');
+    if (sepIdx !== -1) {
+      const senderBody = fname.slice(sepIdx + 2, -'.json'.length);
+      return matchesBoundary(senderBody, ownPhone) || matchesBoundary(senderBody, ownLidUser);
+    }
+  }
+  return false;
 }
 
 async function performResetSelfE2eeKeys(io, sessionId, session) {
@@ -948,14 +998,24 @@ async function performResetSelfE2eeKeys(io, sessionId, session) {
     }
   }
 
-  if (Object.keys(nullSessionMap).length > 0 && typeof session.sock?.authState?.keys?.set === 'function') {
+  try {
+    session.msgRetryCounterCache?.flushAll?.();
+  } catch (_) {}
+
+  if (typeof session.sock?.authState?.keys?.set === 'function') {
     try {
-      await session.sock.authState.keys.set({ session: nullSessionMap });
+      const keyPatch = {};
+      if (Object.keys(nullSessionMap).length > 0) keyPatch.session = nullSessionMap;
+      if (selfJid) keyPatch['sender-key-memory'] = { [selfJid]: null };
+      if (Object.keys(keyPatch).length > 0) {
+        await session.sock.authState.keys.set(keyPatch);
+      }
     } catch (_) {}
   }
 
   await session.sock.assertSessions(uniqueTargets, true);
-  triggerAuthSnapshotSync(io, sessionId, session);
+  // Pancarkan snapshot baru SEGERA (0ms) agar IndexedDB/localStorage browser langsung menimpa snapshot rusak
+  emitAuthSnapshotNow(io, sessionId, session);
 
   return {
     ok: true,
@@ -979,9 +1039,11 @@ function registerStickerSenderHandler(io, socket) {
 
       const session = sessions.get(sessionId);
       if (!session || session.status !== 'connected' || !session.sock?.user?.id) {
+        const errMsg = 'Hubungkan WhatsApp terlebih dahulu sebelum memulai deteksi format.';
+        emitToDevice(io, sessionId, 'sound-sticker-calibration-error', { error: errMsg });
         return emitToDevice(io, sessionId, 'sound-sticker-result', {
           ok: false,
-          error: 'Hubungkan WhatsApp terlebih dahulu sebelum memulai deteksi format.'
+          error: errMsg
         });
       }
 
@@ -990,6 +1052,10 @@ function registerStickerSenderHandler(io, socket) {
       attachCalibrationListener(io, sessionId, session);
 
       emitToDevice(io, sessionId, 'sound-sticker-calibration-armed', {
+        sessionId,
+        linkedPhone: session.phone || String(session.sock.user.id).split('@')[0].split(':')[0],
+        linkedLid: session.sock?.user?.lid || null,
+        baileysVersion: BAILEYS_VERSION,
         armedUntil: session.calibrationArmedUntil
       });
     } catch (err) {
@@ -1096,10 +1162,15 @@ function registerStickerSenderHandler(io, socket) {
               encodedBytes = proto.Message.encode(inner).finish().length;
             }
           } catch (_) {}
-          if (customMsgId) rememberSentMessage(session, customMsgId, inner);
+          if (customMsgId) {
+            rememberSentMessage(session, customMsgId, inner);
+            watchE2eeMessageId(session, customMsgId);
+          }
         }
         return outgoingMsg;
       };
+
+      if (customMsgId) watchE2eeMessageId(session, customMsgId);
 
       let ackStatus = 1;
       let ackLabel = 'Terkirim via server E2EE (menunggu ACK perangkat)';
@@ -1148,6 +1219,7 @@ function registerStickerSenderHandler(io, socket) {
       }
 
       const finalMsgId = sentMsg?.key?.id || customMsgId || '';
+      if (finalMsgId) watchE2eeMessageId(session, finalMsgId);
       if (sentMsg?.key?.id && sentMsg?.message) {
         rememberSentMessage(session, sentMsg.key.id, sentMsg.message);
       }
@@ -1160,7 +1232,7 @@ function registerStickerSenderHandler(io, socket) {
         }
       });
 
-      triggerAuthSnapshotSync(io, sessionId, session);
+      emitAuthSnapshotNow(io, sessionId, session);
 
       emitToDevice(io, sessionId, 'self-e2ee-test-result', {
         ok: !settledAck.isError,
