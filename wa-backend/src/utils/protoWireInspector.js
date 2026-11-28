@@ -61,10 +61,24 @@ const SCOPE_TO_PARENT_FIELD = {
 
 const RECENT_WIRE_MAX = 8;
 const recentRawWireFrames = [];
+const RECENT_RAW_BYTES_MAX = 4;
+const recentRawByteSnapshots = [];
 const decodeObservers = new Map(); // listener -> { protoCls, isActive }
 const wrappedDecodeMeta = new WeakMap(); // protoCls -> { origDecode }
 const RAW_WIRE_BYTES_SYM = Symbol.for('kuro.rawPatchedWireBytes');
 const encodeHookState = new WeakMap(); // protoCls -> { origEncode, refCount }
+
+function pushRecentRawByteSnapshot(snap) {
+  recentRawByteSnapshots.push(snap);
+  while (recentRawByteSnapshots.length > RECENT_RAW_BYTES_MAX) {
+    recentRawByteSnapshots.shift();
+  }
+}
+
+function getRecentRawWireBytesSnapshots(maxAgeMs = 4000) {
+  const cutoff = Date.now() - Math.max(500, Number(maxAgeMs) || 4000);
+  return recentRawByteSnapshots.filter((s) => s && (s.capturedAt || 0) >= cutoff);
+}
 
 function isPrintableAsciiUtf8(bytes) {
   if (!bytes || bytes.length === 0) return false;
@@ -320,7 +334,7 @@ function diffUnknownWireFields(rawWireTree = [], knownSchemaFields = null) {
   };
 
   const visitMessageTree = (nodes, depth = 0) => {
-    if (!Array.isArray(nodes) || depth > 5) return;
+    if (!Array.isArray(nodes) || depth > 8) return;
     for (const node of nodes) {
       if (!node) continue;
       const fid = Number(node.field);
@@ -336,6 +350,15 @@ function diffUnknownWireFields(rawWireTree = [], knownSchemaFields = null) {
             visitMessageTree(innerHolder.subFields, depth + 1);
           }
           continue;
+        }
+
+        // Telusuri quotedMessage (#3) di dalam contextInfo (#17) pada reply (.klon)
+        if (fid === 6 || fid === 1 || fid === 3 || fid === 9 || fid === 26) {
+          const ctxNode = node.subFields.find((s) => Number(s.field) === 17);
+          const quotedNode = ctxNode?.subFields?.find((s) => Number(s.field) === 3);
+          if (quotedNode && Array.isArray(quotedNode.subFields)) {
+            visitMessageTree(quotedNode.subFields, depth + 1);
+          }
         }
 
         const nestedSchemas = {
@@ -392,20 +415,43 @@ function ensureDecodeWrapped(protoCls) {
               ? rawBytes.subarray(readerOrBuf.pos || 0, Math.min(rawBytes.length, (readerOrBuf.pos || 0) + length))
               : rawBytes;
           if (sliced.length >= 2 && sliced.length <= 65536) {
-            const wireTree = inspectProtobufWire(sliced, 4);
-            const frame = {
-              capturedAt: Date.now(),
-              byteLength: sliced.length,
-              wireTree,
-              decodedKeys: decoded && typeof decoded === 'object' ? Object.keys(decoded) : []
-            };
-            pushRecentWireFrame(frame);
-            for (const [cb, meta] of decodeObservers.entries()) {
+            const decodedKeys = decoded && typeof decoded === 'object' ? Object.keys(decoded) : [];
+            const now = Date.now();
+            if (sliced.length <= 16384) {
+              pushRecentRawByteSnapshot({
+                capturedAt: now,
+                byteLength: sliced.length,
+                decodedKeys,
+                rawBytes: Uint8Array.from(sliced)
+              });
+            }
+
+            let needsFullWireParse = false;
+            for (const meta of decodeObservers.values()) {
               if (meta.protoCls !== protoCls) continue;
               if (meta.isActive && !meta.isActive()) continue;
-              try {
-                cb(frame);
-              } catch (_) {}
+              if (!meta.lightweightOnly || meta.lightweightOnly()) {
+                needsFullWireParse = true;
+                break;
+              }
+            }
+
+            if (needsFullWireParse) {
+              const wireTree = inspectProtobufWire(sliced, 7);
+              const frame = {
+                capturedAt: now,
+                byteLength: sliced.length,
+                wireTree,
+                decodedKeys
+              };
+              pushRecentWireFrame(frame);
+              for (const [cb, meta] of decodeObservers.entries()) {
+                if (meta.protoCls !== protoCls) continue;
+                if (meta.isActive && !meta.isActive()) continue;
+                try {
+                  cb(frame);
+                } catch (_) {}
+              }
             }
           }
         }
@@ -439,7 +485,8 @@ function armSafeProtoDecodeObserver(onRawBytes, opts = {}) {
   const cb = typeof onRawBytes === 'function' ? onRawBytes : () => {};
   decodeObservers.set(cb, {
     protoCls,
-    isActive: typeof opts.isActive === 'function' ? opts.isActive : null
+    isActive: typeof opts.isActive === 'function' ? opts.isActive : null,
+    lightweightOnly: typeof opts.shouldParseWire === 'function' ? opts.shouldParseWire : null
   });
   ensureDecodeWrapped(protoCls);
   return () => disarmSafeProtoDecodeObserver(cb, { protoMessage: protoCls });
@@ -751,6 +798,7 @@ module.exports = {
   armSafeProtoDecodeObserver,
   disarmSafeProtoDecodeObserver,
   getRecentRawWireFrames,
+  getRecentRawWireBytesSnapshots,
   appendWireFieldsToEncodedMessage,
   withScopedPatchedMessageEncode,
   unwrapMessageContent,

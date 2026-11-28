@@ -2427,7 +2427,7 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                   <p className="text-[11px] font-semibold text-neutral-700 leading-snug">
                     {calibrationArmed
                       ? `Aktif Mendengarkan di +${calibrationMeta?.linkedPhone || connectedPhone} — Teruskan 1 Stiker Audio Sekarang!`
-                      : "Teruskan 1 contoh stiker suara dari bot/chat ke 'Pesan Diri Sendiri' Anda — web menyalin format aslinya otomatis!"}
+                      : "Cara Tercepat (Anti-Gagal): Cukup balas (Reply) 1 stiker audio di WA HP Anda dengan ketik .klon — server langsung membaca formatnya & membalas di WA!"}
                   </p>
                   <div className="flex flex-col sm:flex-row gap-2">
                     <button

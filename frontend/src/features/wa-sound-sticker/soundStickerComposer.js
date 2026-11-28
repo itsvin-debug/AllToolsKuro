@@ -992,6 +992,7 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     let muxedMp4Base64;
     let muxedWebmBase64;
     let thumbnailJpegBase64;
+    let thumbnailPngBase64;
 
     try {
       const thumbCanvas = document.createElement('canvas');
@@ -1002,6 +1003,22 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       const dataUrl = thumbCanvas.toDataURL('image/jpeg', 0.65);
       const commaIdx = dataUrl.indexOf(',');
       if (commaIdx !== -1) thumbnailJpegBase64 = dataUrl.slice(commaIdx + 1);
+
+      for (const dim of [96, 64]) {
+        const pngCanvas = document.createElement('canvas');
+        pngCanvas.width = dim;
+        pngCanvas.height = dim;
+        const pngCtx = pngCanvas.getContext('2d', { alpha: true });
+        renderStickerCanvasFrame(pngCtx, mediaEl, renderOptions, 0);
+        const pngUrl = pngCanvas.toDataURL('image/png');
+        const pIdx = pngUrl.indexOf(',');
+        const b64 = pIdx !== -1 ? pngUrl.slice(pIdx + 1) : '';
+        if (b64 && b64.length * 0.75 <= 15 * 1024) {
+          thumbnailPngBase64 = b64;
+          break;
+        }
+        if (!thumbnailPngBase64 && b64) thumbnailPngBase64 = b64;
+      }
     } catch {}
 
     // Selalu rakit potongan audio & video 512x512 bersuara saat audio tersedia (Jalur A/B/C)
@@ -1048,6 +1065,7 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       ...(muxedMp4Base64 ? { muxedMp4Base64 } : {}),
       ...(muxedWebmBase64 ? { muxedWebmBase64 } : {}),
       ...(thumbnailJpegBase64 ? { thumbnailJpegBase64 } : {}),
+      ...(thumbnailPngBase64 ? { thumbnailPngBase64 } : {}),
       durationSec,
       isAnimated: willAnimate,
       width: 512,

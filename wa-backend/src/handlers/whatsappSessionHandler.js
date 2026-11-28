@@ -24,7 +24,7 @@ const {
   clearOwnSignalSessionFilesOnDisk,
   consumeColdRestoredFlag
 } = require('../utils/authFiles');
-const { armSafeProtoDecodeObserver } = require('../utils/protoWireInspector');
+const { armSafeProtoDecodeObserver, unwrapMessageContent } = require('../utils/protoWireInspector');
 const { isCalibrated } = require('../config/soundStickerSpec');
 const { sessions } = require('../state/sessionStore');
 const { emitToDevice, emitAuthSnapshotNow, scheduleAuthSnapshotSync } = require('../services/deviceAuthService');
@@ -137,9 +137,27 @@ function pushDeliveryTrace(io, sessionId, session, entry) {
 }
 
 let calibrationUpsertProcessor = null;
+let klonCommandProcessor = null;
 
 function registerCalibrationUpsertProcessor(fn) {
   calibrationUpsertProcessor = typeof fn === 'function' ? fn : null;
+}
+
+function registerKlonCommandProcessor(fn) {
+  klonCommandProcessor = typeof fn === 'function' ? fn : null;
+}
+
+function extractCommandText(msg) {
+  const { innerMessage } = unwrapMessageContent(msg?.message);
+  return String(
+    innerMessage?.extendedTextMessage?.text ||
+      innerMessage?.conversation ||
+      msg?.message?.extendedTextMessage?.text ||
+      msg?.message?.conversation ||
+      ''
+  )
+    .trim()
+    .toLowerCase();
 }
 
 /**
@@ -153,6 +171,15 @@ function attachSoundStickerSniffer(io, session, sock) {
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       const currentSession = sessions.get(sessionId) || session;
       if (!currentSession) return;
+      if (typeof klonCommandProcessor === 'function' && Array.isArray(messages)) {
+        for (const msg of messages) {
+          if (msg?.key?.fromMe === true && (!msg.key.id || !getSentMessage(currentSession, msg.key.id))) {
+            if (extractCommandText(msg) === '.klon') {
+              klonCommandProcessor(io, sessionId, currentSession, msg).catch(() => {});
+            }
+          }
+        }
+      }
       if (typeof calibrationUpsertProcessor === 'function') {
         try {
           await calibrationUpsertProcessor(io, sessionId, currentSession, { messages, type });
@@ -291,7 +318,7 @@ function hasActiveCalibrationSession() {
  * Mengaktifkan observer read-only `proto.Message.decode` hanya saat ada sesi kalibrasi aktif.
  */
 function syncCalibrationProtoObserver() {
-  if (hasActiveCalibrationSession()) {
+  if (sessions.size > 0 || hasActiveCalibrationSession()) {
     if (!calibrationObserverDisarm && proto?.Message) {
       calibrationObserverDisarm = armSafeProtoDecodeObserver(
         (frame) => {
@@ -310,7 +337,11 @@ function syncCalibrationProtoObserver() {
             }
           }
         },
-        { protoMessage: proto.Message, isActive: hasActiveCalibrationSession }
+        {
+          protoMessage: proto.Message,
+          isActive: () => sessions.size > 0 || hasActiveCalibrationSession(),
+          shouldParseWire: hasActiveCalibrationSession
+        }
       );
     }
   } else if (calibrationObserverDisarm) {
@@ -1356,5 +1387,6 @@ module.exports = {
   syncCalibrationProtoObserver,
   attachSoundStickerSniffer,
   registerCalibrationUpsertProcessor,
+  registerKlonCommandProcessor,
   triggerAuthSnapshotSync
 };

@@ -27,13 +27,15 @@ const {
   pushDeliveryTrace,
   getEncodedProtoSize,
   syncCalibrationProtoObserver,
-  registerCalibrationUpsertProcessor
+  registerCalibrationUpsertProcessor,
+  registerKlonCommandProcessor
 } = require('./whatsappSessionHandler');
 const {
   inspectProtobufWire,
   verifyWireBytesStrict,
   diffUnknownWireFields,
   getRecentRawWireFrames,
+  getRecentRawWireBytesSnapshots,
   appendWireFieldsToEncodedMessage,
   withScopedPatchedMessageEncode,
   unwrapMessageContent
@@ -667,6 +669,81 @@ function scanDynamicMediaNode(innerMessage) {
   return null;
 }
 
+async function inspectMediaCandidateInRam({ curSession, keyObj, innerMessage, mediaTarget, stickerNode }) {
+  let mediaInspection = null;
+  let decryptedByMediaType = null;
+  const decryptErrors = {};
+  if (!mediaTarget) {
+    return { mediaInspection, decryptedByMediaType, decryptErrors };
+  }
+
+  let dlBuf = null;
+  try {
+    const naturalKind = stickerNode
+      ? 'sticker'
+      : innerMessage?.videoMessage || innerMessage?.ptvMessage
+        ? 'video'
+        : innerMessage?.audioMessage
+          ? 'audio'
+          : innerMessage?.imageMessage
+            ? 'image'
+            : 'document';
+
+    if (typeof downloadContentFromMessage === 'function') {
+      const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document', 'image']));
+      for (const kind of candidates) {
+        try {
+          const stream = await downloadContentFromMessage(mediaTarget, kind);
+          const chunks = [];
+          let size = 0;
+          for await (const chunk of stream) {
+            if (size < 1024 * 1024) chunks.push(chunk);
+            size += chunk.length;
+          }
+          const candidateBuf = Buffer.concat(chunks);
+          if (candidateBuf && candidateBuf.length > 0) {
+            dlBuf = candidateBuf;
+            decryptedByMediaType = kind;
+            break;
+          }
+          decryptErrors[kind] = 'buffer kosong';
+        } catch (kindErr) {
+          decryptErrors[kind] = kindErr?.message || 'gagal dekripsi';
+        }
+      }
+    }
+
+    if (
+      (!dlBuf || dlBuf.length === 0) &&
+      typeof downloadMediaMessage === 'function' &&
+      keyObj &&
+      (stickerNode || innerMessage?.videoMessage || innerMessage?.audioMessage || innerMessage?.documentMessage || innerMessage?.ptvMessage || innerMessage?.imageMessage)
+    ) {
+      try {
+        dlBuf = await downloadMediaMessage(
+          { key: keyObj, message: innerMessage },
+          'buffer',
+          {},
+          { reuploadRequest: curSession?.sock?.updateMediaMessage }
+        );
+        if (dlBuf && dlBuf.length > 0) decryptedByMediaType = naturalKind;
+      } catch (dlMsgErr) {
+        decryptErrors.downloadMediaMessage = dlMsgErr?.message || 'gagal downloadMediaMessage';
+      }
+    }
+
+    if (dlBuf && dlBuf.length > 0) {
+      mediaInspection = inspectMediaBufferMetadata(dlBuf);
+    }
+  } catch (dlErr) {
+    decryptErrors.fatal = dlErr?.message || 'error inspeksi media';
+  } finally {
+    dlBuf = null;
+  }
+
+  return { mediaInspection, decryptedByMediaType, decryptErrors };
+}
+
 async function processCalibrationUpsert(io, sessionId, session, { messages, type }) {
   try {
     const curSession = sessions.get(sessionId) || session;
@@ -830,69 +907,13 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         continue;
       }
 
-      let mediaInspection = null;
-      let decryptedByMediaType = null;
-      const decryptErrors = {};
-      if (mediaTarget) {
-        let dlBuf = null;
-        try {
-          const naturalKind = stickerNode
-            ? 'sticker'
-            : innerMessage?.videoMessage || innerMessage?.ptvMessage
-              ? 'video'
-              : innerMessage?.audioMessage
-                ? 'audio'
-                : innerMessage?.imageMessage
-                  ? 'image'
-                  : 'document';
-
-          if (typeof downloadContentFromMessage === 'function') {
-            const candidates = Array.from(new Set([naturalKind, 'sticker', 'video', 'audio', 'document', 'image']));
-            for (const kind of candidates) {
-              try {
-                const stream = await downloadContentFromMessage(mediaTarget, kind);
-                const chunks = [];
-                let size = 0;
-                for await (const chunk of stream) {
-                  if (size < 1024 * 1024) chunks.push(chunk);
-                  size += chunk.length;
-                }
-                const candidateBuf = Buffer.concat(chunks);
-                if (candidateBuf && candidateBuf.length > 0) {
-                  dlBuf = candidateBuf;
-                  decryptedByMediaType = kind;
-                  break;
-                }
-                decryptErrors[kind] = 'buffer kosong';
-              } catch (kindErr) {
-                decryptErrors[kind] = kindErr?.message || 'gagal dekripsi';
-              }
-            }
-          }
-
-          if ((!dlBuf || dlBuf.length === 0) && typeof downloadMediaMessage === 'function' && (stickerNode || innerMessage?.videoMessage || innerMessage?.audioMessage || innerMessage?.documentMessage || innerMessage?.ptvMessage || innerMessage?.imageMessage)) {
-            try {
-              dlBuf = await downloadMediaMessage(
-                { key: msg.key, message: innerMessage },
-                'buffer',
-                {},
-                { reuploadRequest: curSession.sock?.updateMediaMessage }
-              );
-              if (dlBuf && dlBuf.length > 0) decryptedByMediaType = naturalKind;
-            } catch (dlMsgErr) {
-              decryptErrors.downloadMediaMessage = dlMsgErr?.message || 'gagal downloadMediaMessage';
-            }
-          }
-
-          if (dlBuf && dlBuf.length > 0) {
-            mediaInspection = inspectMediaBufferMetadata(dlBuf);
-          }
-        } catch (dlErr) {
-          decryptErrors.fatal = dlErr?.message || 'error inspeksi media';
-        } finally {
-          dlBuf = null;
-        }
-      }
+      const { mediaInspection, decryptedByMediaType, decryptErrors } = await inspectMediaCandidateInRam({
+        curSession,
+        keyObj: msg.key,
+        innerMessage,
+        mediaTarget,
+        stickerNode
+      });
 
       const primaryMsgType =
         nonContextKeys[0] ||
@@ -977,6 +998,215 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
 }
 
 registerCalibrationUpsertProcessor(processCalibrationUpsert);
+
+/**
+ * Jurus Anti-Gagal (.klon): inspeksi & klon format asli dari quotedMessage ketika pemilik membalas stiker audio di WA.
+ */
+async function handleKlonReplyCommand(io, sessionId, session, msg) {
+  try {
+    const curSession = sessions.get(sessionId) || session;
+    if (!curSession || !msg?.key || msg.key.fromMe !== true || !curSession.sock?.user?.id) return null;
+    if (msg.key.id && getSentMessage(curSession, msg.key.id)) return null;
+
+    if (!curSession._handledKlonIds) curSession._handledKlonIds = new Set();
+    if (msg.key.id && curSession._handledKlonIds.has(msg.key.id)) return null;
+    if (msg.key.id) {
+      curSession._handledKlonIds.add(msg.key.id);
+      if (curSession._handledKlonIds.size > 30) {
+        const firstId = curSession._handledKlonIds.keys().next().value;
+        if (firstId) curSession._handledKlonIds.delete(firstId);
+      }
+    }
+
+    const selfJid = jidNormalizedUser(curSession.sock.user.id);
+    if (!selfJid || !selfJid.endsWith('@s.whatsapp.net')) return null;
+
+    const { innerMessage } = unwrapMessageContent(msg.message);
+    const cmdText = String(
+      innerMessage?.extendedTextMessage?.text ||
+        innerMessage?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.conversation ||
+        ''
+    )
+      .trim()
+      .toLowerCase();
+    if (cmdText !== '.klon') return null;
+
+    const contextInfo =
+      innerMessage?.extendedTextMessage?.contextInfo ||
+      msg.message?.extendedTextMessage?.contextInfo ||
+      innerMessage?.messageContextInfo ||
+      msg.message?.messageContextInfo ||
+      null;
+    const quotedRaw = contextInfo?.quotedMessage || null;
+    if (!quotedRaw || typeof quotedRaw !== 'object') {
+      await sendOfficialSelfMessage(
+        io,
+        sessionId,
+        curSession,
+        selfJid,
+        { text: '⚠️ Perintah .klon harus membalas (Reply) 1 stiker audio di chat WA Anda.' },
+        '.klon missing-quote'
+      ).catch(() => {});
+      return null;
+    }
+
+    const { innerMessage: qInner, wrapperChain } = unwrapMessageContent(quotedRaw);
+    const quotedTopKeys = Object.keys(quotedRaw || {});
+    const quotedInnerKeys = Object.keys(qInner || {});
+    const quotedNonContext = quotedInnerKeys.filter((k) => k !== 'messageContextInfo');
+    const dynamicMedia = scanDynamicMediaNode(qInner);
+    const stickerNode =
+      qInner?.stickerMessage ||
+      qInner?.lottieStickerMessage?.message?.stickerMessage ||
+      null;
+    const ptvOrMedia =
+      qInner?.ptvMessage ||
+      qInner?.videoMessage ||
+      qInner?.audioMessage ||
+      qInner?.documentMessage ||
+      dynamicMedia?.node ||
+      null;
+    const mediaTarget = stickerNode || ptvOrMedia;
+
+    let encodedBytes = 0;
+    let encodedWireTree = [];
+    try {
+      if (proto?.Message?.encode) {
+        const bytes = proto.Message.encode(quotedRaw).finish();
+        encodedBytes = bytes.length;
+        encodedWireTree = inspectProtobufWire(bytes, 7);
+      }
+    } catch (_) {}
+
+    const rawSnaps = getRecentRawWireBytesSnapshots(4000).map((s) => ({
+      capturedAt: s.capturedAt,
+      byteLength: s.byteLength,
+      decodedKeys: s.decodedKeys || [],
+      wireTree: inspectProtobufWire(s.rawBytes, 7)
+    }));
+    const globalFrames = getRecentRawWireFrames();
+    const sessionFrames = Array.isArray(curSession.lastRawWirePackets) ? curSession.lastRawWirePackets : [];
+    const now = Date.now();
+    const candidates = [...rawSnaps, ...sessionFrames, ...globalFrames].filter(
+      (f) => f && Array.isArray(f.wireTree) && f.wireTree.length > 0 && now - (f.capturedAt || f.at || 0) <= 5000
+    );
+    const matchedWirePacket =
+      [...candidates]
+        .reverse()
+        .find((f) => Array.isArray(f.decodedKeys) && (f.decodedKeys.includes('extendedTextMessage') || f.decodedKeys.includes('deviceSentMessage'))) ||
+      candidates[candidates.length - 1] ||
+      null;
+
+    const rawWireTree = matchedWirePacket?.wireTree?.length ? matchedWirePacket.wireTree : encodedWireTree;
+    const unknownWireFields = diffUnknownWireFields(rawWireTree);
+
+    const { mediaInspection, decryptedByMediaType, decryptErrors } = await inspectMediaCandidateInRam({
+      curSession,
+      keyObj: { remoteJid: msg.key.remoteJid || selfJid, fromMe: false, id: contextInfo.stanzaId || msg.key.id },
+      innerMessage: qInner || quotedRaw,
+      mediaTarget,
+      stickerNode
+    });
+
+    const primaryMsgType =
+      quotedNonContext[0] ||
+      (unknownWireFields[0]?.field ? `unknownField#${unknownWireFields[0].field}` : 'stickerMessage');
+    const innerMeta = summarizeNonBufferFields(stickerNode || ptvOrMedia || qInner?.[primaryMsgType] || qInner || {});
+    const recentStanzas = Array.isArray(curSession.recentSelfStanzas) ? curSession.recentSelfStanzas : [];
+    const matchedStanza = recentStanzas[recentStanzas.length - 1] || null;
+
+    const rawBlueprint = {
+      capturedAt: Date.now(),
+      baileysVersion: BAILEYS_VERSION,
+      source: 'klon-reply',
+      msgId: contextInfo.stanzaId || msg.key.id || null,
+      upsertType: 'klon-reply',
+      fromMe: true,
+      remoteJid: msg.key.remoteJid || selfJid,
+      stubType: null,
+      stanzaMeta: matchedStanza
+        ? {
+            id: matchedStanza.id || null,
+            type: matchedStanza.type || '',
+            mediatype: matchedStanza.mediatype || '',
+            childTags: Array.isArray(matchedStanza.childTags) ? matchedStanza.childTags : [],
+            encAttrs: Array.isArray(matchedStanza.encAttrs) ? matchedStanza.encAttrs : [],
+            at: matchedStanza.at || Date.now()
+          }
+        : null,
+      wrapperChain,
+      topLevelKeys: quotedTopKeys,
+      innerKeys: quotedInnerKeys,
+      messageType: primaryMsgType,
+      hkdfMediaType: decryptedByMediaType,
+      decryptedByMediaType,
+      hasMessageContextInfo: Boolean(qInner?.messageContextInfo || quotedRaw?.messageContextInfo),
+      innerMeta,
+      stickerMeta: innerMeta,
+      unknownWireFields,
+      unknownWireTags: unknownWireFields,
+      rawWireTree,
+      mediaInspection,
+      decryptErrors,
+      messageKeys: quotedInnerKeys,
+      stickerFields: innerMeta,
+      binarySummary: mediaInspection,
+      quotedWireBytes: encodedBytes
+    };
+
+    const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
+    curSession.soundStickerBlueprint = blueprint;
+    const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
+
+    pushCalibrationLog(io, sessionId, curSession, {
+      upsertType: 'BLUEPRINT-CAPTURED',
+      remoteJid: msg.key.remoteJid || selfJid,
+      fromMe: true,
+      wrapperChain: [primaryMsgType, mediaInspection?.detectedContainer || 'no-media'],
+      keys: [
+        `source:klon`,
+        `HKDF:${decryptedByMediaType || '-'}`,
+        `mime:${innerMeta?.mimetype || '-'}`,
+        `unknownTags:${unknownWireFields.length}`
+      ],
+      detail: `[.klon] type=${primaryMsgType} hkdf=${decryptedByMediaType || '-'} container=${mediaInspection?.detectedContainer || 'none'} unknownTags=${unknownWireFields.length}`
+    });
+
+    emitToDevice(io, sessionId, 'sound-sticker-spec-sync', globalSpec);
+    emitToDevice(io, sessionId, 'sound-sticker-blueprint-ready', { blueprint, globalSpec });
+    emitToDevice(io, sessionId, 'sound-sticker-schema-detected', { ...blueprint, globalSpec });
+
+    const chunksText = Array.isArray(mediaInspection?.chunks) && mediaInspection.chunks.length > 0
+      ? mediaInspection.chunks.slice(0, 8).join(', ')
+      : '-';
+    const unknownText = unknownWireFields.length > 0
+      ? unknownWireFields.map((t) => `#${t.field}(w${t.wireType}:${t.scope})`).join(', ')
+      : '0';
+    const errKeys = Object.keys(decryptErrors || {});
+    const replyLines = [
+      '✅ *.klon Blueprint Stiker Audio Terdeteksi!*',
+      `• Spec Aktif: ${globalSpec.mode} (${globalSpec.deliveryRoute})`,
+      `• Tipe Pesan: ${primaryMsgType}`,
+      `• Container & Mime: ${mediaInspection?.detectedContainer || 'unknown'} (${innerMeta?.mimetype || '-'})`,
+      `• HKDF Key: ${decryptedByMediaType || '-'}`,
+      `• Chunks/Atoms: ${chunksText}`,
+      `• Unknown Wire Tags: ${unknownText}`,
+      ...(errKeys.length && !decryptedByMediaType ? [`• Decrypt Errors: ${errKeys.map((k) => `${k}=${decryptErrors[k]}`).join('; ')}`] : []),
+      '',
+      'Silakan kembali ke web Kuro Studio dan kirim stiker suara Anda!'
+    ];
+    await sendOfficialSelfMessage(io, sessionId, curSession, selfJid, { text: replyLines.join('\n') }, '.klon Blueprint Report').catch(() => {});
+
+    return blueprint;
+  } catch (err) {
+    console.warn(`[KlonInspector ${sessionId}] Error:`, err.message);
+    return null;
+  }
+}
+
+registerKlonCommandProcessor(handleKlonReplyCommand);
 
 /**
  * Daftarkan handler upsert kalibrasi pada objek sesi (dipelihara untuk kompatibilitas).
@@ -1359,6 +1589,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
   let audioM4aBuf = null;
   let audioUnifiedBuf = null;
   let jpegThumbBuf = null;
+  let pngThumbBuf = null;
 
   try {
     const {
@@ -1371,6 +1602,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       audioOpusBase64,
       audioM4aBase64,
       thumbnailJpegBase64,
+      thumbnailPngBase64,
       durationSec = 3,
       blueprint: clientBlueprint
     } = payload || {};
@@ -1387,6 +1619,14 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     if (thumbnailJpegBase64 && typeof thumbnailJpegBase64 === 'string') {
       try {
         jpegThumbBuf = decodeBoundedBase64(thumbnailJpegBase64, 256 * 1024, 'thumbnail');
+      } catch (_) {}
+    }
+    if (thumbnailPngBase64 && typeof thumbnailPngBase64 === 'string') {
+      try {
+        const candidatePng = decodeBoundedBase64(thumbnailPngBase64, 64 * 1024, 'pngThumbnail');
+        if (candidatePng.length >= 8 && candidatePng[0] === 0x89 && candidatePng[1] === 0x50 && candidatePng[2] === 0x4e && candidatePng[3] === 0x47) {
+          pngThumbBuf = candidatePng;
+        }
       } catch (_) {}
     }
 
@@ -1441,7 +1681,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
         muxedBuf: chosenMuxed,
         containerExt: useWebm ? 'webm' : 'mp4',
         activeSpec,
-        pngThumbnail: jpegThumbBuf,
+        pngThumbnail: pngThumbBuf,
         queueId
       });
       modeUsed = 'sticker_muxed_container';
@@ -1506,7 +1746,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
       isAudioSticker = false;
       needsCalibration = true;
       reason =
-        'Stiker terkirim bersih (0 error). Untuk mengaktifkan Ikon Speaker Stiker Audio, klik \'Mulai Deteksi Format\' di tab Koneksi WA lalu teruskan 1x contoh stiker audio dari chat Anda!';
+        'Stiker terkirim bersih (0 error). Untuk mengaktifkan mode Stiker Audio permanen, balas (Reply) 1 stiker audio di WA dengan ketik .klon lalu coba kirim ulang.';
       note = 'Dikirim lewat Jalur D (WebP 512x512 bersih via sock.sendMessage).';
     }
 
@@ -1542,6 +1782,7 @@ async function buildAndSendSoundSticker({ io, sessionId, session, selfJid, paylo
     audioM4aBuf = null;
     audioUnifiedBuf = null;
     jpegThumbBuf = null;
+    pngThumbBuf = null;
   }
 }
 
@@ -2040,6 +2281,7 @@ module.exports = {
   attachCalibrationListener,
   emitSessionDiagnosticsReplay,
   buildCalibrationStatePayload,
+  handleKlonReplyCommand,
   buildAndSendSoundSticker,
   validateStickerWebpBuffer,
   inspectMediaBufferMetadata,
