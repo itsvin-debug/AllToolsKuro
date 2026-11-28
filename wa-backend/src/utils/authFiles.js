@@ -156,7 +156,10 @@ function packAuthSnapshot(authDir) {
       .map((e) => {
         const full = path.join(authDir, e.name);
         const st = fs.statSync(full);
-        return { name: e.name, full, rank: priorityRank(e.name), mtimeMs: st.mtimeMs, size: st.size };
+        const rank = priorityRank(e.name);
+        const ownIds = extractOwnIdentifiersFromCreds(credsParsed);
+        const isOwnSession = isOwnSignalSessionFile(e.name, ownIds.ownPhone, ownIds.ownLidUser);
+        return { name: e.name, full, rank: isOwnSession ? 2.5 : rank, mtimeMs: st.mtimeMs, size: st.size };
       })
       .sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : b.mtimeMs - a.mtimeMs));
 
@@ -233,17 +236,16 @@ function unpackAuthSnapshot(authDir, snapshot, tokenHash, metaOut = null) {
     }
 
     let restoredCount = 0;
-    const skippedOwnRatchets = [];
+    const restoredOwnRatchets = [];
 
     for (const [fname, content] of Object.entries(snapshot.files)) {
       if (typeof fname !== 'string' || typeof content !== 'string') continue;
       if (fname !== path.basename(fname) || fname.includes('..') || !/^[a-zA-Z0-9._-]+\.json$/.test(fname)) {
         continue;
       }
-      // Jangan pulihkan ratchet Signal lama milik nomor pemilik sendiri agar cold-boot tidak memicu Bad MAC ("Menunggu pesan ini")
+      // Pertahankan session-<ownLid>* & session-<ownPhone>* dari snapshot segar agar pesan masuk LID tidak terkena stub: 2
       if (isOwnSignalSessionFile(fname, ownPhone, ownLidUser)) {
-        skippedOwnRatchets.push(fname);
-        continue;
+        restoredOwnRatchets.push(fname);
       }
       fs.writeFileSync(path.join(authDir, fname), content, 'utf8');
       restoredCount++;
@@ -252,11 +254,12 @@ function unpackAuthSnapshot(authDir, snapshot, tokenHash, metaOut = null) {
     const ok = restoredCount > 0 && fs.existsSync(path.join(authDir, 'creds.json'));
     if (ok) {
       coldRestoredSessionDirs.add(path.resolve(authDir));
-      if (skippedOwnRatchets.length > 0) {
-        console.log(`[WA-SNAPSHOT] Skip ${skippedOwnRatchets.length} stale self ratchet (${skippedOwnRatchets.slice(0, 4).join(', ')})`);
+      if (restoredOwnRatchets.length > 0) {
+        console.log(`[WA-SNAPSHOT] Pertahankan ${restoredOwnRatchets.length} own Signal session (${restoredOwnRatchets.slice(0, 4).join(', ')})`);
       }
       if (metaOut && typeof metaOut === 'object') {
-        metaOut.skippedOwnRatchets = skippedOwnRatchets;
+        metaOut.restoredOwnRatchets = restoredOwnRatchets;
+        metaOut.skippedOwnRatchets = [];
         metaOut.ownPhone = ownPhone;
         metaOut.ownLidUser = ownLidUser;
       }

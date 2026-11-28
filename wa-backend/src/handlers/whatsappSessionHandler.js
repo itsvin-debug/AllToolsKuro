@@ -216,11 +216,11 @@ function cacheRecentOwnerSticker(session, msg, type) {
     const matchedSnap = [...snaps]
       .reverse()
       .find((s) => s && Array.isArray(s.decodedKeys) && topLevelKeys.some((tk) => tk !== 'messageContextInfo' && s.decodedKeys.includes(tk)));
-    if (matchedSnap?.rawBytes && matchedSnap.rawBytes.length <= 16384) {
+    if (matchedSnap?.rawBytes && matchedSnap.rawBytes.length <= 32768) {
       rawWireBytes = Uint8Array.from(matchedSnap.rawBytes);
     } else if (baileysProtoAlias?.Message?.encode) {
       const encoded = baileysProtoAlias.Message.encode(msg.message).finish();
-      if (encoded && encoded.length <= 16384) {
+      if (encoded && encoded.length <= 32768) {
         rawWireBytes = Uint8Array.from(encoded);
       }
     }
@@ -809,7 +809,7 @@ async function startBaileys(
     state.keys.set = async (data) => {
       const res = await origKeysSet(data);
       if (state.creds?.registered && data && (data['app-state-sync-key'] || data.session)) {
-        scheduleAuthSnapshotSync(io, sessionId, session, data.session ? 350 : 1200);
+        scheduleAuthSnapshotSync(io, sessionId, session, 300);
       }
       return res;
     };
@@ -933,7 +933,7 @@ async function startBaileys(
           writeOwnerHash(sessionDir, session.tokenHash);
         }
         if (sock.authState?.creds?.registered) {
-          scheduleAuthSnapshotSync(io, sessionId, session, 800);
+          scheduleAuthSnapshotSync(io, sessionId, session, 300);
         }
       } catch (err) {
         console.warn(`[Session ${sessionId}] Error creds.update:`, err.message);
@@ -1143,32 +1143,16 @@ async function startBaileys(
             const credsIds = extractOwnIdentifiersFromCreds(sock.authState?.creds);
             const ownPhone = phone || credsIds.ownPhone;
             const ownLidUser = (accountLid ? accountLid.split('@')[0].split(':')[0] : '') || credsIds.ownLidUser;
-            const { nullSessionMap } = clearOwnSignalSessionFilesOnDisk(sessionDir, ownPhone, ownLidUser);
-            for (let dev = 0; dev <= 5; dev++) {
-              if (ownPhone) nullSessionMap[`${ownPhone}.${dev}`] = null;
-              if (ownLidUser) {
-                nullSessionMap[`${ownLidUser}.${dev}`] = null;
-                nullSessionMap[`${ownLidUser}_1.${dev}`] = null;
-              }
-            }
-            session.msgRetryCounterCache?.flushAll?.();
-            if (typeof sock.authState?.keys?.set === 'function' && Object.keys(nullSessionMap).length > 0) {
-              await sock.authState.keys.set({ session: nullSessionMap }).catch(() => {});
-            }
-            const refreshTargets = [accountJid, ...(accountLid && accountLid !== accountJid ? [accountLid] : [])].filter(Boolean);
-            if (refreshTargets.length > 0) {
-              await sock.assertSessions(refreshTargets, true);
-            }
             pushDeliveryTrace(io, sessionId, session, {
               messageId: 'cold-boot',
               phase: 'cold_boot_e2ee_refresh',
               event: 'cold_snapshot_restore',
               isError: false,
-              detail: 'Sesi pulih dari snapshot — kunci E2EE self-chat disegarkan otomatis'
+              detail: `Sesi pulih dari snapshot — ratchet self-chat (${ownPhone || '-'}/${ownLidUser || '-'}) dipertahankan`
             });
-            console.log(`[WA-COLD-RESTORE ${sessionId}] Kunci E2EE self-chat disegarkan untuk ${refreshTargets.join(', ')}`);
+            console.log(`[WA-COLD-RESTORE ${sessionId}] Sesi & ratchet Signal (${ownPhone || '-'}, ${ownLidUser || '-'}) dipulihkan utuh dari snapshot`);
           } catch (coldErr) {
-            console.warn(`[WA-COLD-RESTORE ${sessionId}] Gagal refresh sesi:`, coldErr.message);
+            console.warn(`[WA-COLD-RESTORE ${sessionId}] Gagal mencatat restore sesi:`, coldErr.message);
           }
         }
 

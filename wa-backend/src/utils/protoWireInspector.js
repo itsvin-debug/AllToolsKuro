@@ -59,9 +59,98 @@ const SCOPE_TO_PARENT_FIELD = {
   LottieStickerMessage: 74
 };
 
-const RECENT_WIRE_MAX = 8;
+const KNOWN_MESSAGE_TAG_NAMES = {
+  1: 'conversation',
+  2: 'senderKeyDistributionMessage',
+  3: 'imageMessage',
+  4: 'contactMessage',
+  5: 'locationMessage',
+  6: 'extendedTextMessage',
+  7: 'documentMessage',
+  8: 'audioMessage',
+  9: 'videoMessage',
+  10: 'call',
+  11: 'chat',
+  12: 'protocolMessage',
+  13: 'contactsArrayMessage',
+  14: 'highlyStructuredMessage',
+  15: 'fastRatchetKeySenderKeyDistributionMessage',
+  16: 'sendPaymentMessage',
+  18: 'liveLocationMessage',
+  22: 'requestPaymentMessage',
+  23: 'declinePaymentRequestMessage',
+  24: 'cancelPaymentRequestMessage',
+  25: 'templateMessage',
+  26: 'stickerMessage',
+  28: 'groupInviteMessage',
+  29: 'templateButtonReplyMessage',
+  30: 'productMessage',
+  31: 'deviceSentMessage',
+  35: 'messageContextInfo',
+  36: 'listMessage',
+  37: 'viewOnceMessage',
+  38: 'orderMessage',
+  39: 'listResponseMessage',
+  40: 'ephemeralMessage',
+  41: 'invoiceMessage',
+  42: 'buttonsMessage',
+  43: 'buttonsResponseMessage',
+  44: 'paymentInviteMessage',
+  45: 'interactiveMessage',
+  46: 'reactionMessage',
+  47: 'stickerSyncRmrMessage',
+  48: 'interactiveResponseMessage',
+  49: 'pollCreationMessage',
+  50: 'pollUpdateMessage',
+  51: 'keepInChatMessage',
+  53: 'documentWithCaptionMessage',
+  54: 'requestPhoneNumberMessage',
+  55: 'viewOnceMessageV2',
+  56: 'encReactionMessage',
+  58: 'editedMessage',
+  59: 'viewOnceMessageV2Extension',
+  60: 'pollCreationMessageV2',
+  61: 'scheduledCallCreationMessage',
+  62: 'groupMentionedMessage',
+  63: 'pinInChatMessage',
+  64: 'pollCreationMessageV3',
+  65: 'scheduledCallEditMessage',
+  66: 'ptvMessage',
+  67: 'botInvokeMessage',
+  69: 'callLogMesssage',
+  70: 'messageHistoryBundle',
+  71: 'encCommentMessage',
+  72: 'bcallMessage',
+  74: 'lottieStickerMessage',
+  75: 'eventMessage',
+  76: 'encEventResponseMessage',
+  77: 'commentMessage',
+  78: 'newsletterAdminInviteMessage',
+  80: 'placeholderMessage',
+  82: 'secretEncryptedMessage',
+  83: 'albumMessage',
+  85: 'eventCoverImage',
+  86: 'stickerPackMessage',
+  87: 'statusMentionMessage',
+  88: 'pollResultSnapshotMessage',
+  90: 'pollCreationOptionImageMessage',
+  91: 'associatedChildMessage',
+  92: 'groupStatusMentionMessage',
+  93: 'pollCreationMessageV4',
+  94: 'pollCreationMessageV5',
+  95: 'statusAddYours',
+  96: 'groupStatusMessage',
+  97: 'richResponseMessage',
+  98: 'statusNotificationMessage',
+  99: 'limitSharingMessage',
+  100: 'botTaskMessage',
+  101: 'questionMessage',
+  102: 'messageHistoryNotice'
+};
+
+const RECENT_WIRE_MAX = 16;
 const recentRawWireFrames = [];
-const RECENT_RAW_BYTES_MAX = 4;
+const RECENT_RAW_BYTES_MAX = 16;
 const recentRawByteSnapshots = [];
 const decodeObservers = new Map(); // listener -> { protoCls, isActive }
 const wrappedDecodeMeta = new WeakMap(); // protoCls -> { origDecode }
@@ -127,10 +216,46 @@ function getRecentRawWireFrames() {
   return [...recentRawWireFrames];
 }
 
+function decodeLengthDelimitedNode(field, payload, maxDepth, depth) {
+  const len = payload.length;
+  const asciiPrintable = isPrintableAsciiUtf8(payload);
+
+  // Bongkar rekursif field wireType=2 hingga 16 KB (hilangkan batas kecil 128 byte agar field #31 / deviceSentMessage terbuka penuh)
+  if ((!asciiPrintable || len > 512) && depth < maxDepth && len >= 2 && len <= 16384) {
+    const nested = inspectProtobufWireStrict(payload, maxDepth, depth + 1);
+    if (nested) {
+      return {
+        field,
+        wireType: 2,
+        len,
+        subFields: nested
+      };
+    }
+  }
+
+  if (asciiPrintable) {
+    const utf8 = Buffer.from(payload).toString('utf8').slice(0, 300);
+    return {
+      field,
+      wireType: 2,
+      len,
+      utf8,
+      previewUtf8: utf8
+    };
+  }
+
+  return {
+    field,
+    wireType: 2,
+    len,
+    hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex')
+  };
+}
+
 /**
- * Parse raw protobuf wire bytes tanpa skema statis (menangkap unknown fields yang dibuang WAProto).
+ * Parse raw protobuf wire bytes tanpa skema statis (menangkap unknown fields & sub-message hingga 16 KB / kedalaman 8).
  */
-function inspectProtobufWire(uint8Array, maxDepth = 4, depth = 0) {
+function inspectProtobufWire(uint8Array, maxDepth = 8, depth = 0) {
   if (!uint8Array || uint8Array.length === 0) return [];
   const bytes = uint8Array instanceof Uint8Array ? uint8Array : Buffer.from(uint8Array);
   const reader = Reader.create(bytes);
@@ -138,7 +263,7 @@ function inspectProtobufWire(uint8Array, maxDepth = 4, depth = 0) {
   let count = 0;
 
   try {
-    while (reader.pos < reader.len && count < 64) {
+    while (reader.pos < reader.len && count < 256) {
       count++;
       const tag = reader.uint32();
       const field = tag >>> 3;
@@ -159,65 +284,37 @@ function inspectProtobufWire(uint8Array, maxDepth = 4, depth = 0) {
         if (reader.pos + 8 > reader.len) break;
         const slice = bytes.subarray(reader.pos, reader.pos + 8);
         reader.pos += 8;
+        const fixedHex = Buffer.from(slice).toString('hex');
         fields.push({
           field,
           wireType: 1,
           len: 8,
-          hex: Buffer.from(slice).toString('hex')
+          fixedHex,
+          hex: fixedHex
         });
       } else if (wireType === 2) {
         const len = reader.uint32();
         if (reader.pos + len > reader.len) break;
         const payload = bytes.subarray(reader.pos, reader.pos + len);
         reader.pos += len;
-
-        if (len > 128) {
-          fields.push({
-            field,
-            wireType: 2,
-            len,
-            hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex')
-          });
-        } else if (isPrintableAsciiUtf8(payload)) {
-          fields.push({
-            field,
-            wireType: 2,
-            len,
-            previewUtf8: Buffer.from(payload).toString('utf8')
-          });
-        } else if (depth < maxDepth && len >= 2) {
-          const nested = inspectProtobufWireStrict(payload, maxDepth, depth + 1);
-          if (nested) {
-            fields.push({
-              field,
-              wireType: 2,
-              len,
-              subFields: nested
-            });
-          } else {
-            fields.push({
-              field,
-              wireType: 2,
-              len,
-              hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex')
-            });
-          }
-        } else {
-          fields.push({
-            field,
-            wireType: 2,
-            len,
-            hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex')
-          });
-        }
+        fields.push(decodeLengthDelimitedNode(field, payload, maxDepth, depth));
       } else if (wireType === 5) {
         if (reader.pos + 4 > reader.len) break;
-        const val = reader.fixed32();
+        const slice = bytes.subarray(reader.pos, reader.pos + 4);
+        const fixedHex = Buffer.from(slice).toString('hex');
+        const intVal = reader.fixed32();
+        let floatVal = null;
+        try {
+          floatVal = Number(Buffer.from(slice).readFloatLE(0).toFixed(6));
+        } catch (_) {}
         fields.push({
           field,
           wireType: 5,
           len: 4,
-          value: val
+          fixedHex,
+          intValue: intVal,
+          value: intVal,
+          ...(floatVal !== null && Number.isFinite(floatVal) ? { floatValue: floatVal } : {})
         });
       } else {
         break;
@@ -234,7 +331,7 @@ function inspectProtobufWireStrict(bytes, maxDepth, depth) {
   const reader = Reader.create(bytes);
   const sub = [];
   try {
-    while (reader.pos < reader.len && sub.length < 48) {
+    while (reader.pos < reader.len && sub.length < 128) {
       const tag = reader.uint32();
       const field = tag >>> 3;
       const wireType = tag & 7;
@@ -248,29 +345,32 @@ function inspectProtobufWireStrict(bytes, maxDepth, depth) {
         if (reader.pos + 8 > reader.len) return null;
         const slice = bytes.subarray(reader.pos, reader.pos + 8);
         reader.pos += 8;
-        sub.push({ field, wireType: 1, len: 8, hex: Buffer.from(slice).toString('hex') });
+        const fixedHex = Buffer.from(slice).toString('hex');
+        sub.push({ field, wireType: 1, len: 8, fixedHex, hex: fixedHex });
       } else if (wireType === 2) {
         const len = reader.uint32();
         if (reader.pos + len > reader.len) return null;
         const payload = bytes.subarray(reader.pos, reader.pos + len);
         reader.pos += len;
-        if (len > 128) {
-          sub.push({ field, wireType: 2, len, hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex') });
-        } else if (isPrintableAsciiUtf8(payload)) {
-          sub.push({ field, wireType: 2, len, previewUtf8: Buffer.from(payload).toString('utf8') });
-        } else if (depth < maxDepth && len >= 2) {
-          const deeper = inspectProtobufWireStrict(payload, maxDepth, depth + 1);
-          if (deeper) {
-            sub.push({ field, wireType: 2, len, subFields: deeper });
-          } else {
-            sub.push({ field, wireType: 2, len, hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex') });
-          }
-        } else {
-          sub.push({ field, wireType: 2, len, hexHead: Buffer.from(payload.subarray(0, 16)).toString('hex') });
-        }
+        sub.push(decodeLengthDelimitedNode(field, payload, maxDepth, depth));
       } else if (wireType === 5) {
         if (reader.pos + 4 > reader.len) return null;
-        sub.push({ field, wireType: 5, len: 4, value: reader.fixed32() });
+        const slice = bytes.subarray(reader.pos, reader.pos + 4);
+        const fixedHex = Buffer.from(slice).toString('hex');
+        const intVal = reader.fixed32();
+        let floatVal = null;
+        try {
+          floatVal = Number(Buffer.from(slice).readFloatLE(0).toFixed(6));
+        } catch (_) {}
+        sub.push({
+          field,
+          wireType: 5,
+          len: 4,
+          fixedHex,
+          intValue: intVal,
+          value: intVal,
+          ...(floatVal !== null && Number.isFinite(floatVal) ? { floatValue: floatVal } : {})
+        });
       } else {
         return null;
       }
@@ -417,7 +517,7 @@ function ensureDecodeWrapped(protoCls) {
           if (sliced.length >= 2 && sliced.length <= 65536) {
             const decodedKeys = decoded && typeof decoded === 'object' ? Object.keys(decoded) : [];
             const now = Date.now();
-            if (sliced.length <= 16384) {
+            if (sliced.length <= 32768) {
               pushRecentRawByteSnapshot({
                 capturedAt: now,
                 byteLength: sliced.length,
@@ -437,7 +537,7 @@ function ensureDecodeWrapped(protoCls) {
             }
 
             if (needsFullWireParse) {
-              const wireTree = inspectProtobufWire(sliced, 7);
+              const wireTree = inspectProtobufWire(sliced, 8);
               const frame = {
                 capturedAt: now,
                 byteLength: sliced.length,
@@ -839,11 +939,48 @@ function extractTextAndQuoted(rawMessage) {
   };
 }
 
+/**
+ * Masuk ke dalam wrapper Message (termasuk field 31 deviceSentMessage -> field 2) dan beri label setiap top-level field.
+ */
+function extractOpaqueInnerMessageTree(rawWireTree = []) {
+  if (!Array.isArray(rawWireTree) || rawWireTree.length === 0) return [];
+
+  let current = rawWireTree;
+  for (let depth = 0; depth < 6 && Array.isArray(current); depth++) {
+    let unwrapped = null;
+    for (const node of current) {
+      const wrapper = node && WRAPPER_TAG_TO_INNER[Number(node.field)];
+      if (wrapper && Array.isArray(node.subFields)) {
+        const innerHolder = node.subFields.find((s) => Number(s.field) === wrapper.innerTag);
+        if (innerHolder && Array.isArray(innerHolder.subFields)) {
+          unwrapped = innerHolder.subFields;
+          break;
+        }
+      }
+    }
+    if (!unwrapped) break;
+    current = unwrapped;
+  }
+
+  return current.map((node) => {
+    const fid = Number(node.field);
+    const knownName = KNOWN_MESSAGE_TAG_NAMES[fid] || null;
+    return {
+      ...node,
+      field: fid,
+      knownMessageFieldName: knownName,
+      fieldLabel: knownName || `UNKNOWN_TOP_FIELD_#${fid}`
+    };
+  });
+}
+
 module.exports = {
   KNOWN_WA_PROTO_FIELDS,
+  KNOWN_MESSAGE_TAG_NAMES,
   inspectProtobufWire,
   verifyWireBytesStrict,
   diffUnknownWireFields,
+  extractOpaqueInnerMessageTree,
   armSafeProtoDecodeObserver,
   disarmSafeProtoDecodeObserver,
   getRecentRawWireFrames,

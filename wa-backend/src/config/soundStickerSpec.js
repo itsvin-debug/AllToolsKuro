@@ -123,7 +123,19 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
     return getGlobalSoundStickerSpec();
   }
 
+  // Tolak keras blueprint gagal dekripsi (stub: 2) atau paket wire kosong tanpa struktur
+  if (blueprint.stubType !== null && blueprint.stubType !== undefined) {
+    return getGlobalSoundStickerSpec();
+  }
+
   const mi = blueprint.mediaInspection && typeof blueprint.mediaInspection === 'object' ? blueprint.mediaInspection : {};
+  const hasOpaqueFields = Array.isArray(blueprint.opaqueInnerFields) && blueprint.opaqueInnerFields.length > 0;
+  const hasWireTree = Array.isArray(blueprint.rawWireTree) && blueprint.rawWireTree.length > 0;
+  const rawBytesLen = Number(blueprint.rawWireBytesLength || blueprint.quotedWireBytes || 0);
+  if (rawBytesLen === 0 && !hasOpaqueFields && !hasWireTree && !(Number(mi.totalBytes) > 0)) {
+    return getGlobalSoundStickerSpec();
+  }
+
   const sm = (blueprint.innerMeta || blueprint.stickerMeta || {}) && typeof (blueprint.innerMeta || blueprint.stickerMeta) === 'object'
     ? (blueprint.innerMeta || blueprint.stickerMeta)
     : {};
@@ -241,6 +253,8 @@ function promoteVerifiedBlueprintToGlobalSpec(blueprint) {
     innerMeta: activeSpec.protoPatchRules.innerMeta,
     unknownWireFields,
     rawWireTree: Array.isArray(blueprint.rawWireTree) ? blueprint.rawWireTree.slice(0, 32) : [],
+    opaqueInnerFields: Array.isArray(blueprint.opaqueInnerFields) ? blueprint.opaqueInnerFields.slice(0, 32) : [],
+    rawWireBytesLength: Number(blueprint.rawWireBytesLength || blueprint.quotedWireBytes || 0) || undefined,
     decryptErrors: blueprint.decryptErrors && typeof blueprint.decryptErrors === 'object' ? blueprint.decryptErrors : undefined,
     quotedWireBytes: Number(blueprint.quotedWireBytes) || undefined,
     matchedCachedSticker: Boolean(blueprint.matchedCachedSticker),

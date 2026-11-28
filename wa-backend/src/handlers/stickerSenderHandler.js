@@ -36,6 +36,7 @@ const {
   inspectProtobufWire,
   verifyWireBytesStrict,
   diffUnknownWireFields,
+  extractOpaqueInnerMessageTree,
   getRecentRawWireFrames,
   getRecentRawWireBytesSnapshots,
   appendWireFieldsToEncodedMessage,
@@ -708,6 +709,8 @@ function sanitizeBlueprint(raw) {
     unknownWireFields: unknownList,
     unknownWireTags: unknownList,
     rawWireTree: Array.isArray(raw.rawWireTree) ? raw.rawWireTree.slice(0, 32) : [],
+    opaqueInnerFields: Array.isArray(raw.opaqueInnerFields) ? raw.opaqueInnerFields.slice(0, 32) : [],
+    rawWireBytesLength: Number(raw.rawWireBytesLength || raw.quotedWireBytes || 0) || undefined,
     innerMeta: normalizedMeta,
     stickerMeta: normalizedMeta,
     mediaInspection: {
@@ -1071,6 +1074,11 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         continue;
       }
 
+      // Tolak pesan stub E2EE (misal stub: 2 / No session) agar tidak pernah jadi blueprint kosong
+      if (msg.messageStubType !== null && msg.messageStubType !== undefined) {
+        continue;
+      }
+
       const now = Date.now();
       const recentStanzas = Array.isArray(curSession.recentSelfStanzas) ? curSession.recentSelfStanzas : [];
       const fallbackStanzas = Array.isArray(curSession.lastCbMessageMeta) ? curSession.lastCbMessageMeta : [];
@@ -1086,7 +1094,7 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         if (proto?.Message?.encode && (msg.message || innerMessage)) {
           const bytes = proto.Message.encode(msg.message || innerMessage).finish();
           encodedBytesLen = bytes.length;
-          encodedProtoWireTree = inspectProtobufWire(bytes, 4);
+          encodedProtoWireTree = inspectProtobufWire(bytes, 8);
         }
       } catch (_) {}
 
@@ -1109,6 +1117,7 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         null;
 
       const rawWireTree = matchedWirePacket?.wireTree?.length ? matchedWirePacket.wireTree : encodedProtoWireTree;
+      const opaqueInnerFields = extractOpaqueInnerMessageTree(rawWireTree);
       const unknownWireFields = diffUnknownWireFields(rawWireTree);
 
       const hasOpaqueOrUnknownProto = Boolean(
@@ -1119,13 +1128,17 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         mediaTarget ||
           stickerNode ||
           msg.message?.deviceSentMessage ||
-          msg.messageStubType ||
           unknownWireFields.length > 0 ||
           hasOpaqueOrUnknownProto ||
           (matchedStanza && matchedStanza.mediatype === 'sticker')
       );
 
       if (!shouldCaptureBlueprint) {
+        continue;
+      }
+
+      const rawBytesTotal = Number(matchedWirePacket?.byteLength || encodedBytesLen || 0);
+      if (rawBytesTotal === 0 && opaqueInnerFields.length === 0 && !mediaTarget) {
         continue;
       }
 
@@ -1182,6 +1195,8 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
         unknownWireFields,
         unknownWireTags: unknownWireFields,
         rawWireTree,
+        opaqueInnerFields,
+        rawWireBytesLength: rawBytesTotal,
         mediaInspection,
         decryptErrors,
         messageKeys: innerKeys,
@@ -1190,7 +1205,28 @@ async function processCalibrationUpsert(io, sessionId, session, { messages, type
       };
 
       const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
-      curSession.soundStickerBlueprint = blueprint;
+      const existingHasRich = Boolean(
+        curSession.soundStickerBlueprint &&
+          ((Array.isArray(curSession.soundStickerBlueprint.opaqueInnerFields) && curSession.soundStickerBlueprint.opaqueInnerFields.length > 0) ||
+            curSession.soundStickerBlueprint.mediaInspection?.totalBytes > 0)
+      );
+      const incomingHasRich = Boolean(opaqueInnerFields.length > 0 || mediaInspection?.totalBytes > 0);
+      if (!existingHasRich || incomingHasRich) {
+        curSession.soundStickerBlueprint = blueprint;
+      }
+      if (nonContextKeys.length === 0 || opaqueInnerFields.some((f) => String(f.fieldLabel || '').startsWith('UNKNOWN_TOP_FIELD_'))) {
+        console.log(
+          '[OPAQUE-WIRE-DUMP]',
+          JSON.stringify({
+            msgId: msg.key.id || null,
+            remoteJid: remoteRaw || participantRaw || null,
+            stanzaMeta: rawBlueprint.stanzaMeta,
+            totalBytes: rawBytesTotal,
+            opaqueInnerFields,
+            rawWireTree
+          })
+        );
+      }
       const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
 
       pushCalibrationLog(io, sessionId, curSession, {
@@ -1282,6 +1318,11 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       return null;
     }
 
+    // Tolak pesan stub E2EE (misal stub: 2 / No session) pada jalur auto-dump
+    if (msg.messageStubType !== null && msg.messageStubType !== undefined && !isKlonCmd) {
+      return null;
+    }
+
     const inspectedSource = targetRaw || {};
     const { innerMessage: tInner, wrapperChain } = unwrapMessageContent(inspectedSource);
     const topKeys = Object.keys(inspectedSource);
@@ -1307,15 +1348,15 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       if (targetRaw && proto?.Message?.encode) {
         const bytes = proto.Message.encode(targetRaw).finish();
         encodedBytes = bytes.length;
-        encodedWireTree = inspectProtobufWire(bytes, 7);
+        encodedWireTree = inspectProtobufWire(bytes, 8);
       }
     } catch (_) {}
 
-    const rawSnaps = getRecentRawWireBytesSnapshots(4000).map((s) => ({
+    const rawSnaps = getRecentRawWireBytesSnapshots(5000).map((s) => ({
       capturedAt: s.capturedAt,
       byteLength: s.byteLength,
       decodedKeys: s.decodedKeys || [],
-      wireTree: inspectProtobufWire(s.rawBytes, 7)
+      wireTree: inspectProtobufWire(s.rawBytes, 8)
     }));
     const globalFrames = getRecentRawWireFrames();
     const sessionFrames = Array.isArray(activeSession.lastRawWirePackets) ? activeSession.lastRawWirePackets : [];
@@ -1331,9 +1372,13 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       candidates[candidates.length - 1] ||
       null;
 
-    const cachedWireTree = cachedSticker?.rawWireBytes ? inspectProtobufWire(cachedSticker.rawWireBytes, 7) : [];
+    const cachedWireTree = cachedSticker?.rawWireBytes ? inspectProtobufWire(cachedSticker.rawWireBytes, 8) : [];
     const rawWireTree = matchedWirePacket?.wireTree?.length ? matchedWirePacket.wireTree : encodedWireTree;
+    const effectiveWireTree = rawWireTree.length > 0 ? rawWireTree : cachedWireTree;
+    const opaqueInnerFields = extractOpaqueInnerMessageTree(effectiveWireTree);
+    const rawWireBytesLength = Number(matchedWirePacket?.byteLength || cachedSticker?.rawWireBytes?.length || encodedBytes || 0);
 
+    // Gabungkan unknown tags dari pesan reply & pesan stiker asli yang ter-cache (deduplikasi)
     const unknownMap = new Map();
     for (const entry of [...diffUnknownWireFields(rawWireTree), ...diffUnknownWireFields(cachedWireTree)]) {
       const k = `${entry.scope}:${entry.parentField || 0}:${entry.field}:${entry.wireType}`;
@@ -1348,6 +1393,15 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       mediaTarget,
       stickerNode
     });
+
+    // Tolak blueprint kosong tanpa isi wire & tanpa media agar tidak menimpa blueprint valid
+    if (rawWireBytesLength === 0 && opaqueInnerFields.length === 0 && !(mediaInspection?.totalBytes > 0)) {
+      if (isKlonCmd) {
+        const emptyMsg = '⚠️ Data wire & media stiker kosong (tidak dapat diinspeksi). Coba balas 1 stiker lain dengan .klon.';
+        await sendOfficialSelfMessage(io, sessionId, activeSession, selfJid, { text: emptyMsg }, '.klon empty-capture').catch(() => {});
+      }
+      return null;
+    }
 
     const mergedInnerKeys = innerKeys.length > 0 ? innerKeys : (cachedSticker?.innerKeys || []);
     const mergedNonContext = nonContext.length > 0 ? nonContext : mergedInnerKeys.filter((k) => k !== 'messageContextInfo');
@@ -1394,7 +1448,9 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       stickerMeta: innerMeta,
       unknownWireFields,
       unknownWireTags: unknownWireFields,
-      rawWireTree: rawWireTree.length > 0 ? rawWireTree : cachedWireTree,
+      rawWireTree: effectiveWireTree,
+      opaqueInnerFields,
+      rawWireBytesLength,
       mediaInspection,
       decryptErrors,
       messageKeys: mergedInnerKeys,
@@ -1405,7 +1461,15 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
     };
 
     const blueprint = sanitizeBlueprint(rawBlueprint) || rawBlueprint;
-    activeSession.soundStickerBlueprint = blueprint;
+    const existingHasRich = Boolean(
+      activeSession.soundStickerBlueprint &&
+        ((Array.isArray(activeSession.soundStickerBlueprint.opaqueInnerFields) && activeSession.soundStickerBlueprint.opaqueInnerFields.length > 0) ||
+          activeSession.soundStickerBlueprint.mediaInspection?.totalBytes > 0)
+    );
+    const incomingHasRich = Boolean(opaqueInnerFields.length > 0 || mediaInspection?.totalBytes > 0);
+    if (!existingHasRich || incomingHasRich) {
+      activeSession.soundStickerBlueprint = blueprint;
+    }
     const globalSpec = promoteVerifiedBlueprintToGlobalSpec(blueprint);
 
     const dumpObject = {
@@ -1426,12 +1490,26 @@ async function inspectAndDumpSticker(io, sessionId, session, msg, opts = {}) {
       customChunks: Array.isArray(mediaInspection?.customChunks) ? mediaInspection.customChunks : [],
       exifJson: mediaInspection?.exifJson || null,
       trackCodecs: Array.isArray(mediaInspection?.trackCodecs) ? mediaInspection.trackCodecs : [],
+      opaqueInnerFields,
       unknownTags: unknownWireFields.map((t) => `#${t.field}:w${t.wireType}:${t.scope}`),
       decryptErrors,
       specMode: globalSpec.mode,
       deliveryRoute: globalSpec.deliveryRoute
     };
     console.log('[STICKER-DUMP]', JSON.stringify(dumpObject));
+    if (triggerReason === 'auto-opaque-proto' || topKeys.length === 0 || opaqueInnerFields.some((f) => String(f.fieldLabel || '').startsWith('UNKNOWN_TOP_FIELD_'))) {
+      console.log(
+        '[OPAQUE-WIRE-DUMP]',
+        JSON.stringify({
+          msgId: blueprint.msgId,
+          remoteJid: msg.key.remoteJid || selfJid,
+          stanzaMeta: blueprint.stanzaMeta,
+          totalBytes: rawWireBytesLength,
+          opaqueInnerFields,
+          rawWireTree: effectiveWireTree
+        })
+      );
+    }
     if (isKlonCmd) {
       console.log('[KLON-RESULT]', JSON.stringify(dumpObject));
     }
