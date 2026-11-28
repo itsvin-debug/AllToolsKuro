@@ -565,6 +565,81 @@ async function canvasToWebpBytes(canvas, quality) {
   return new Uint8Array(buf);
 }
 
+async function seekVideoFast(videoEl, targetTime, timeoutMs = 95) {
+  if (Math.abs((videoEl.currentTime || 0) - targetTime) < 0.015) return;
+  await new Promise((resolve) => {
+    let done = false;
+    let timer = null;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      videoEl.removeEventListener('seeked', finish);
+      resolve();
+    };
+    videoEl.addEventListener('seeked', finish, { once: true });
+    try {
+      if (typeof videoEl.fastSeek === 'function' && Math.abs(targetTime - (videoEl.currentTime || 0)) > 1.0) {
+        videoEl.fastSeek(targetTime);
+      } else {
+        videoEl.currentTime = targetTime;
+      }
+    } catch {
+      videoEl.currentTime = targetTime;
+    }
+    timer = setTimeout(finish, timeoutMs);
+  });
+}
+
+async function decodeWebpFrameDrawable(webpBytes) {
+  const blob = new Blob([webpBytes], { type: 'image/webp' });
+  if (typeof createImageBitmap === 'function') {
+    const bitmap = await createImageBitmap(blob);
+    return { drawable: bitmap, cleanup: () => bitmap.close() };
+  }
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.src = url;
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('Gagal mendecode frame WebP.'));
+  });
+  return {
+    drawable: img,
+    cleanup: () => {
+      try { URL.revokeObjectURL(url); } catch {}
+    }
+  };
+}
+
+// Perkecil & kompres ulang frame WebP yang sudah diekstrak tanpa mengulang decode video MP4
+async function reencodeFramesToSize(framesPayload, targetSize, quality) {
+  const canvas = document.createElement('canvas');
+  canvas.width = targetSize;
+  canvas.height = targetSize;
+  const ctx = canvas.getContext('2d', { alpha: true });
+  const resized = [];
+  try {
+    for (const frame of framesPayload) {
+      const decoded = await decodeWebpFrameDrawable(frame.webpBytes);
+      try {
+        ctx.clearRect(0, 0, targetSize, targetSize);
+        ctx.drawImage(decoded.drawable, 0, 0, targetSize, targetSize);
+      } finally {
+        decoded.cleanup();
+      }
+      const webpBytes = await canvasToWebpBytes(canvas, quality);
+      resized.push({ webpBytes, durationMs: frame.durationMs });
+    }
+    return resized;
+  } finally {
+    try {
+      canvas.width = 0;
+      canvas.height = 0;
+    } catch {}
+  }
+}
+
 /**
  * Buat Blob Stiker WebP 1:1 (Statis atau Animasi Adaptif <= 470 KB) dengan WhatsApp EXIF
  */
@@ -581,6 +656,7 @@ export async function buildWaWebpStickerBlob({
   canvas.width = 512;
   canvas.height = 512;
   const ctx = canvas.getContext('2d', { alpha: true });
+  let baseFrames = [];
 
   try {
     const needsAnim = Boolean(isAnimated && (isVideoEl || renderOptions.motionEffect !== 'static'));
@@ -610,67 +686,51 @@ export async function buildWaWebpStickerBlob({
       : clipDur;
     const seekBase = Math.min(Math.max(0, videoTotalDur - 0.1), rawStart);
 
-    const encodePasses = [
-      { size: clipDur <= 3 ? 512 : 384, fps: 10, maxFrames: 50, quality: 0.58 },
-      { size: 320, fps: 8, maxFrames: 40, quality: 0.45 },
-      { size: 256, fps: 6, maxFrames: 32, quality: 0.35 },
-      { size: 224, fps: 5, maxFrames: 25, quality: 0.26 },
-      { size: 192, fps: 4, maxFrames: 20, quality: 0.20 }
+    // Sampling 1x di 256x256 (maks 16-24 frame) agar proses di HP selesai ~1-3 detik
+    const baseSize = 256;
+    const baseFps = clipDur <= 3 ? 8 : 6;
+    const maxFrameCap = clipDur <= 3 ? 22 : 20;
+    const baseQuality = clipDur <= 3 ? 0.40 : 0.34;
+    const totalFrames = Math.min(24, Math.max(2, Math.min(maxFrameCap, Math.round(clipDur * baseFps))));
+    const stepSec = clipDur / totalFrames;
+    const frameDurationMs = Math.max(40, Math.round(stepSec * 1000));
+
+    canvas.width = baseSize;
+    canvas.height = baseSize;
+
+    for (let i = 0; i < totalFrames; i++) {
+      const tSec = i * stepSec;
+      if (isVideoEl) {
+        const seekTime = videoTotalDur > 0.1 ? (seekBase + (tSec % videoTotalDur)) % videoTotalDur : 0;
+        await seekVideoFast(sourceMedia, seekTime);
+      }
+
+      renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, canvasSize: baseSize }, tSec);
+      const webpBytes = await canvasToWebpBytes(canvas, baseQuality);
+      baseFrames.push({ webpBytes, durationMs: frameDurationMs });
+      onProgress?.(Math.min(80, Math.round(((i + 1) / totalFrames) * 80)));
+    }
+
+    let workingFrames = baseFrames;
+    let workingSize = baseSize;
+    let finalMuxed = muxAnimatedWebp(workingFrames, packMeta, workingSize, { enforceAnimCap: false });
+
+    const resizeSteps = [
+      { size: 224, quality: 0.27 },
+      { size: 192, quality: 0.21 }
     ];
-
-    let finalMuxed = null;
-    let lastFrames = [];
-    let lastPassSize = 192;
-
-    for (let pIdx = 0; pIdx < encodePasses.length; pIdx++) {
-      const pass = encodePasses[pIdx];
-      canvas.width = pass.size;
-      canvas.height = pass.size;
-      lastPassSize = pass.size;
-
-      const totalFrames = Math.min(pass.maxFrames, Math.max(2, Math.round(clipDur * pass.fps)));
-      const stepSec = clipDur / totalFrames;
-      const frameDurationMs = Math.max(40, Math.round(stepSec * 1000));
-      const frames = [];
-
-      for (let i = 0; i < totalFrames; i++) {
-        const tSec = i * stepSec;
-        if (isVideoEl) {
-          const seekTime = videoTotalDur > 0.1 ? (seekBase + (tSec % videoTotalDur)) % videoTotalDur : 0;
-          await new Promise((resolve) => {
-            let done = false;
-            const finish = () => {
-              if (!done) {
-                done = true;
-                sourceMedia.removeEventListener('seeked', finish);
-                resolve();
-              }
-            };
-            sourceMedia.addEventListener('seeked', finish, { once: true });
-            sourceMedia.currentTime = seekTime;
-            setTimeout(finish, 180);
-          });
-        }
-
-        renderStickerCanvasFrame(ctx, sourceMedia, { ...renderOptions, canvasSize: pass.size }, tSec);
-        const webpBytes = await canvasToWebpBytes(canvas, pass.quality);
-        frames.push({ webpBytes, durationMs: frameDurationMs });
-        onProgress?.(Math.min(92, Math.round(((i + 1) / totalFrames) * 85)));
-      }
-
-      const muxed = muxAnimatedWebp(frames, packMeta, pass.size, { enforceAnimCap: false });
-      lastFrames = frames;
-      if (muxed.byteLength <= MAX_ANIMATED_WEBP_BYTES) {
-        validateWaWebpBinary(muxed, { expectAnimated: true });
-        finalMuxed = muxed;
-        break;
-      }
+    for (const step of resizeSteps) {
+      if (finalMuxed.byteLength <= MAX_ANIMATED_WEBP_BYTES) break;
+      workingFrames = await reencodeFramesToSize(baseFrames, step.size, step.quality);
+      workingSize = step.size;
+      finalMuxed = muxAnimatedWebp(workingFrames, packMeta, workingSize, { enforceAnimCap: false });
     }
 
-    if (!finalMuxed && lastFrames.length > 0) {
-      finalMuxed = fitAnimatedFramesWithinLimit(lastFrames, packMeta, lastPassSize, MAX_ANIMATED_WEBP_BYTES);
+    if (finalMuxed.byteLength > MAX_ANIMATED_WEBP_BYTES) {
+      finalMuxed = fitAnimatedFramesWithinLimit(workingFrames, packMeta, workingSize, MAX_ANIMATED_WEBP_BYTES);
+    } else {
+      validateWaWebpBinary(finalMuxed, { expectAnimated: true });
     }
-    lastFrames = [];
 
     if (!finalMuxed || finalMuxed.byteLength <= 200) {
       throw new Error('Hasil stiker WebP kosong atau gagal dikodekan.');
@@ -679,6 +739,7 @@ export async function buildWaWebpStickerBlob({
     onProgress?.(100);
     return new Blob([finalMuxed], { type: 'image/webp' });
   } finally {
+    baseFrames = [];
     try {
       canvas.width = 0;
       canvas.height = 0;
@@ -938,15 +999,15 @@ export function releaseMediaElement(mediaEl, objectUrl) {
 }
 
 export function createSquareThumbnailDataUrl(sourceMedia, renderOptions = {}) {
+  const fullCanvas = document.createElement('canvas');
+  const thumbCanvas = document.createElement('canvas');
   try {
     validateSourceMediaDimensions(sourceMedia);
-    const fullCanvas = document.createElement('canvas');
     fullCanvas.width = 512;
     fullCanvas.height = 512;
     const fullCtx = fullCanvas.getContext('2d', { alpha: true });
     renderStickerCanvasFrame(fullCtx, sourceMedia, renderOptions, 0);
 
-    const thumbCanvas = document.createElement('canvas');
     thumbCanvas.width = 160;
     thumbCanvas.height = 160;
     const thumbCtx = thumbCanvas.getContext('2d', { alpha: true });
@@ -954,6 +1015,13 @@ export function createSquareThumbnailDataUrl(sourceMedia, renderOptions = {}) {
     return thumbCanvas.toDataURL('image/webp', 0.72);
   } catch {
     return '';
+  } finally {
+    try {
+      fullCanvas.width = 0;
+      fullCanvas.height = 0;
+      thumbCanvas.width = 0;
+      thumbCanvas.height = 0;
+    } catch {}
   }
 }
 
@@ -1112,12 +1180,12 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     if (!audioBuf && item.audioFile) {
       audioBuf = await decodeMediaToAudioBuffer(item.audioFile);
     } else if (!audioBuf && isVideo) {
-      audioBuf = await decodeMediaToAudioBuffer(item.visualFile).catch(() => null);
+      audioBuf = await decodeMediaToAudioBuffer(item.visualFile);
     }
 
     const totalAudioDur = audioBuf ? audioBuf.duration : Number(item.totalDuration) || 5;
     const safeStart = Math.max(0, Number(item.startSec) || 0);
-    const safeEnd = Math.max(safeStart + 0.3, Math.min(totalAudioDur, Number(item.endSec) || totalAudioDur));
+    const safeEnd = Math.max(safeStart + 0.2, Math.min(totalAudioDur, Number(item.endSec) || totalAudioDur));
     const durationSec = Math.max(0.5, Number((safeEnd - safeStart).toFixed(1)));
 
     const videoClipStart = Math.max(0, Number(item.videoStartSec ?? safeStart) || 0);
@@ -1142,14 +1210,35 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       packName: item.packName || 'Kuro Sound Sticker',
       publisher: item.packPublisher || 'Kuro Studio'
     };
-    const rawWebpBlob = await buildWaWebpStickerBlob({
-      sourceMedia: mediaEl,
-      isAnimated: willAnimate,
-      durationSec: isVideo ? Math.min(8, videoClipEnd - videoClipStart) : Math.min(8, durationSec),
-      renderOptions,
-      packMeta,
-      onProgress: (p) => onProgress?.(Math.min(72, Math.round(p * 0.72)))
-    });
+
+    // Rakit WebP & encode audio secara paralel agar total waktu antrean cepat
+    const encodeAudioPromise = audioBuf
+      ? (async () => {
+          const trimmedAudio = await renderTrimmedAudioBuffer(audioBuf, {
+            startSec: safeStart,
+            endSec: safeEnd,
+            volume: item.volume ?? 1,
+            fadeSmooth: item.fadeSmooth !== false
+          });
+          const enc = await encodeTrimmedAudio(trimmedAudio);
+          if (!enc?.blob || enc.blob.size <= 100 || enc.blob.size > 1024 * 1024) {
+            throw new Error('Gagal mengodekan trek suara stiker.');
+          }
+          return enc;
+        })()
+      : Promise.resolve(null);
+
+    const [rawWebpBlob, encAudio] = await Promise.all([
+      buildWaWebpStickerBlob({
+        sourceMedia: mediaEl,
+        isAnimated: willAnimate,
+        durationSec: isVideo ? Math.min(8, videoClipEnd - videoClipStart) : Math.min(8, durationSec),
+        renderOptions,
+        packMeta,
+        onProgress: (p) => onProgress?.(Math.min(72, Math.round(p * 0.72)))
+      }),
+      encodeAudioPromise
+    ]);
 
     let finalWebpBlob = rawWebpBlob;
     let finalIsAnimated = willAnimate;
@@ -1172,13 +1261,22 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
     let audioBase64;
     let audioMime;
     let audioM4aBase64;
+    let audioOpusBase64 = '';
     let muxedMp4Base64;
     let muxedWebmBase64;
     let thumbnailJpegBase64;
     let thumbnailPngBase64;
 
+    if (encAudio?.blob) {
+      audioBase64 = await blobToBase64Local(encAudio.blob);
+      audioMime = encAudio.mimeType || 'audio/mp4';
+      if (encAudio.ext === 'ogg') audioOpusBase64 = audioBase64;
+      else if (encAudio.ext === 'm4a') audioM4aBase64 = audioBase64;
+    }
+
+    const thumbCanvas = document.createElement('canvas');
+    const pngCanvas = document.createElement('canvas');
     try {
-      const thumbCanvas = document.createElement('canvas');
       thumbCanvas.width = 256;
       thumbCanvas.height = 256;
       const thumbCtx = thumbCanvas.getContext('2d', { alpha: false });
@@ -1188,7 +1286,6 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
       if (commaIdx !== -1) thumbnailJpegBase64 = dataUrl.slice(commaIdx + 1);
 
       for (const dim of [96, 64]) {
-        const pngCanvas = document.createElement('canvas');
         pngCanvas.width = dim;
         pngCanvas.height = dim;
         const pngCtx = pngCanvas.getContext('2d', { alpha: true });
@@ -1202,30 +1299,12 @@ export async function buildStickerSendPayload({ item, blueprint, onProgress }) {
         }
         if (!thumbnailPngBase64 && b64) thumbnailPngBase64 = b64;
       }
-    } catch {}
-
-    // Selalu rakit potongan audio & video 512x512 bersuara saat audio tersedia (Jalur A/B/C)
-    let trimmedAudio = null;
-    if (audioBuf) {
-      trimmedAudio = await renderTrimmedAudioBuffer(audioBuf, {
-        startSec: safeStart,
-        endSec: safeEnd,
-        volume: item.volume ?? 1,
-        fadeSmooth: item.fadeSmooth !== false
-      });
-    }
-
-    let audioOpusBase64 = '';
-    if (trimmedAudio) {
-      onProgress?.(78);
+    } catch {} finally {
       try {
-        const enc = await encodeTrimmedAudio(trimmedAudio);
-        if (enc?.blob && enc.blob.size > 100 && enc.blob.size <= 1024 * 1024) {
-          audioBase64 = await blobToBase64Local(enc.blob);
-          audioMime = enc.mimeType || 'audio/mp4';
-          if (enc.ext === 'ogg') audioOpusBase64 = audioBase64;
-          else if (enc.ext === 'm4a') audioM4aBase64 = audioBase64;
-        }
+        thumbCanvas.width = 0;
+        thumbCanvas.height = 0;
+        pngCanvas.width = 0;
+        pngCanvas.height = 0;
       } catch {}
     }
 

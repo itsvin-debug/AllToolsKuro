@@ -601,6 +601,7 @@ async function recordAudioBufferWithMediaRecorder(trimmedBuffer, mimeType) {
   }
 
   const dest = audioCtx.createMediaStreamDestination();
+  let source = null;
   let safetyTimer = null;
 
   try {
@@ -608,7 +609,7 @@ async function recordAudioBufferWithMediaRecorder(trimmedBuffer, mimeType) {
     const recBuf = audioCtx.createBuffer(1, trimmedBuffer.length, trimmedBuffer.sampleRate);
     recBuf.copyToChannel(trimmedBuffer.getChannelData(0), 0);
 
-    const source = audioCtx.createBufferSource();
+    source = audioCtx.createBufferSource();
     source.buffer = recBuf;
     source.connect(dest);
 
@@ -650,6 +651,10 @@ async function recordAudioBufferWithMediaRecorder(trimmedBuffer, mimeType) {
     });
   } finally {
     if (safetyTimer) clearTimeout(safetyTimer);
+    try {
+      source?.stop();
+      source?.disconnect();
+    } catch {}
     try {
       dest.stream.getTracks().forEach((t) => t.stop());
     } catch {}

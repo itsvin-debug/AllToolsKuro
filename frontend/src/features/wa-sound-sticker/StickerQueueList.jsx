@@ -114,7 +114,7 @@ export default function StickerQueueList({
         <div className="p-4 border-2 border-dashed border-black bg-neutral-50 text-center space-y-1">
           <p className="font-black text-xs text-black">Antrean masih kosong</p>
           <p className="text-[11px] font-semibold text-neutral-600 leading-snug">
-            Rakit lewat <b>Foto/Video + Sound</b> lalu tekan <b>Tambah ke Antrean</b>, atau unggah banyak video sekaligus di tab <b>Multi Video</b>.
+            Rakit lewat <b>Foto/Video + Sound</b> atau <b>Multi Video</b>, cek pratinjau, lalu tekan <b>+ Ke Antrean</b>.
           </p>
         </div>
       ) : (

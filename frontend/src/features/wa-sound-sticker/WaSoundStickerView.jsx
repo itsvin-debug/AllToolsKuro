@@ -18,6 +18,7 @@ import {
   Copy,
   Check,
   Volume2,
+  VolumeX,
   RefreshCw,
   LogOut,
   ShieldCheck,
@@ -26,7 +27,9 @@ import {
   Layers,
   Sparkles,
   ArrowRight,
-  Activity
+  Activity,
+  Eye,
+  Trash2
 } from 'lucide-react';
 import { copyTextToClipboard } from '../../shared/utils/clipboard';
 import { isValidPairingPhone, formatPairingCodeDisplay } from '../../shared/utils/waPhoneUtils';
@@ -65,7 +68,7 @@ const MAX_VISUAL_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_FILE_BYTES = 15 * 1024 * 1024;
 const RECOMMENDED_FULL_SEC = 8;
 const MAX_CLIP_DURATION_SEC = 8;
-const BATCH_DELAY_MS = 900;
+const BATCH_DELAY_MS = 1400;
 
 function formatTimeSec(sec = 0) {
   const safe = Math.max(0, parseDecimalSafe(sec, 0));
@@ -158,9 +161,13 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [isDecodingAudio, setIsDecodingAudio] = useState(false);
   const [isComposingStage1, setIsComposingStage1] = useState(false);
 
-  // ─── 2. MODE B: MULTI-UPLOAD VIDEO BERSUARA SEKALIGUS ───
+  // Mode B: daftar draft multi video untuk dicek & diatur sebelum masuk antrean atau dikirim
   const [multiMaxCapSec, setMultiMaxCapSec] = useState(8);
   const [isImportingMulti, setIsImportingMulti] = useState(false);
+  const [multiDraftItems, setMultiDraftItems] = useState([]);
+  const [activeDraftPreviewId, setActiveDraftPreviewId] = useState(null);
+  const [activeDraftMedia, setActiveDraftMedia] = useState(null);
+  const [playingDraftAudioId, setPlayingDraftAudioId] = useState(null);
 
   // ─── 3. ANTREAN BATCH ───
   const [stickerQueue, setStickerQueue] = useState([]);
@@ -168,12 +175,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
   const [batchProgress, setBatchProgress] = useState(null);
   const pendingSendResolversRef = useRef(new Map());
   const activeVisualUrlRef = useRef('');
+  const activeDraftMediaRef = useRef(null);
+  const activeDraftPreviewIdRef = useRef(null);
 
   const waveformCanvasRef = useRef(null);
   const trimPlayerRef = useRef(null);
+  const draftAudioPlayerRef = useRef(null);
   const visualInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const multiVideoInputRef = useRef(null);
+  const multiReplaceAudioInputRef = useRef(null);
+  const multiReplaceTargetIdRef = useRef(null);
 
   // ─── 4. KONEKSI WA TERISOLASI PER-PERANGKAT & KALIBRASI SKEMA ───
   const [{ sessionId, deviceToken }] = useState(() => getOrCreateDeviceCredentials());
@@ -222,8 +234,14 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
   useEffect(() => {
     trimPlayerRef.current = createSnippetPlayer();
+    draftAudioPlayerRef.current = createSnippetPlayer();
     return () => {
       trimPlayerRef.current?.stop();
+      draftAudioPlayerRef.current?.stop();
+      if (activeDraftMediaRef.current) {
+        releaseMediaElement(activeDraftMediaRef.current.mediaEl, activeDraftMediaRef.current.objectUrl);
+        activeDraftMediaRef.current = null;
+      }
       if (activeVisualUrlRef.current) {
         try { URL.revokeObjectURL(activeVisualUrlRef.current); } catch {}
       }
@@ -813,7 +831,55 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
-  // ─── MODE B: MULTI-UPLOAD BANYAK VIDEO SEKALIGUS KE ANTREAN ───
+  const closeDraftPreview = useCallback(() => {
+    draftAudioPlayerRef.current?.stop();
+    setPlayingDraftAudioId(null);
+    activeDraftPreviewIdRef.current = null;
+    setActiveDraftPreviewId(null);
+    if (activeDraftMediaRef.current) {
+      releaseMediaElement(activeDraftMediaRef.current.mediaEl, activeDraftMediaRef.current.objectUrl);
+      activeDraftMediaRef.current = null;
+    }
+    setActiveDraftMedia(null);
+  }, []);
+
+  const openDraftPreview = useCallback(
+    async (draftItem) => {
+      if (!draftItem?.visualFile) return;
+      if (activeDraftPreviewIdRef.current === draftItem.id && activeDraftMediaRef.current) {
+        closeDraftPreview();
+        return;
+      }
+
+      if (activeDraftMediaRef.current) {
+        releaseMediaElement(activeDraftMediaRef.current.mediaEl, activeDraftMediaRef.current.objectUrl);
+        activeDraftMediaRef.current = null;
+      }
+      activeDraftPreviewIdRef.current = draftItem.id;
+      setActiveDraftPreviewId(draftItem.id);
+      setActiveDraftMedia(null);
+
+      try {
+        const loaded = await loadMediaElementFromFile(draftItem.visualFile);
+        if (activeDraftPreviewIdRef.current !== draftItem.id) {
+          releaseMediaElement(loaded.mediaEl, loaded.objectUrl);
+          return;
+        }
+        const mediaState = { itemId: draftItem.id, ...loaded };
+        activeDraftMediaRef.current = mediaState;
+        setActiveDraftMedia(mediaState);
+      } catch (err) {
+        if (activeDraftPreviewIdRef.current === draftItem.id) {
+          activeDraftPreviewIdRef.current = null;
+          setActiveDraftPreviewId(null);
+          onShowToast?.(err.message || 'Gagal membuka pratinjau video.', 'error');
+        }
+      }
+    },
+    [closeDraftPreview, onShowToast]
+  );
+
+  // Tambahkan dan kurasi video terpilih ke daftar draft Mode B sebelum masuk antrean atau kirim
   const handleSelectMultiVideos = async (fileList) => {
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
@@ -834,12 +900,17 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
     if (validVideoFiles.length === 0) return;
 
-    if (validVideoFiles.length > 10) {
-      onShowToast?.('Maksimal 10 video per batch upload agar browser HP tetap ringan.', 'info');
+    const remainingSlots = Math.max(0, 10 - multiDraftItems.length);
+    if (remainingSlots === 0) {
+      onShowToast?.('Daftar cek Multi Video sudah mencapai batas 10 video.', 'error');
+      return;
     }
-    const chosen = validVideoFiles.slice(0, 10);
-    setIsImportingMulti(true);
+    if (validVideoFiles.length > remainingSlots) {
+      onShowToast?.(`Hanya ${remainingSlots} video tambahan yang dimuat (maks 10 video agar browser HP tetap ringan).`, 'info');
+    }
 
+    const chosen = validVideoFiles.slice(0, remainingSlots);
+    setIsImportingMulti(true);
     const addedItems = [];
 
     for (const file of chosen) {
@@ -852,8 +923,23 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
       try {
         const meta = await probeVideoMetadata(file);
         tempLoaded = await loadMediaElementFromFile(file);
+
+        let decodedAudio = null;
+        let peaks = [];
+        let audioStatus = 'missing';
+        try {
+          decodedAudio = await decodeMediaToAudioBuffer(file);
+          peaks = extractWaveformPeaks(decodedAudio, 64);
+          audioStatus = 'ready';
+        } catch {
+          audioStatus = 'missing';
+        }
+
         const capSec = Math.min(MAX_CLIP_DURATION_SEC, Number(multiMaxCapSec) || 8);
-        const clipEnd = Number(Math.max(0.5, Math.min(meta.duration, capSec)).toFixed(1));
+        const vClipEnd = Number(Math.max(0.5, Math.min(meta.duration, capSec)).toFixed(1));
+        const aTotal = decodedAudio ? decodedAudio.duration : meta.duration;
+        const aClipEnd = Number(Math.max(0.2, Math.min(aTotal, capSec)).toFixed(1));
+
         const itemRenderOpts = {
           cropMode,
           bgStyle: 'solid',
@@ -873,14 +959,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           visualKind: 'video',
           visualFile: file,
           audioFile: null,
-          audioBuffer: null,
+          audioBuffer: decodedAudio,
+          waveformPeaks: peaks,
+          audioStatus,
           thumbnailUrl: thumbUrl,
-          totalDuration: meta.duration,
+          totalDuration: aTotal,
           videoDuration: meta.duration,
           videoStartSec: 0,
-          videoEndSec: clipEnd,
+          videoEndSec: vClipEnd,
           startSec: 0,
-          endSec: clipEnd,
+          endSec: aClipEnd,
           volume: 1.0,
           fadeSmooth: true,
           cropMode,
@@ -904,14 +992,134 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     setIsImportingMulti(false);
     if (addedItems.length > 0) {
-      setStickerQueue((prev) => [...prev, ...addedItems]);
-      onShowToast?.(`${addedItems.length} video bersuara masuk ke Antrean Stiker Audio!`, 'success');
+      setMultiDraftItems((prev) => [...prev, ...addedItems]);
+      onShowToast?.(`${addedItems.length} video dimuat. Cek & atur durasi sebelum masuk antrean atau kirim.`, 'success');
+      if (!activeDraftPreviewId) {
+        openDraftPreview(addedItems[0]);
+      }
     }
+  };
+
+  const handleUpdateDraftItem = (id, patch) => {
+    setMultiDraftItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+  };
+
+  const handleRemoveDraftItem = (id) => {
+    if (playingDraftAudioId === id) {
+      draftAudioPlayerRef.current?.stop();
+      setPlayingDraftAudioId(null);
+    }
+    if (activeDraftPreviewId === id) {
+      closeDraftPreview();
+    }
+    setMultiDraftItems((prev) => prev.filter((it) => it.id !== id));
+  };
+
+  const handleToggleDraftAudio = async (draftItem) => {
+    if (!draftItem) return;
+    if (playingDraftAudioId === draftItem.id) {
+      draftAudioPlayerRef.current?.stop();
+      setPlayingDraftAudioId(null);
+      return;
+    }
+    if (!draftItem.audioBuffer) {
+      onShowToast?.(`"${draftItem.title}" tidak memiliki audio terbaca. Pilih file audio pengganti terlebih dahulu.`, 'error');
+      return;
+    }
+    setPlayingDraftAudioId(draftItem.id);
+    await draftAudioPlayerRef.current?.play(
+      draftItem.audioBuffer,
+      draftItem.startSec || 0,
+      draftItem.endSec || Math.min(8, draftItem.audioBuffer.duration),
+      draftItem.volume ?? 1,
+      {
+        fadeSmooth: draftItem.fadeSmooth !== false,
+        onEnded: () => setPlayingDraftAudioId((cur) => (cur === draftItem.id ? null : cur))
+      }
+    );
+  };
+
+  const handleAssignDraftAudioFile = async (file) => {
+    const targetId = multiReplaceTargetIdRef.current;
+    multiReplaceTargetIdRef.current = null;
+    if (!file || !targetId) return;
+
+    const check = validateSelectedFile(file, 'audio');
+    if (!check.ok) {
+      setMultiRejectError(check.error);
+      onShowToast?.(check.error, 'error');
+      return;
+    }
+    if (file.size > MAX_AUDIO_FILE_BYTES) {
+      const msg = 'Ukuran file audio pengganti melebihi batas maksimal 15 MB.';
+      setMultiRejectError(msg);
+      onShowToast?.(msg, 'error');
+      return;
+    }
+
+    try {
+      const decoded = await decodeMediaToAudioBuffer(file);
+      const peaks = extractWaveformPeaks(decoded, 64);
+      const capSec = Math.min(MAX_CLIP_DURATION_SEC, Number(multiMaxCapSec) || 8);
+      const nextEnd = Number(Math.max(0.2, Math.min(decoded.duration, capSec)).toFixed(1));
+      setMultiDraftItems((prev) =>
+        prev.map((it) =>
+          it.id === targetId
+            ? {
+                ...it,
+                audioFile: file,
+                audioBuffer: decoded,
+                waveformPeaks: peaks,
+                audioStatus: 'ready',
+                totalDuration: decoded.duration,
+                startSec: 0,
+                endSec: nextEnd
+              }
+            : it
+        )
+      );
+      setMultiRejectError('');
+      onShowToast?.(`Audio "${file.name}" dipasang ke item Multi Video.`, 'success');
+    } catch (err) {
+      onShowToast?.(err.message || 'Gagal membaca file audio pengganti.', 'error');
+    }
+  };
+
+  const buildReadyQueueItemsFromDrafts = () => {
+    if (multiDraftItems.length === 0) {
+      onShowToast?.('Pilih minimal 1 video di Multi Video terlebih dahulu.', 'error');
+      return null;
+    }
+    const silentItems = multiDraftItems.filter((d) => !d.audioBuffer && !d.audioFile);
+    if (silentItems.length > 0) {
+      const msg = `${silentItems.length} video (${silentItems[0].title}) belum memiliki trek suara. Pasang file audio pengganti atau hapus item tersebut agar stiker tidak bisu.`;
+      setMultiRejectError(msg);
+      onShowToast?.(msg, 'error');
+      return null;
+    }
+    setMultiRejectError('');
+    return multiDraftItems.map((d) => ({
+      ...d,
+      packName,
+      packPublisher,
+      status: 'ready',
+      error: null
+    }));
+  };
+
+  const handleAddMultiDraftToQueue = () => {
+    const readyItems = buildReadyQueueItemsFromDrafts();
+    if (!readyItems) return;
+    closeDraftPreview();
+    setStickerQueue((prev) => [...prev, ...readyItems]);
+    setMultiDraftItems([]);
+    onShowToast?.(`${readyItems.length} video bersuara ditambahkan ke Antrean!`, 'success');
   };
 
   // ─── PREVIEW ITEM ANTREAN KE LIVE STAGE ───
   const handlePreviewQueueItem = async (item) => {
     if (!item?.visualFile) return;
+    closeDraftPreview();
     setCropMode(item.cropMode || 'cover');
     setBgStyle(item.bgStyle || 'solid');
     setBgColor(item.bgColor || '#111827');
@@ -925,11 +1133,16 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
 
     if (item.audioBuffer) {
       setAudioBuffer(item.audioBuffer);
-      setWaveformPeaks(extractWaveformPeaks(item.audioBuffer, 96));
+      setAudioFileObj(item.audioFile || null);
+      setAudioFileMeta({
+        name: item.audioFile?.name || `[Audio] ${item.title}`,
+        duration: item.audioBuffer.duration
+      });
+      setWaveformPeaks(item.waveformPeaks?.length ? item.waveformPeaks : extractWaveformPeaks(item.audioBuffer, 96));
       setStartSec(item.startSec || 0);
-      setEndSec(item.endSec || 5);
+      setEndSec(item.endSec || Math.min(8, item.audioBuffer.duration));
     } else {
-      await loadAudioSource(item.visualFile, '[Video] ', { allowVideoSource: true });
+      await loadAudioSource(item.audioFile || item.visualFile, item.audioFile ? '' : '[Video] ', { allowVideoSource: !item.audioFile });
       setStartSec(item.startSec || 0);
       setEndSec(item.endSec || 5);
     }
@@ -1061,7 +1274,46 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
   };
 
-  // Kirim Semua Antrean Berurutan (Jeda 1500ms Antar Item)
+  const executeSequentialSendList = async (targets) => {
+    if (!targets || targets.length === 0) return;
+    setIsBatchSending(true);
+    let okCount = 0;
+
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const item = targets[i];
+        setBatchProgress({
+          current: i + 1,
+          total: targets.length,
+          label: `Mengirim Stiker ${i + 1} dari ${targets.length}: ${item.title}`
+        });
+
+        try {
+          await sendSingleQueueItem(item);
+          okCount++;
+        } catch (err) {
+          setStickerQueue((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: err.message } : it))
+          );
+        }
+
+        if (i < targets.length - 1) {
+          await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+        }
+      }
+    } finally {
+      setIsBatchSending(false);
+      setBatchProgress(null);
+    }
+
+    if (okCount === targets.length) {
+      onShowToast?.(`${okCount} Stiker berhasil dikirim ke chat WA Anda!`, 'success');
+    } else {
+      onShowToast?.(`${okCount}/${targets.length} terkirim. Item gagal dapat dicoba ulang di tab Antrean.`, 'info');
+    }
+  };
+
+  // Kirim Semua Antrean Berurutan (Jeda 1400ms Antar Item)
   const handleSendAllQueue = async () => {
     if (isBatchSending) return;
     if (connectionStatus !== 'connected') {
@@ -1071,40 +1323,22 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
     }
 
     const targets = stickerQueue.filter((it) => it.status !== 'delivered' && it.status !== 'server_ack');
-    if (targets.length === 0) return;
+    await executeSequentialSendList(targets);
+  };
 
-    setIsBatchSending(true);
-    let okCount = 0;
-
-    for (let i = 0; i < targets.length; i++) {
-      const item = targets[i];
-      setBatchProgress({
-        current: i + 1,
-        total: targets.length,
-        label: `Mengirim Stiker ${i + 1} dari ${targets.length}: ${item.title}`
-      });
-
-      try {
-        await sendSingleQueueItem(item);
-        okCount++;
-      } catch (err) {
-        setStickerQueue((prev) =>
-          prev.map((it) => (it.id === item.id ? { ...it, status: 'failed', error: err.message } : it))
-        );
-      }
-
-      if (i < targets.length - 1) {
-        await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
-      }
+  const handleSendMultiDraftNow = async () => {
+    if (isBatchSending) return;
+    const readyItems = buildReadyQueueItemsFromDrafts();
+    if (!readyItems) return;
+    if (connectionStatus !== 'connected') {
+      onShowToast?.('Tautkan WhatsApp terlebih dahulu di Koneksi WA.', 'error');
+      setMobileTab('wa');
+      return;
     }
-
-    setIsBatchSending(false);
-    setBatchProgress(null);
-    if (okCount === targets.length) {
-      onShowToast?.(`${okCount} Stiker berhasil dikirim ke chat WA Anda!`, 'success');
-    } else {
-      onShowToast?.(`${okCount}/${targets.length} terkirim. Item gagal dapat dicoba ulang 1 klik.`, 'info');
-    }
+    closeDraftPreview();
+    setStickerQueue((prev) => [...prev, ...readyItems]);
+    setMultiDraftItems([]);
+    await executeSequentialSendList(readyItems);
   };
 
   const handleRetryQueueItem = async (item) => {
@@ -1372,7 +1606,10 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
           <div className="grid grid-cols-2 border-2 border-black bg-white shadow-[4px_4px_0px_#000]">
             <button
               type="button"
-              onClick={() => setInputMode('single')}
+              onClick={() => {
+                closeDraftPreview();
+                setInputMode('single');
+              }}
               className={`py-2.5 px-2 sm:px-3 font-black text-[11px] sm:text-sm flex items-center justify-center gap-1 min-h-[44px] cursor-pointer whitespace-nowrap ${
                 inputMode === 'single' ? 'bg-yellow-300 text-black' : 'bg-white text-neutral-700 hover:bg-neutral-50'
               }`}
@@ -1382,7 +1619,11 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
             </button>
             <button
               type="button"
-              onClick={() => setInputMode('multi')}
+              onClick={() => {
+                trimPlayerRef.current?.stop();
+                setIsTestingSound(false);
+                setInputMode('multi');
+              }}
               className={`py-2.5 px-2 sm:px-3 font-black text-[11px] sm:text-sm border-l-2 border-black flex items-center justify-center gap-1 min-h-[44px] cursor-pointer whitespace-nowrap ${
                 inputMode === 'multi' ? 'bg-cyan-300 text-black' : 'bg-white text-neutral-700 hover:bg-neutral-50'
               }`}
@@ -1918,25 +2159,44 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
                         <span>{missingMsg}</span>
                       </div>
                     )}
-                    <div className="flex flex-col sm:flex-row gap-2.5">
+                    {isBatchSending && batchProgress && (
+                      <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px] font-black gap-2">
+                          <span className="truncate inline-flex items-center gap-1.5">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                            {batchProgress.label}
+                          </span>
+                          <span className="font-mono shrink-0">
+                            {batchProgress.current}/{batchProgress.total}
+                          </span>
+                        </div>
+                        <div className="w-full h-2.5 bg-white border border-black overflow-hidden">
+                          <div
+                            style={{ width: `${Math.round((batchProgress.current / Math.max(1, batchProgress.total)) * 100)}%` }}
+                            className="h-full bg-emerald-400 transition-all duration-300"
+                          />
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       <button
                         type="button"
                         onClick={handleAddModeAToQueue}
                         disabled={!canQueue}
-                        className="flex-1 py-3 px-4 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
+                        className="w-full py-3 px-4 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
                       >
                         {isComposingStage1 ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : <Plus className="w-4 h-4 stroke-[2.5] shrink-0" />}
-                        <span>Tambah ke Antrean Stiker Audio</span>
+                        <span>+ Ke Antrean</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={handleSendCurrentSingle}
                         disabled={!canSend}
-                        className="py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px] shrink-0"
+                        className="w-full py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
                       >
                         <Send className="w-4 h-4 shrink-0" />
-                        <span>Kirim Langsung 1 Ini</span>
+                        <span>Kirim</span>
                       </button>
                     </div>
                     {mobileTab === 'create' && <div className="lg:hidden">{renderSendOutcomeCard()}</div>}
@@ -1945,119 +2205,491 @@ export default function WaSoundStickerView({ onBack, onShowToast }) {
               })()}
             </>
           ) : (
-            /* MODE B — MULTI-UPLOAD VIDEO BERSUARA SEKALIGUS */
-            <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
-              <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
-                    Mode B • Batch
+            /* Mode B: Multi Video dengan cek pratinjau visual + audio sebelum masuk antrean/kirim */
+            <div className="space-y-4 min-w-0">
+              <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-5 space-y-4 min-w-0">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="px-2 py-0.5 bg-cyan-300 border border-black font-black text-[10px] uppercase whitespace-nowrap shrink-0">
+                      Multi Video
+                    </span>
+                    <h2 className="font-black text-xs sm:text-sm uppercase text-black leading-tight">
+                      Pilih, Cek &amp; Atur Video Bersuara
+                    </h2>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black shrink-0">
+                    {multiDraftItems.length}/10 Video
                   </span>
-                  <h2 className="font-black text-xs sm:text-sm uppercase text-black">
-                    Unggah Banyak Video Bersuara Sekaligus
-                  </h2>
                 </div>
-                <span className="text-[10px] font-mono font-bold px-2 py-0.5 bg-neutral-100 border border-black">
-                  Maks 10 Video
-                </span>
-              </div>
 
-              <button
-                type="button"
-                onClick={() => multiVideoInputRef.current?.click()}
-                disabled={isImportingMulti}
-                className="w-full p-5 border-2 border-dashed border-black bg-cyan-50/70 hover:bg-cyan-100 transition-colors flex flex-col items-center justify-center gap-2 text-center cursor-pointer min-h-[130px]"
-              >
-                {isImportingMulti ? (
-                  <Loader2 className="w-7 h-7 animate-spin text-black" />
-                ) : (
-                  <Layers className="w-7 h-7 text-black" />
+                <button
+                  type="button"
+                  onClick={() => multiVideoInputRef.current?.click()}
+                  disabled={isImportingMulti || multiDraftItems.length >= 10}
+                  className="w-full p-4 border-2 border-dashed border-black bg-cyan-50/70 hover:bg-cyan-100 disabled:opacity-50 transition-colors flex flex-col items-center justify-center gap-1.5 text-center cursor-pointer min-h-[112px]"
+                >
+                  {isImportingMulti ? (
+                    <Loader2 className="w-6 h-6 animate-spin text-black" />
+                  ) : (
+                    <Layers className="w-6 h-6 text-black" />
+                  )}
+                  <span className="font-black text-xs sm:text-sm text-black">
+                    {isImportingMulti
+                      ? 'Membaca video & mengekstrak audio untuk dicek...'
+                      : multiDraftItems.length > 0
+                        ? '+ Tambah Video Lain (MP4/WebM/MOV)'
+                        : 'Pilih Banyak Video Bersuara Sekaligus'}
+                  </span>
+                  <span className="text-[11px] font-semibold text-neutral-700 max-w-md leading-snug">
+                    Hanya menerima file VIDEO (MP4/WebM/MOV). Foto &amp; audio ditolak otomatis. Setelah dipilih, video dan suaranya langsung tampil di bawah untuk dicek sebelum dikirim.
+                  </span>
+                </button>
+                <input
+                  ref={multiVideoInputRef}
+                  type="file"
+                  multiple
+                  accept="video/mp4,video/webm,video/quicktime,video/*"
+                  onChange={(e) => {
+                    handleSelectMultiVideos(e.target.files);
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+
+                {/* Input audio pengganti khusus Android bila video tidak memiliki trek audio terbaca */}
+                <input
+                  ref={multiReplaceAudioInputRef}
+                  type="file"
+                  onChange={(e) => {
+                    const picked = e.target.files?.[0];
+                    e.target.value = '';
+                    handleAssignDraftAudioFile(picked);
+                  }}
+                  className="hidden"
+                />
+
+                {multiRejectError && (
+                  <div className="p-2.5 bg-rose-50 border-2 border-rose-600 text-[11px] font-bold text-rose-900 flex items-start gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+                    <span>{multiRejectError}</span>
+                  </div>
                 )}
-                <span className="font-black text-xs sm:text-sm text-black">
-                  {isImportingMulti ? 'Membaca video & membuat thumbnail 1:1...' : 'Pilih Banyak Video Bersuara Sekaligus'}
-                </span>
-                <span className="text-[11px] font-semibold text-neutral-700 max-w-md leading-snug">
-                  Hanya menerima file VIDEO bersuara (MP4/WebM/MOV). Foto &amp; file audio otomatis ditolak. Durasi video &amp; audio otomatis seimbang dan tetap bisa diedit lagi di Antrean.
-                </span>
-              </button>
-              <input
-                ref={multiVideoInputRef}
-                type="file"
-                multiple
-                accept="video/mp4,video/webm,video/quicktime,video/*"
-                onChange={(e) => {
-                  handleSelectMultiVideos(e.target.files);
-                  e.target.value = '';
-                }}
-                className="hidden"
-              />
 
-              {multiRejectError && (
-                <div className="p-2.5 bg-rose-50 border-2 border-rose-600 text-[11px] font-bold text-rose-900 flex items-start gap-1.5">
-                  <AlertCircle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
-                  <span>{multiRejectError}</span>
-                </div>
-              )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Framing Default 1:1:</label>
+                    <div className="grid grid-cols-2 border-2 border-black bg-white">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCropMode('cover');
+                          if (multiDraftItems.length > 0) {
+                            setMultiDraftItems((prev) => prev.map((it) => ({ ...it, cropMode: 'cover' })));
+                          }
+                        }}
+                        className={`py-2 px-2 font-black text-[11px] min-h-[38px] cursor-pointer ${
+                          cropMode === 'cover' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
+                        }`}
+                      >
+                        Crop Penuh
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCropMode('contain');
+                          if (multiDraftItems.length > 0) {
+                            setMultiDraftItems((prev) => prev.map((it) => ({ ...it, cropMode: 'contain' })));
+                          }
+                        }}
+                        className={`py-2 px-2 font-black text-[11px] border-l-2 border-black min-h-[38px] cursor-pointer ${
+                          cropMode === 'contain' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
+                        }`}
+                      >
+                        Pas (Fit)
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">
-                <div className="space-y-1">
-                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Framing Batch 1:1:</label>
-                  <div className="grid grid-cols-2 border-2 border-black bg-white">
-                    <button
-                      type="button"
-                      onClick={() => setCropMode('cover')}
-                      className={`py-2 px-2 font-black text-[11px] min-h-[38px] cursor-pointer ${
-                        cropMode === 'cover' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
-                      }`}
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Batas Potong Default:</label>
+                    <select
+                      value={multiMaxCapSec}
+                      onChange={(e) => setMultiMaxCapSec(Number(e.target.value))}
+                      className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer min-h-[38px]"
                     >
-                      Crop Penuh
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCropMode('contain')}
-                      className={`py-2 px-2 font-black text-[11px] border-l-2 border-black min-h-[38px] cursor-pointer ${
-                        cropMode === 'contain' ? 'bg-black text-cyan-300' : 'hover:bg-neutral-100'
-                      }`}
-                    >
-                      Pas (Fit)
-                    </button>
+                      <option value={5}>Maksimal 5 detik</option>
+                      <option value={8}>Maksimal 8 detik (Disarankan)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Nama Pack WA:</label>
+                    <input
+                      type="text"
+                      value={packName}
+                      maxLength={50}
+                      onChange={(e) => setPackName(e.target.value)}
+                      className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="font-black uppercase text-[10px] text-neutral-700 block">Pembuat:</label>
+                    <input
+                      type="text"
+                      value={packPublisher}
+                      maxLength={50}
+                      onChange={(e) => setPackPublisher(e.target.value)}
+                      className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
+                    />
                   </div>
                 </div>
+              </section>
 
-                <div className="space-y-1">
-                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Batas Potong Otomatis:</label>
-                  <select
-                    value={multiMaxCapSec}
-                    onChange={(e) => setMultiMaxCapSec(Number(e.target.value))}
-                    className="w-full bg-white border-2 border-black p-2 font-bold text-xs cursor-pointer min-h-[38px]"
+              {/* Panel daftar video terpilih beserta pratinjau visual, audio, dan kontrol durasi */}
+              {multiDraftItems.length > 0 && (() => {
+                const activeDraftItem = multiDraftItems.find((it) => it.id === activeDraftPreviewId) || null;
+                return (
+                  <section className="bg-white border-2 border-black shadow-[4px_4px_0px_#000] p-3.5 sm:p-4 space-y-3.5 min-w-0">
+                    <div className="flex items-center justify-between gap-2 pb-2 border-b-2 border-black flex-wrap">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="px-2 py-0.5 bg-emerald-300 border border-black font-black text-[10px] uppercase shrink-0">
+                          Cek &amp; Atur
+                        </span>
+                        <h3 className="font-black text-xs sm:text-sm uppercase text-black">
+                          Video Terpilih ({multiDraftItems.length})
+                        </h3>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeDraftPreview();
+                          setMultiDraftItems([]);
+                        }}
+                        disabled={isBatchSending}
+                        className="px-2.5 py-1 bg-white hover:bg-rose-50 border border-black font-bold text-[10px] cursor-pointer"
+                      >
+                        Bersihkan Daftar
+                      </button>
+                    </div>
+
+                    {activeDraftItem && activeDraftMedia && activeDraftMedia.itemId === activeDraftItem.id && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-yellow-100 border-2 border-black text-xs">
+                          <span className="font-black truncate">
+                            Pratinjau Video + Audio: {activeDraftItem.title}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={closeDraftPreview}
+                            className="px-2 py-0.5 bg-white border border-black font-bold text-[10px] cursor-pointer shrink-0"
+                          >
+                            Tutup Preview
+                          </button>
+                        </div>
+                        <WaSoundStickerPreview
+                          sourceMedia={activeDraftMedia.mediaEl}
+                          isVideoSource={true}
+                          audioBuffer={activeDraftItem.audioBuffer}
+                          waveformPeaks={activeDraftItem.waveformPeaks || []}
+                          startSec={activeDraftItem.startSec}
+                          endSec={activeDraftItem.endSec}
+                          videoStartSec={activeDraftItem.videoStartSec}
+                          videoEndSec={activeDraftItem.videoEndSec}
+                          volume={activeDraftItem.volume ?? 1}
+                          fadeSmooth={activeDraftItem.fadeSmooth !== false}
+                          renderOptions={{
+                            cropMode: activeDraftItem.cropMode || 'cover',
+                            bgStyle: activeDraftItem.bgStyle || 'solid',
+                            bgColor: activeDraftItem.bgColor || '#111827',
+                            motionEffect: 'static',
+                            stickerText: activeDraftItem.stickerText || '',
+                            textPosition: activeDraftItem.textPosition || 'bottom',
+                            textSize: Number(activeDraftItem.textSize) || 46
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    <div className="space-y-3">
+                      {multiDraftItems.map((draft, idx) => {
+                        const isPlayingAudio = playingDraftAudioId === draft.id;
+                        const isPreviewOpen = activeDraftPreviewId === draft.id;
+                        const vMax = Math.max(0.5, Number(draft.videoDuration) || 8);
+                        const aMax = Math.max(0.5, Number(draft.totalDuration) || 8);
+                        const vClipDur = Math.max(0.5, Number(draft.videoEndSec || 0) - Number(draft.videoStartSec || 0)).toFixed(1);
+                        const aClipDur = Math.max(0.2, Number(draft.endSec || 0) - Number(draft.startSec || 0)).toFixed(1);
+                        const hasAudio = Boolean(draft.audioBuffer || draft.audioFile);
+
+                        return (
+                          <div key={draft.id} className="border-2 border-black bg-neutral-50 p-3 space-y-2.5 min-w-0">
+                            <div className="flex items-start gap-2.5 min-w-0">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleDraftAudio(draft)}
+                                className="relative w-16 h-16 shrink-0 border-2 border-black bg-neutral-900 overflow-hidden cursor-pointer active:scale-95 transition-transform"
+                                title={hasAudio ? 'Ketuk untuk putar/hentikan audio video' : 'Audio belum terdeteksi'}
+                                aria-label={isPlayingAudio ? `Hentikan audio ${draft.title}` : `Putar audio ${draft.title}`}
+                              >
+                                {draft.thumbnailUrl ? (
+                                  <img src={draft.thumbnailUrl} alt={draft.title} className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-[10px] font-mono text-white">
+                                    1:1
+                                  </div>
+                                )}
+                                <span
+                                  className={`absolute top-1 left-1 w-5 h-5 rounded-full flex items-center justify-center ${
+                                    isPlayingAudio ? 'bg-emerald-500 text-white' : 'bg-black/70 text-white'
+                                  }`}
+                                >
+                                  {isPlayingAudio ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+                                </span>
+                              </button>
+
+                              <div className="flex-1 min-w-0 space-y-1">
+                                <div className="flex items-start justify-between gap-1.5">
+                                  <span className="font-black text-xs text-black truncate">
+                                    {idx + 1}. {draft.title}
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 border border-black font-mono font-bold text-[10px] shrink-0 ${
+                                      hasAudio ? 'bg-emerald-200 text-black' : 'bg-rose-200 text-rose-950'
+                                    }`}
+                                  >
+                                    {hasAudio ? 'Audio Siap' : 'Tanpa Audio'}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 flex-wrap font-mono text-[10px] font-bold text-neutral-700">
+                                  <span className="px-1.5 py-0.5 bg-white border border-black">
+                                    Asli: {vMax.toFixed(1)}s
+                                  </span>
+                                  <span className="px-1.5 py-0.5 bg-yellow-100 border border-black text-black">
+                                    Video: {vClipDur}s
+                                  </span>
+                                  <span className="px-1.5 py-0.5 bg-cyan-100 border border-black text-black">
+                                    Sound: {aClipDur}s
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => openDraftPreview(draft)}
+                                    className={`px-2.5 py-1 border border-black font-black text-[10px] inline-flex items-center gap-1 cursor-pointer min-h-[34px] ${
+                                      isPreviewOpen ? 'bg-black text-yellow-300' : 'bg-yellow-300 hover:bg-yellow-400 text-black'
+                                    }`}
+                                  >
+                                    <Eye className="w-3 h-3" />
+                                    <span>{isPreviewOpen ? 'Tutup Pratinjau' : 'Cek Video + Audio'}</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleDraftAudio(draft)}
+                                    disabled={!hasAudio}
+                                    className={`px-2.5 py-1 disabled:opacity-40 border border-black font-bold text-[10px] inline-flex items-center gap-1 cursor-pointer min-h-[34px] ${
+                                      isPlayingAudio ? 'bg-rose-500 text-white' : 'bg-white hover:bg-emerald-100 text-black'
+                                    }`}
+                                  >
+                                    {isPlayingAudio ? <Square className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current" />}
+                                    <span>{isPlayingAudio ? 'Stop Audio' : 'Putar Audio'}</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      multiReplaceTargetIdRef.current = draft.id;
+                                      multiReplaceAudioInputRef.current?.click();
+                                    }}
+                                    className="px-2.5 py-1 bg-white hover:bg-cyan-50 border border-black font-bold text-[10px] inline-flex items-center gap-1 cursor-pointer min-h-[34px]"
+                                  >
+                                    <Music className="w-3 h-3" />
+                                    <span>{hasAudio ? 'Ganti Audio' : 'Pilih Audio'}</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveDraftItem(draft.id)}
+                                    className="px-2 py-1 bg-white hover:bg-rose-100 border border-black font-bold text-[10px] inline-flex items-center gap-1 cursor-pointer min-h-[34px] ml-auto"
+                                    aria-label={`Hapus ${draft.title}`}
+                                  >
+                                    <Trash2 className="w-3 h-3 text-rose-700" />
+                                    <span>Hapus</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+
+                            {!hasAudio && (
+                              <div className="p-2 bg-rose-50 border border-rose-600 text-[10px] font-bold text-rose-900 flex items-center gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-700 shrink-0" />
+                                <span>Audio asli video tidak terdeteksi browser. Klik &ldquo;Pilih Audio&rdquo; agar stiker tetap bersuara di WhatsApp.</span>
+                              </div>
+                            )}
+
+                            {/* Kontrol Atur Durasi Video, Durasi Audio, Framing & Teks */}
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                              <div className="p-1.5 bg-white border border-black space-y-1">
+                                <span className="font-black text-[10px] uppercase block text-neutral-700">Mulai Video (s)</span>
+                                <DecimalSecInput
+                                  ariaLabel={`Mulai video ${draft.title}`}
+                                  value={draft.videoStartSec ?? 0}
+                                  onCommit={(val) => {
+                                    const s = Number(Math.max(0, Math.min(Math.max(0, vMax - 0.5), parseDecimalSafe(val, 0))).toFixed(1));
+                                    let e = Number(draft.videoEndSec ?? Math.min(vMax, s + 5));
+                                    if (e - s < 0.5) e = Number(Math.min(vMax, s + 0.5).toFixed(1));
+                                    if (e - s > MAX_CLIP_DURATION_SEC) e = Number(Math.min(vMax, s + MAX_CLIP_DURATION_SEC).toFixed(1));
+                                    handleUpdateDraftItem(draft.id, { videoStartSec: s, videoEndSec: e });
+                                  }}
+                                />
+                              </div>
+
+                              <div className="p-1.5 bg-white border border-black space-y-1">
+                                <span className="font-black text-[10px] uppercase block text-neutral-700">Selesai Video (s)</span>
+                                <DecimalSecInput
+                                  ariaLabel={`Selesai video ${draft.title}`}
+                                  value={draft.videoEndSec ?? Math.min(vMax, 8)}
+                                  onCommit={(val) => {
+                                    const e = Number(Math.max(0.5, Math.min(vMax, parseDecimalSafe(val, vMax))).toFixed(1));
+                                    let s = Number(draft.videoStartSec ?? 0);
+                                    if (e - s < 0.5) s = Number(Math.max(0, e - 0.5).toFixed(1));
+                                    if (e - s > MAX_CLIP_DURATION_SEC) s = Number(Math.max(0, e - MAX_CLIP_DURATION_SEC).toFixed(1));
+                                    handleUpdateDraftItem(draft.id, { videoStartSec: s, videoEndSec: e });
+                                  }}
+                                />
+                              </div>
+
+                              <div className="p-1.5 bg-white border border-black space-y-1">
+                                <span className="font-black text-[10px] uppercase block text-neutral-700">Mulai Audio (s)</span>
+                                <DecimalSecInput
+                                  ariaLabel={`Mulai audio ${draft.title}`}
+                                  value={draft.startSec ?? 0}
+                                  onCommit={(val) => {
+                                    const s = Number(Math.max(0, Math.min(Math.max(0, aMax - 0.2), parseDecimalSafe(val, 0))).toFixed(1));
+                                    let e = Number(draft.endSec ?? Math.min(aMax, s + 5));
+                                    if (e - s < 0.2) e = Number(Math.min(aMax, s + 0.5).toFixed(1));
+                                    if (e - s > MAX_CLIP_DURATION_SEC) e = Number(Math.min(aMax, s + MAX_CLIP_DURATION_SEC).toFixed(1));
+                                    handleUpdateDraftItem(draft.id, { startSec: s, endSec: e });
+                                  }}
+                                />
+                              </div>
+
+                              <div className="p-1.5 bg-white border border-black space-y-1">
+                                <span className="font-black text-[10px] uppercase block text-neutral-700">Selesai Audio (s)</span>
+                                <DecimalSecInput
+                                  ariaLabel={`Selesai audio ${draft.title}`}
+                                  value={draft.endSec ?? Math.min(aMax, 8)}
+                                  onCommit={(val) => {
+                                    const e = Number(Math.max(0.2, Math.min(aMax, parseDecimalSafe(val, aMax))).toFixed(1));
+                                    let s = Number(draft.startSec ?? 0);
+                                    if (e - s < 0.2) s = Number(Math.max(0, e - 0.5).toFixed(1));
+                                    if (e - s > MAX_CLIP_DURATION_SEC) s = Number(Math.max(0, e - MAX_CLIP_DURATION_SEC).toFixed(1));
+                                    handleUpdateDraftItem(draft.id, { startSec: s, endSec: e });
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs items-end">
+                              <div className="sm:col-span-2">
+                                <label className="font-black text-[10px] uppercase text-neutral-700 block mb-0.5">
+                                  Teks Meme (Opsional):
+                                </label>
+                                <input
+                                  type="text"
+                                  maxLength={40}
+                                  value={draft.stickerText || ''}
+                                  onChange={(e) => handleUpdateDraftItem(draft.id, { stickerText: e.target.value })}
+                                  placeholder="Kosongkan jika tanpa teks"
+                                  className="w-full border border-black px-2 py-1.5 font-bold text-xs bg-white"
+                                />
+                              </div>
+                              <div>
+                                <label className="font-black text-[10px] uppercase text-neutral-700 block mb-0.5">
+                                  Framing 1:1:
+                                </label>
+                                <select
+                                  value={draft.cropMode || 'cover'}
+                                  onChange={(e) => handleUpdateDraftItem(draft.id, { cropMode: e.target.value })}
+                                  className="w-full border border-black px-2 py-1.5 font-bold text-xs bg-white cursor-pointer"
+                                >
+                                  <option value="cover">Crop Penuh</option>
+                                  <option value="contain">Pas (Fit)</option>
+                                </select>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })()}
+
+              {/* Tombol aksi utama Multi Video: + Ke Antrean dan Kirim */}
+              <div className="space-y-2">
+                {multiDraftItems.length === 0 && (
+                  <div className="px-3 py-2 bg-cyan-50 border-2 border-black text-[11px] font-bold text-neutral-800 flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5 text-cyan-800 shrink-0" />
+                    <span>Pilih minimal 1 video di atas untuk melihat pratinjau, mengatur durasi, lalu pilih + Ke Antrean atau Kirim.</span>
+                  </div>
+                )}
+
+                {isBatchSending && batchProgress && (
+                  <div className="p-2.5 bg-yellow-50 border-2 border-black space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-black gap-2">
+                      <span className="truncate inline-flex items-center gap-1.5">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                        {batchProgress.label}
+                      </span>
+                      <span className="font-mono shrink-0">
+                        {batchProgress.current}/{batchProgress.total}
+                      </span>
+                    </div>
+                    <div className="w-full h-2.5 bg-white border border-black overflow-hidden">
+                      <div
+                        style={{ width: `${Math.round((batchProgress.current / Math.max(1, batchProgress.total)) * 100)}%` }}
+                        className="h-full bg-emerald-400 transition-all duration-300"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={handleAddMultiDraftToQueue}
+                    disabled={multiDraftItems.length === 0 || isImportingMulti || isBatchSending}
+                    className="w-full py-3 px-4 bg-yellow-300 hover:bg-yellow-400 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
                   >
-                    <option value={5}>Maksimal 5 detik</option>
-                    <option value={8}>Maksimal 8 detik (Disarankan)</option>
-                  </select>
+                    <Plus className="w-4 h-4 stroke-[2.5] shrink-0" />
+                    <span>
+                      {multiDraftItems.length > 0 ? `+ Ke Antrean (${multiDraftItems.length})` : '+ Ke Antrean'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSendMultiDraftNow}
+                    disabled={multiDraftItems.length === 0 || isImportingMulti || isBatchSending}
+                    className="w-full py-3 px-4 bg-emerald-400 hover:bg-emerald-300 disabled:opacity-45 text-black border-2 border-black shadow-[3px_3px_0px_#000] active:translate-x-0.5 active:translate-y-0.5 font-black text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer min-h-[46px]"
+                  >
+                    <Send className="w-4 h-4 shrink-0" />
+                    <span>
+                      {isBatchSending
+                        ? 'Mengirim...'
+                        : multiDraftItems.length > 0
+                          ? `Kirim (${multiDraftItems.length})`
+                          : 'Kirim'}
+                    </span>
+                  </button>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Nama Pack WA:</label>
-                  <input
-                    type="text"
-                    value={packName}
-                    maxLength={50}
-                    onChange={(e) => setPackName(e.target.value)}
-                    className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-black uppercase text-[10px] text-neutral-700 block">Pembuat:</label>
-                  <input
-                    type="text"
-                    value={packPublisher}
-                    maxLength={50}
-                    onChange={(e) => setPackPublisher(e.target.value)}
-                    className="w-full bg-white border-2 border-black px-2.5 py-1.5 font-bold text-xs"
-                  />
-                </div>
+                {mobileTab === 'create' && <div className="lg:hidden">{renderSendOutcomeCard()}</div>}
               </div>
-            </section>
+            </div>
           )}
         </div>
 
